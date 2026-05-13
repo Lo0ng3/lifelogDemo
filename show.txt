@@ -1,0 +1,581 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { 
+  Plane, Train, MapPin, Film, Tv, Gamepad2, Star, PlusCircle, 
+  ChevronRight, Compass, Camera, ListFilter, User, 
+  X, Check, ChevronLeft, Map as MapIcon, Book, Search, Image as ImageIcon,
+  Video, Download, ChevronDown
+} from 'lucide-react';
+
+// --- 模拟数据 ---
+const initialLogData = [
+  { id: 1, baseType: 'ticket', subType: 'flight', title: '北京 → 上海', subtitle: 'MU5101', date: '2023-10-01 08:30', rating: null },
+  { 
+    id: 2, baseType: 'location', subType: 'location', title: '外滩 & 南京东路', subtitle: '', date: '2023-10-02', rating: 4,
+    localImages: [
+      'https://images.unsplash.com/photo-1548248823-ce16a73c7347?auto=format&fit=crop&w=300&q=80',
+      'https://images.unsplash.com/photo-1505245208761-ba3ce85b1b1b?auto=format&fit=crop&w=300&q=80'
+    ]
+  },
+  { id: 3, baseType: 'location', subType: 'location', title: 'Luneurs 咖啡馆', subtitle: '', date: '2023-10-04', rating: 5 },
+  { id: 4, baseType: 'ticket', subType: 'train', title: '上海虹桥 → 北京南', subtitle: 'G1', date: '2023-10-07 14:00', rating: null },
+  { 
+    id: 5, baseType: 'media', subType: 'movie', title: '奥本海默', subtitle: '', date: '2023-09-15', rating: 5,
+    apiImage: 'https://images.unsplash.com/photo-1440404653325-ab127d49abc1?auto=format&fit=crop&w=150&q=80' 
+  },
+  { id: 6, baseType: 'media', subType: 'game', title: '塞尔达传说：王国之泪', subtitle: '', date: '2023-06-20', rating: 5 },
+  { 
+    id: 8, baseType: 'media', subType: 'book', title: '三体：地球往事', subtitle: '', date: '2023-11-01', rating: 5,
+    apiImage: 'https://images.unsplash.com/photo-1614113489855-66422ad300a4?auto=format&fit=crop&w=150&q=80'
+  },
+  { id: 9, baseType: 'media', subType: 'movie', title: '沙丘2', subtitle: '', date: '2024-03-08', rating: 5 },
+  { id: 10, baseType: 'ticket', subType: 'flight', title: '广州 → 曼谷', subtitle: 'CZ3081', date: '2025-03-15 10:45', rating: null },
+];
+
+const subTypeOptions = {
+  ticket: [
+    { id: 'flight', label: '机票' }, { id: 'train', label: '火车票' },
+    { id: 'bus', label: '汽车票' }, { id: 'ship', label: '轮船' }
+  ],
+  media: [
+    { id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' },
+    { id: 'anime', label: '动漫' }, { id: 'game', label: '游戏' },
+    { id: 'book', label: '书籍' } 
+  ]
+};
+
+// 模拟联想补全数据
+const locationSuggestions = {
+  flight: [
+    { name: '北京首都', code: 'PEK' }, { name: '北京大兴', code: 'PKX' },
+    { name: '上海虹桥', code: 'SHA' }, { name: '上海浦东', code: 'PVG' },
+    { name: '广州白云', code: 'CAN' }, { name: '深圳宝安', code: 'SZX' }
+  ],
+  train: [
+    { name: '北京南站' }, { name: '北京站' },
+    { name: '上海虹桥' }, { name: '广州南站' }
+  ]
+};
+
+// --- Helper Components ---
+const Stars = ({ count, onChange }) => {
+  if (count === null || count === undefined) return null;
+  return (
+    <div className="flex gap-1 mt-1">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star 
+          key={i} 
+          size={onChange ? 24 : 14} 
+          onClick={() => onChange && onChange(i)}
+          className={`${i <= count ? "text-yellow-400 fill-yellow-400" : "text-gray-200"} ${onChange ? 'cursor-pointer' : ''}`} 
+        />
+      ))}
+    </div>
+  );
+};
+
+// --- Real Map View Component ---
+const RealMapView = ({ onExport }) => {
+  const beijingX = ((116.4 - 110) / 15) * 100;
+  const beijingY = ((45 - 39.9) / 20) * 100;
+  const shanghaiX = ((121.4 - 110) / 15) * 100;
+  const shanghaiY = ((45 - 31.2) / 20) * 100;
+
+  return (
+    <div className="bg-white rounded-[14px] mx-4 shadow-sm overflow-hidden border border-gray-100 relative h-[450px] bg-[#EFEFF4]">
+      <iframe src="https://www.openstreetmap.org/export/embed.html?bbox=110,25,125,45&layer=mapnik" className="absolute inset-0 w-full h-full pointer-events-none opacity-80" title="real-map" />
+      <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+        <path d={`M ${beijingX}% ${beijingY}% Q ${beijingX + 10}% ${beijingY + 15}% ${shanghaiX}% ${shanghaiY}%`} fill="none" stroke="#007AFF" strokeWidth="2" strokeDasharray="4,4" className="drop-shadow-md" />
+      </svg>
+      <div className="absolute flex flex-col items-center transform -translate-x-1/2 -translate-y-1/2 z-20" style={{ top: `${beijingY}%`, left: `${beijingX}%` }}>
+        <div className="w-8 h-8 bg-blue-100 text-[#007AFF] rounded-full border-[2.5px] border-white shadow-md flex items-center justify-center relative"><Plane size={14} /><div className="absolute inset-0 rounded-full border border-blue-400 animate-ping opacity-30"></div></div>
+        <div className="bg-white/95 backdrop-blur px-2 py-0.5 rounded shadow-sm mt-1 text-[11px] font-bold text-gray-800 border border-gray-100/50">北京</div>
+      </div>
+      <div className="absolute flex flex-col items-center transform -translate-x-1/2 -translate-y-1/2 z-20" style={{ top: `${shanghaiY}%`, left: `${shanghaiX}%` }}>
+        <div className="w-8 h-8 bg-orange-100 text-orange-500 rounded-full border-[2.5px] border-white shadow-md flex items-center justify-center relative"><MapPin size={14} /></div>
+        <div className="bg-white/95 backdrop-blur px-2 py-0.5 rounded shadow-sm mt-1 text-[11px] font-bold text-gray-800 border border-gray-100/50">上海</div>
+      </div>
+      
+      <button 
+        onClick={onExport}
+        className="absolute bottom-4 right-4 bg-black/80 backdrop-blur-md text-white px-4 py-2.5 rounded-full flex items-center gap-2 shadow-lg active:scale-95 transition-transform"
+      >
+        <Video size={16} />
+        <span className="text-[13px] font-medium tracking-wide">导出轨迹</span>
+      </button>
+    </div>
+  );
+};
+
+// --- Profile View Component (一半宽度画幅) ---
+const ProfileView = () => (
+  <div className="w-full h-full flex flex-col overflow-y-auto bg-[#F2F2F7] pb-12 shadow-[2px_0_15px_rgba(0,0,0,0.1)]">
+    <div className="flex flex-col items-center mt-12">
+      <div className="w-16 h-16 bg-gradient-to-tr from-blue-400 to-purple-500 rounded-full flex items-center justify-center shadow-md border-[3px] border-white text-white"><User size={32} /></div>
+      <h2 className="text-[18px] font-bold mt-3">User_8848</h2>
+    </div>
+    
+    <div className="mx-3 mt-6 bg-white rounded-xl shadow-sm border border-gray-100 p-3 flex justify-around">
+      <div className="flex flex-col items-center"><span className="text-[20px] font-bold text-gray-900">9</span><span className="text-[10px] text-gray-500 mt-0.5">总印记</span></div>
+      <div className="w-px bg-gray-100 h-8"></div>
+      <div className="flex flex-col items-center"><span className="text-[20px] font-bold text-gray-900">3</span><span className="text-[10px] text-gray-500 mt-0.5">打卡城市</span></div>
+    </div>
+
+    <div className="mx-3 mt-5 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-8">
+      <div className="p-3.5 flex items-center justify-between border-b border-gray-100 active:bg-gray-50"><span className="text-[14px] text-gray-900">账号设置</span><ChevronRight size={16} className="text-gray-300" /></div>
+      <div className="p-3.5 flex items-center justify-between border-b border-gray-100 active:bg-gray-50"><span className="text-[14px] text-gray-900">数据管理</span><ChevronRight size={16} className="text-gray-300" /></div>
+      <div className="p-3.5 flex items-center justify-between active:bg-gray-50"><span className="text-[14px] text-gray-900">关于</span><ChevronRight size={16} className="text-gray-300" /></div>
+    </div>
+  </div>
+);
+
+// --- 视频导出全屏模拟动效 ---
+const ExportVideoOverlay = ({ onComplete }) => {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setStep(1), 800);
+    const t2 = setTimeout(() => setStep(2), 2500);
+    const t3 = setTimeout(() => onComplete(), 4000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [onComplete]);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center text-white">
+      {step === 0 && <div className="animate-pulse text-gray-400 text-[14px] tracking-widest">正在生成行程记录...</div>}
+      {step === 1 && (
+        <div className="flex flex-col items-center animate-in fade-in zoom-in duration-700">
+          <Plane size={48} className="text-[#007AFF] mb-6 opacity-80" />
+          <div className="flex items-center gap-4 text-[28px] font-bold tracking-widest">
+            <span>北京</span>
+            <div className="w-16 h-[2px] bg-white/30 relative">
+              <div className="absolute top-0 left-0 h-full bg-[#007AFF] animate-[w-full_1s_ease-out_forwards]" style={{ width: '100%' }}></div>
+            </div>
+            <span>上海</span>
+          </div>
+          <div className="mt-8 text-gray-400 text-[14px]">2023-10-01</div>
+        </div>
+      )}
+      {step === 2 && (
+        <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(34,197,94,0.4)]">
+            <Check size={32} className="text-white" />
+          </div>
+          <span className="text-[18px] font-medium tracking-wide">已保存至相册</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- Main App Component ---
+export default function App() {
+  const [viewMode, setViewMode] = useState('list');
+  const [activeFilters, setActiveFilters] = useState([]); 
+  
+  const [yearFilter, setYearFilter] = useState(''); 
+  const [monthFilters, setMonthFilters] = useState([]); 
+  
+  const [showFilterSheet, setShowFilterSheet] = useState(false);
+  const [showProfileSideBar, setShowProfileSideBar] = useState(false); 
+  const [isExporting, setIsExporting] = useState(false);
+  
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addMainType, setAddMainType] = useState('ticket'); 
+  const [addSubType, setAddSubType] = useState('flight');
+  
+  const [addForm, setAddForm] = useState({ title: '', from: '', to: '', rating: 0, apiImage: null });
+  const [localPreviewImages, setLocalPreviewImages] = useState([]);
+  
+  // 新增：用于智能补全的焦点状态控制
+  const [focusedInput, setFocusedInput] = useState(null); // 'from' 或 'to' 或 null
+
+  const fileInputRef = useRef(null);
+
+  const filteredAndSortedData = useMemo(() => {
+    let result = [...initialLogData];
+    if (activeFilters.length > 0) result = result.filter(item => activeFilters.includes(item.subType));
+    
+    if (yearFilter) {
+      result = result.filter(item => item.date.startsWith(yearFilter));
+    }
+    if (monthFilters.length > 0) {
+      result = result.filter(item => {
+        const itemMonth = item.date.split('-')[1]; 
+        return monthFilters.includes(itemMonth);
+      });
+    }
+    
+    result.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return result;
+  }, [activeFilters, yearFilter, monthFilters]);
+
+  const handleSmartSearch = () => {
+    if (!addForm.title) return;
+    setTimeout(() => {
+      setAddForm(prev => ({ 
+        ...prev, 
+        apiImage: 'https://images.unsplash.com/photo-1578374173705-969cbe6f2d6b?auto=format&fit=crop&w=200&q=80' 
+      }));
+    }, 600);
+  };
+
+  const handleImageSelect = (e) => {
+    const files = Array.from(e.target.files);
+    const newImages = files.map(file => URL.createObjectURL(file));
+    setLocalPreviewImages(prev => [...prev, ...newImages]);
+  };
+
+  const resetAddForm = () => {
+    setAddForm({ title: '', from: '', to: '', rating: 0, apiImage: null });
+    setLocalPreviewImages([]);
+    setFocusedInput(null);
+  }
+
+  const selectSuggestion = (field, item) => {
+    setAddForm(prev => ({ ...prev, [field]: item.name }));
+    setFocusedInput(null);
+  };
+
+  const renderListItem = (item, index) => {
+    let icon, colorClass;
+    if (item.baseType === 'ticket') {
+      icon = item.subType === 'flight' ? <Plane size={20} /> : (item.subType === 'train' ? <Train size={20} /> : <MapIcon size={20}/>);
+      colorClass = item.subType === 'flight' ? 'bg-blue-100 text-[#007AFF]' : 'bg-orange-100 text-orange-500';
+    } else if (item.baseType === 'location') {
+      icon = <MapPin size={20} />;
+      colorClass = 'bg-red-100 text-red-500';
+    } else {
+      icon = item.subType === 'game' ? <Gamepad2 size={20} /> : (item.subType === 'tv' ? <Tv size={20} /> : (item.subType === 'book' ? <Book size={20} /> : <Film size={20} />));
+      colorClass = 'bg-purple-100 text-purple-500';
+    }
+
+    const isLast = index === filteredAndSortedData.length - 1;
+
+    return (
+      <div key={item.id} className={`p-4 flex gap-4 ${!isLast ? 'border-b border-gray-100' : ''}`}>
+        {item.apiImage ? (
+          <div className="w-14 h-20 shrink-0 rounded-md overflow-hidden shadow-sm border border-gray-200 bg-gray-100">
+            <img src={item.apiImage} alt="cover" className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${colorClass}`}>{icon}</div>
+        )}
+
+        <div className="flex-1 min-w-0">
+          <div className="flex justify-between items-start mb-1">
+            <h3 className="font-semibold text-[16px] text-gray-900 truncate">{item.title}</h3>
+            {/* 隐藏年份前缀让显示更简洁 */}
+            <span className="text-[12px] text-gray-400 shrink-0 ml-2">{item.date.replace(/^\d{4}-/, '')}</span>
+          </div>
+          <Stars count={item.rating} />
+          {item.subtitle && <p className="text-[14px] text-gray-500 leading-snug mt-1 line-clamp-2">{item.subtitle}</p>}
+          
+          {item.localImages && item.localImages.length > 0 && (
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+              {item.localImages.map((imgUrl, i) => (
+                <div key={i} className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border border-gray-200">
+                  <img src={imgUrl} alt="local" className="w-full h-full object-cover" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="bg-[#F2F2F7] min-h-screen font-sans text-gray-900 mx-auto max-w-md relative overflow-hidden shadow-2xl flex flex-col">
+      {isExporting && <ExportVideoOverlay onComplete={() => setIsExporting(false)} />}
+      
+      <div className="h-12 flex justify-between items-center px-6 pt-2 text-[14px] font-medium shrink-0 bg-[#F2F2F7]/90 backdrop-blur-md z-20">
+        <span>9:41</span>
+        <div className="flex gap-1.5 items-center"><div className="w-4 h-3 bg-black rounded-sm"/><div className="w-4 h-3 bg-black rounded-sm"/><div className="w-6 h-3 border border-black rounded-sm relative"><div className="absolute inset-0.5 bg-black rounded-sm"/></div></div>
+      </div>
+
+      <div className="px-4 pt-3 pb-2 bg-[#F2F2F7]/90 backdrop-blur-md z-10 shrink-0">
+        <div className="flex justify-between items-center mb-3">
+          <button onClick={() => setShowProfileSideBar(true)} className="w-9 h-9 rounded-full bg-gradient-to-tr from-blue-400 to-purple-500 text-white flex items-center justify-center shadow-sm active:scale-95 transition-transform">
+            <User size={20} />
+          </button>
+          <div className="flex bg-gray-200/80 p-0.5 rounded-lg mb-1">
+            <button onClick={() => setViewMode('list')} className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-black' : 'text-gray-500'}`}>列表</button>
+            <button onClick={() => setViewMode('map')} className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-all ${viewMode === 'map' ? 'bg-white shadow-sm text-black' : 'text-gray-500'}`}>地图</button>
+          </div>
+        </div>
+        {viewMode === 'list' && (
+          <div className="flex gap-2 pb-1 mt-2 overflow-x-auto scrollbar-hide">
+            <button onClick={() => {setActiveFilters([]); setYearFilter(''); setMonthFilters([]);}} className={`shrink-0 px-4 py-1.5 rounded-full text-[13px] font-medium transition-all ${(activeFilters.length === 0 && !yearFilter && monthFilters.length === 0) ? 'bg-black text-white' : 'bg-white text-gray-600 border border-gray-200 shadow-sm'}`}>全部</button>
+            <button onClick={() => setShowFilterSheet(true)} className={`shrink-0 px-4 py-1.5 rounded-full text-[13px] font-medium transition-all flex items-center gap-1 ${(activeFilters.length > 0 || yearFilter || monthFilters.length > 0) ? 'bg-blue-100 text-[#007AFF] border border-blue-200' : 'bg-white text-gray-600 border border-gray-200 shadow-sm'}`}>
+              <ListFilter size={14} />{(activeFilters.length > 0 || yearFilter || monthFilters.length > 0) ? `已筛选` : '筛选'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto pb-24">
+        {viewMode === 'list' ? (
+          <div className="bg-white rounded-[14px] mx-4 shadow-sm border border-gray-100 overflow-hidden mt-1 mb-8">
+            {filteredAndSortedData.length > 0 ? filteredAndSortedData.map((item, index) => renderListItem(item, index)) : <div className="py-12 flex flex-col items-center justify-center text-gray-400"><span className="text-[14px]">空空如也</span></div>}
+          </div>
+        ) : <div className="mt-1 mb-8"><RealMapView onExport={() => setIsExporting(true)} /></div>}
+      </div>
+
+      <div className="absolute bottom-0 left-0 right-0 bg-[#F2F2F7]/90 backdrop-blur-xl border-t border-gray-200/50 pb-8 pt-3 px-16 flex justify-between items-center z-20">
+        <button onClick={() => {setViewMode('list'); setShowProfileSideBar(false);}} className={`flex flex-col items-center gap-1.5 w-16 text-[#007AFF] hover:text-[#007AFF] transition-colors`}>
+          <Compass size={28} strokeWidth={2.5} />
+          <span className="text-[11px] font-semibold">印记</span>
+        </button>
+        <button onClick={() => {resetAddForm(); setShowAddModal(true);}} className="flex flex-col items-center gap-1.5 w-16 text-gray-400 hover:text-[#007AFF] transition-colors active:scale-95">
+          <PlusCircle size={32} strokeWidth={2.2} />
+          <span className="text-[11px] font-medium">添加</span>
+        </button>
+      </div>
+
+      {/* --- Filter Bottom Sheet --- */}
+      <div className={`fixed inset-0 z-50 flex justify-center items-end transition-opacity duration-300 ${showFilterSheet ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div className="absolute inset-0 bg-black/40" onClick={() => setShowFilterSheet(false)}></div>
+        <div className={`w-full max-w-md bg-[#F2F2F7] rounded-t-3xl overflow-hidden transition-transform transform duration-300 relative flex flex-col ${showFilterSheet ? 'translate-y-0' : 'translate-y-full'}`} style={{ maxHeight: '70vh' }}>
+           <div className="bg-white px-4 py-4 flex justify-between items-center border-b border-gray-200 shrink-0">
+            <button onClick={() => {setActiveFilters([]); setYearFilter(''); setMonthFilters([]);}} className="text-gray-500 text-[16px]">重置</button>
+            <span className="font-semibold text-[17px]">筛选</span>
+            <button onClick={() => setShowFilterSheet(false)} className="text-[#007AFF] font-semibold text-[16px]">完成</button>
+          </div>
+          <div className="p-5 overflow-y-auto bg-white flex-1 pb-12">
+            
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-[13px] text-gray-400 font-medium">按时间</h3>
+              <div className="relative">
+                <select 
+                  value={yearFilter} 
+                  onChange={(e) => setYearFilter(e.target.value)}
+                  className="appearance-none bg-gray-50 border border-gray-200 text-[#007AFF] text-[13px] font-medium rounded-lg px-3 py-1 pr-6 outline-none cursor-pointer"
+                >
+                  <option value="">全部年份</option>
+                  {Array.from({length: 10}, (_, i) => new Date().getFullYear() - i).map(y => (
+                    <option key={y} value={y}>{y}年</option>
+                  ))}
+                </select>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                  <ChevronDown size={12} />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 mb-6">
+              {['01','02','03','04','05','06','07','08','09','10','11','12'].map(m => {
+                const isActive = monthFilters.includes(m);
+                return (
+                  <button 
+                    key={m} 
+                    onClick={() => setMonthFilters(prev => isActive ? prev.filter(x => x !== m) : [...prev, m])} 
+                    className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-all border ${isActive ? 'bg-blue-50 text-[#007AFF] border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-100'}`}
+                  >
+                    {parseInt(m)}月
+                  </button>
+                )
+              })}
+            </div>
+
+            <h3 className="text-[13px] text-gray-400 mb-3 font-medium mt-2">旅票</h3>
+            <div className="flex flex-wrap gap-2.5 mb-6">
+              {subTypeOptions.ticket.map(sub => {
+                const isActive = activeFilters.includes(sub.id);
+                return (
+                  <button key={sub.id} onClick={() => { setActiveFilters(prev => prev.includes(sub.id) ? prev.filter(f => f !== sub.id) : [...prev, sub.id]) }} className={`px-4 py-2 rounded-full text-[14px] transition-all flex items-center gap-1 border ${isActive ? 'bg-blue-50 text-[#007AFF] border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-100'}`}>
+                    {isActive && <Check size={14} />} {sub.label}
+                  </button>
+                );
+              })}
+            </div>
+            
+            <h3 className="text-[13px] text-gray-400 mb-3 font-medium mt-4">地点</h3>
+            <div className="flex flex-wrap gap-2.5 mb-6">
+              <button onClick={() => { setActiveFilters(prev => prev.includes('location') ? prev.filter(f => f !== 'location') : [...prev, 'location']) }} className={`px-4 py-2 rounded-full text-[14px] transition-all flex items-center gap-1 border ${activeFilters.includes('location') ? 'bg-red-50 text-red-500 border-red-200' : 'bg-gray-50 text-gray-600 border-gray-100'}`}>
+                {activeFilters.includes('location') && <Check size={14} />} 地点
+              </button>
+            </div>
+
+            <h3 className="text-[13px] text-gray-400 mb-3 font-medium">娱乐与阅读</h3>
+            <div className="flex flex-wrap gap-2.5">
+              {subTypeOptions.media.map(sub => {
+                const isActive = activeFilters.includes(sub.id);
+                return (
+                  <button key={sub.id} onClick={() => { setActiveFilters(prev => prev.includes(sub.id) ? prev.filter(f => f !== sub.id) : [...prev, sub.id]) }} className={`px-4 py-2 rounded-full text-[14px] transition-all flex items-center gap-1 border ${isActive ? 'bg-purple-50 text-purple-600 border-purple-200' : 'bg-gray-50 text-gray-600 border-gray-100'}`}>
+                    {isActive && <Check size={14} />} {sub.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* --- Add Modal --- */}
+      <div className={`fixed inset-0 z-50 flex justify-center items-end bg-black/40 transition-opacity ${showAddModal ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div className={`w-full max-w-md bg-[#F2F2F7] rounded-t-3xl overflow-hidden transition-transform transform duration-300 flex flex-col ${showAddModal ? 'translate-y-0' : 'translate-y-full'}`} style={{ height: '90vh' }}>
+          
+          <div className="bg-white px-4 py-3 flex justify-between items-center border-b border-gray-200 shrink-0">
+            <button onClick={() => setShowAddModal(false)} className="text-[#007AFF] text-[17px]">取消</button>
+            <span className="font-semibold text-[17px]">记录</span>
+            <button onClick={() => setShowAddModal(false)} className="text-[#007AFF] font-semibold text-[17px]">保存</button>
+          </div>
+
+          <div className="p-4 overflow-y-auto flex-1 pb-20">
+            <div className="flex bg-gray-200/80 p-1 rounded-lg mb-4">
+              {[{id: 'ticket', label: '旅票'}, {id: 'location', label: '地点'}, {id: 'media', label: '娱乐'}].map(type => (
+                <button key={type.id} onClick={() => {setAddMainType(type.id); setAddSubType(type.id==='location'?'location':subTypeOptions[type.id][0].id);}} className={`flex-1 py-1.5 text-[14px] font-medium rounded-md transition-all ${addMainType === type.id ? 'bg-white shadow-sm text-black' : 'text-gray-500'}`}>{type.label}</button>
+              ))}
+            </div>
+
+            {addMainType !== 'location' && (
+              <div className="mb-4">
+                <div className="flex flex-wrap gap-2">
+                  {subTypeOptions[addMainType].map(sub => (
+                    <button key={sub.id} onClick={() => setAddSubType(sub.id)} className={`px-4 py-1.5 rounded-full text-[13px] font-medium transition-all border ${addSubType === sub.id ? 'bg-[#007AFF] text-white border-[#007AFF]' : 'bg-white text-gray-600 border-gray-200 shadow-sm'}`}>{sub.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-[10px] overflow-hidden shadow-sm border border-gray-100 mb-4">
+              {(addMainType === 'media' || addMainType === 'location') && (
+                <div className="flex border-b border-gray-100 p-3 items-center bg-blue-50/50">
+                  <div className="flex-1 flex items-center bg-gray-100 rounded-lg px-3 py-1.5">
+                    <Search size={16} className="text-gray-400 mr-2" />
+                    <input 
+                      type="text" 
+                      className="flex-1 bg-transparent outline-none text-[15px]" 
+                      value={addForm.title}
+                      onChange={(e) => setAddForm({...addForm, title: e.target.value})}
+                    />
+                  </div>
+                  <button onClick={handleSmartSearch} className="ml-3 text-[#007AFF] text-[14px] font-medium whitespace-nowrap">检索</button>
+                </div>
+              )}
+
+              {addForm.apiImage && (
+                <div className="p-4 border-b border-gray-100 flex justify-center bg-gray-50">
+                  <div className="relative">
+                    <img src={addForm.apiImage} alt="Cover Preview" className="h-32 rounded-lg shadow-md border border-gray-200" />
+                    <button onClick={() => setAddForm({...addForm, apiImage: null})} className="absolute -top-2 -right-2 bg-gray-800 text-white rounded-full p-1 shadow"><X size={12} /></button>
+                  </div>
+                </div>
+              )}
+
+              {addMainType === 'ticket' && (
+                <>
+                  <div className="flex border-b border-gray-100 p-3.5 items-center">
+                    <span className="w-16 text-[16px] text-gray-900 font-medium">班次</span>
+                    <input type="text" className="flex-1 text-[16px] outline-none" value={addForm.title} onChange={e=>setAddForm({...addForm, title: e.target.value})} />
+                  </div>
+                  
+                  {/* 出发地输入及联想 */}
+                  <div className="relative">
+                    <div className="flex border-b border-gray-100 p-3.5 items-center">
+                      <span className="w-16 text-[16px] text-gray-900 font-medium">出发地</span>
+                      <input 
+                        type="text" 
+                        className="flex-1 text-[16px] outline-none" 
+                        value={addForm.from} 
+                        onChange={e=>setAddForm({...addForm, from: e.target.value})}
+                        onFocus={() => setFocusedInput('from')}
+                        onBlur={() => setTimeout(() => setFocusedInput(null), 200)}
+                      />
+                    </div>
+                    {focusedInput === 'from' && (addSubType === 'flight' || addSubType === 'train') && (
+                      <div className="bg-gray-50 border-b border-gray-100 flex flex-col max-h-32 overflow-y-auto">
+                        {(locationSuggestions[addSubType] || []).map((sug, i) => (
+                          <div key={i} onClick={() => selectSuggestion('from', sug)} className="px-4 py-2.5 active:bg-gray-200 flex justify-between items-center cursor-pointer border-b border-gray-100 last:border-none">
+                            <span className="text-[15px] text-gray-900">{sug.name}</span>
+                            {sug.code && <span className="text-[12px] text-[#007AFF] bg-blue-100 px-1.5 py-0.5 rounded">{sug.code}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 目的地输入及联想 */}
+                  <div className="relative">
+                    <div className="flex border-b border-gray-100 p-3.5 items-center">
+                      <span className="w-16 text-[16px] text-gray-900 font-medium">目的地</span>
+                      <input 
+                        type="text" 
+                        className="flex-1 text-[16px] outline-none" 
+                        value={addForm.to} 
+                        onChange={e=>setAddForm({...addForm, to: e.target.value})}
+                        onFocus={() => setFocusedInput('to')}
+                        onBlur={() => setTimeout(() => setFocusedInput(null), 200)}
+                      />
+                    </div>
+                    {focusedInput === 'to' && (addSubType === 'flight' || addSubType === 'train') && (
+                      <div className="bg-gray-50 border-b border-gray-100 flex flex-col max-h-32 overflow-y-auto">
+                        {(locationSuggestions[addSubType] || []).map((sug, i) => (
+                          <div key={i} onClick={() => selectSuggestion('to', sug)} className="px-4 py-2.5 active:bg-gray-200 flex justify-between items-center cursor-pointer border-b border-gray-100 last:border-none">
+                            <span className="text-[15px] text-gray-900">{sug.name}</span>
+                            {sug.code && <span className="text-[12px] text-[#007AFF] bg-blue-100 px-1.5 py-0.5 rounded">{sug.code}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {(addMainType === 'location' || addMainType === 'media') && (
+                <div className="flex border-b border-gray-100 p-3.5 items-center">
+                  <span className="w-16 text-[16px] text-gray-900 font-medium">评分</span>
+                  <Stars count={addForm.rating} onChange={(val) => setAddForm({...addForm, rating: val})} />
+                </div>
+              )}
+
+              <div className="flex border-b border-gray-100 p-3.5 items-center">
+                <span className="w-16 text-[16px] text-gray-900 font-medium">时间</span>
+                {/* 动态切换日期选择器类型：票务使用 datetime-local */}
+                <input 
+                  type={addMainType === 'ticket' ? 'datetime-local' : 'date'} 
+                  className="flex-1 text-[16px] outline-none text-gray-900 bg-transparent" 
+                />
+              </div>
+
+              <div className="p-3.5">
+                <textarea className="w-full text-[16px] outline-none resize-none h-24 text-gray-900"></textarea>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-[10px] p-4 shadow-sm border border-gray-100">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-[15px] font-medium flex items-center gap-2"><ImageIcon size={18} className="text-gray-400"/> 添加照片</h3>
+                <input type="file" multiple accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageSelect} />
+                <button onClick={() => fileInputRef.current?.click()} className="text-[#007AFF] bg-blue-50 px-3 py-1 rounded-full text-[13px] font-medium">选择</button>
+              </div>
+
+              {localPreviewImages.length > 0 && (
+                <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+                  {localPreviewImages.map((src, index) => (
+                    <div key={index} className="w-20 h-20 shrink-0 relative rounded-lg overflow-hidden border border-gray-200 shadow-sm">
+                      <img src={src} alt="local preview" className="w-full h-full object-cover" />
+                      <button onClick={() => removeLocalImage(index)} className="absolute top-1 right-1 bg-black/50 backdrop-blur text-white rounded-full p-1"><X size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* --- 侧边栏：我的 (Profile) - 限定为一半画幅 --- */}
+      <div className={`fixed inset-0 z-50 transition-opacity duration-300 ${showProfileSideBar ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        {/* 右侧点击遮罩 */}
+        <div className="absolute inset-0 bg-black/40" onClick={() => setShowProfileSideBar(false)}></div>
+        {/* 左侧画幅面板 - 设置宽度为 w-1/2 (50%) */}
+        <div className={`absolute top-0 left-0 w-1/2 h-full bg-[#F2F2F7] shadow-2xl transition-transform transform duration-300 flex flex-col ${showProfileSideBar ? 'translate-x-0' : '-translate-x-full'}`}>
+           <ProfileView />
+        </div>
+      </div>
+
+    </div>
+  );
+}
