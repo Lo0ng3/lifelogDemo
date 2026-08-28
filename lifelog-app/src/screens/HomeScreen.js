@@ -1,42 +1,58 @@
-import React, { useState, useRef, useCallback, useMemo, useContext } from 'react';
-import { 
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, 
-  Dimensions, Animated, ActivityIndicator, TextInput, Modal, Image, Alert 
+import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
+  Dimensions, Animated, TextInput
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar'; // ✨ 控制系统状态栏文字颜色
-import { 
-  Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book, 
-  User, Star, StarHalf, ListFilter, Check, Share2, CheckCircle, Search, X, Edit3, Trash2, PlayCircle
+import {
+  User, Star, StarHalf, ListFilter, Check, Share2, Search, X
 } from 'lucide-react-native';
-import { WebView } from 'react-native-webview'; 
-import { Video, ResizeMode } from 'expo-av'; 
+import { WebView } from 'react-native-webview';
 
-import { 
-  BottomSheetModal, 
-  BottomSheetView, 
-  BottomSheetBackdrop, 
+import {
+  BottomSheetModal,
+  BottomSheetView,
+  BottomSheetBackdrop,
   BottomSheetScrollView,
-  TouchableOpacity as BottomSheetTouchableOpacity 
+  BottomSheetTouchableOpacity
 } from '@gorhom/bottom-sheet';
 
 import { LogContext } from '../context/LogContext';
+import { getIconConfig } from '../utils/icons';
+import { resolveMediaUri } from '../utils/media';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const subTypeOptions = {
   ticket: [{ id: 'flight', label: '机票' }, { id: 'train', label: '火车票' }, { id: 'bus', label: '汽车票' }, { id: 'ship', label: '轮船' }],
   media: [{ id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' }, { id: 'anime', label: '动漫' }, { id: 'game', label: '游戏' }, { id: 'book', label: '书籍' }]
 };
 
-const isVideo = (uri) => {
-  if (!uri) return false;
-  return uri.includes('video') || uri.split('?')[0].match(/\.(mp4|mov|m4v|3gp|avi)$/i);
-};
+// 列表左侧：设过封面（coverIndex）的记录显示那张图，其次显示已下载的网络海报，都没有则显示类型图标
+function CoverIcon({ item }) {
+  const { IconComponent, iconColor, iconBgColor } = getIconConfig(item);
+  const entry = item.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
+  const [uri, setUri] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (entry) resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
+    return () => { alive = false; };
+  }, [entry]);
+  const src = uri || item.coverUrl;
+  if (src) {
+    return <Image source={{ uri: src }} style={styles.iconBox} contentFit="cover" transition={150} cachePolicy="memory-disk" />;
+  }
+  return (
+    <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
+      <IconComponent color={iconColor} size={22} />
+    </View>
+  );
+}
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData, deleteLog } = useContext(LogContext); 
+  const { logData } = useContext(LogContext);
   
   const [viewMode, setViewMode] = useState('list'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -67,26 +83,12 @@ export default function HomeScreen({ navigation }) {
     }, 2000);
   };
 
-  const [searchQuery, setSearchQuery] = useState(''); 
-  const [activeFilters, setActiveFilters] = useState([]); 
-  const [yearFilters, setYearFilters] = useState([]); 
-  const [monthFilters, setMonthFilters] = useState([]); 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilters, setActiveFilters] = useState([]);
+  const [yearFilters, setYearFilters] = useState([]);
+  const [monthFilters, setMonthFilters] = useState([]);
   const filterSheetRef = useRef(null);
-  const snapPoints = useMemo(() => ['60%', '85%'], []); 
-
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [viewerIndex, setViewerIndex] = useState(-1); 
-  
-  // ✨ 新增：用于跟踪当前全屏滚动到了哪一张（决定视频是否播放）
-  const [currentViewIndex, setCurrentViewIndex] = useState(-1);
-
-  // 监听 FlatList 划到了哪一页
-  const onViewableItemsChanged = useRef(({ viewableItems }) => {
-    if (viewableItems.length > 0) {
-      setCurrentViewIndex(viewableItems[0].index);
-    }
-  }).current;
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  const snapPoints = useMemo(() => ['60%', '85%'], []);
 
   const renderBackdrop = useCallback(
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
@@ -159,46 +161,13 @@ export default function HomeScreen({ navigation }) {
     `;
   }, [filteredAndSortedData]);
 
-  const handleDelete = (id) => {
-    Alert.alert('删除印记', '你确定要永远抹去这条印记吗？', [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => { deleteLog(id); setSelectedItem(null); } }
-    ]);
-  };
-
-  const handleEdit = (item) => {
-    setSelectedItem(null); 
-    navigation.navigate('Add', { editItem: item });
-  };
-
-  const getIconConfig = (item) => {
-    let IconComponent, iconColor, iconBgColor;
-    if (item.baseType === 'ticket') {
-      IconComponent = item.subType === 'flight' ? Plane : (item.subType === 'train' ? Train : (item.subType === 'bus' ? Bus : Ship));
-      iconColor = item.subType === 'flight' ? '#007AFF' : '#F97316';
-      iconBgColor = item.subType === 'flight' ? '#E0F2FE' : '#FFEDD5';
-    } else if (item.baseType === 'location') {
-      IconComponent = MapPin;
-      iconColor = '#EF4444';
-      iconBgColor = '#FEE2E2';
-    } else {
-      IconComponent = item.subType === 'game' ? Gamepad2 : (item.subType === 'book' ? Book : (item.subType === 'tv' ? Tv : (item.subType === 'anime' ? Ghost : Film)));
-      iconColor = '#A855F7';
-      iconBgColor = '#F3E8FF';
-    }
-    return { IconComponent, iconColor, iconBgColor };
-  };
-
   const renderItem = ({ item, index }) => {
-    const { IconComponent, iconColor, iconBgColor } = getIconConfig(item);
     const isLast = index === filteredAndSortedData.length - 1;
 
     return (
-      <TouchableOpacity activeOpacity={0.7} onPress={() => setSelectedItem(item)}>
+      <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.navigate('Detail', { item })}>
         <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
-          <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
-            <IconComponent color={iconColor} size={22} />
-          </View>
+          <CoverIcon item={item} />
           <View style={styles.itemContent}>
             <View style={styles.itemHeader}>
               <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
@@ -222,8 +191,6 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* 确保在全屏看黑底照片时，顶部状态栏也是清晰的 */}
-      <StatusBar style={viewerIndex >= 0 ? "light" : "dark"} />
 
       {isSidebarOpen && <TouchableOpacity activeOpacity={1} style={styles.sidebarOverlay} onPress={() => toggleSidebar(false)} />}
       <Animated.View style={[styles.sidebar, { transform: [{ translateX: sidebarAnim }] }]}>
@@ -234,116 +201,6 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
       </Animated.View>
-
-      {/* ✨ 优化：增加 statusBarTranslucent={true} 消除顶部黑边；修复滑动播放逻辑 */}
-      <Modal visible={viewerIndex >= 0} transparent animationType="fade" statusBarTranslucent={true} onRequestClose={() => { setViewerIndex(-1); setCurrentViewIndex(-1); }}>
-        <View style={styles.viewerContainer}>
-          <TouchableOpacity style={[styles.viewerCloseBtn, { top: insets.top + 10 }]} onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); }}>
-            <X size={28} color="#FFF" />
-          </TouchableOpacity>
-          
-          <FlatList
-            data={selectedItem?.localImages || []}
-            keyExtractor={(_, i) => i.toString()}
-            horizontal
-            pagingEnabled 
-            showsHorizontalScrollIndicator={false}
-            initialScrollIndex={viewerIndex >= 0 ? viewerIndex : 0}
-            getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
-            onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={viewabilityConfig}
-            renderItem={({ item: uri, index }) => (
-              <View style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, justifyContent: 'center' }}>
-                {isVideo(uri) ? (
-                  <Video
-                    source={{ uri }}
-                    style={{ width: '100%', height: '80%' }} 
-                    useNativeControls 
-                    resizeMode={ResizeMode.CONTAIN}
-                    shouldPlay={currentViewIndex === index} // 滑到这页才播，划走自动暂停
-                  />
-                ) : (
-                  <Image source={{ uri }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
-                )}
-              </View>
-            )}
-          />
-        </View>
-      </Modal>
-
-      {/* ✨ 优化：增加 statusBarTranslucent={true} 消除顶部黑边 */}
-      <Modal visible={!!selectedItem} transparent animationType="fade" statusBarTranslucent={true} onRequestClose={() => setSelectedItem(null)}>
-        <TouchableOpacity activeOpacity={1} style={styles.modalOverlay} onPress={() => setSelectedItem(null)}>
-          <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
-            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setSelectedItem(null)}>
-              <X size={20} color="#9CA3AF" />
-            </TouchableOpacity>
-
-            {selectedItem && (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-                <View style={styles.modalHeader}>
-                  <View style={[styles.modalIconBox, { backgroundColor: getIconConfig(selectedItem).iconBgColor }]}>
-                    {React.createElement(getIconConfig(selectedItem).IconComponent, { color: getIconConfig(selectedItem).iconColor, size: 28 })}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.modalTitle} numberOfLines={2}>{selectedItem.title}</Text>
-                    <Text style={styles.modalDate}>{selectedItem.date}</Text>
-                  </View>
-                </View>
-
-                {selectedItem.rating && (
-                  <View style={styles.modalRatingRow}>
-                    {[1, 2, 3, 4, 5].map((i) => {
-                      const isFull = i <= selectedItem.rating;
-                      const isHalf = i === Math.ceil(selectedItem.rating) && !Number.isInteger(selectedItem.rating);
-                      if (isHalf) return <StarHalf key={i} size={16} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
-                      return <Star key={i} size={16} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
-                    })}
-                    <Text style={styles.modalRatingText}>{selectedItem.rating} 分</Text>
-                  </View>
-                )}
-                {!!selectedItem.subtitle && (
-                  <View style={styles.modalDescBox}>
-                    <Text style={styles.modalDescText}>{selectedItem.subtitle}</Text>
-                  </View>
-                )}
-
-                {/* ✨ 优化：n*3 九宫格瀑布流展示详细图片/视频 */}
-                {selectedItem.localImages && selectedItem.localImages.length > 0 && (
-                  <View style={{ marginTop: 16 }}>
-                    <Text style={styles.modalSectionTitle}>相关影像</Text>
-                    <View style={styles.modalImageGrid}>
-                      {selectedItem.localImages.map((uri, idx) => (
-                        <TouchableOpacity key={idx} activeOpacity={0.8} onPress={() => { setViewerIndex(idx); setCurrentViewIndex(idx); }} style={styles.modalImageGridItem}>
-                          {isVideo(uri) ? (
-                            <View style={styles.videoThumbnailBox}>
-                              <Video source={{ uri }} style={styles.modalGridImage} resizeMode={ResizeMode.COVER} shouldPlay={false} />
-                              <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
-                            </View>
-                          ) : (
-                            <Image source={{ uri }} style={styles.modalGridImage} />
-                          )}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                <View style={styles.modalActionRow}>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => handleEdit(selectedItem)}>
-                    <Edit3 size={18} color="#007AFF" />
-                    <Text style={styles.actionBtnText}>编辑</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(selectedItem.id)}>
-                    <Trash2 size={18} color="#EF4444" />
-                    <Text style={[styles.actionBtnText, { color: '#EF4444' }]}>删除</Text>
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            )}
-          </View>
-        </TouchableOpacity>
-      </Modal>
 
       <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
@@ -458,33 +315,6 @@ const styles = StyleSheet.create({
   itemDate: { fontSize: 12, color: '#8E8E93' },
   starContainer: { flexDirection: 'row', marginBottom: 4 },
   itemSubtitle: { fontSize: 14, color: '#8E8E93', lineHeight: 18 },
-
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalCard: { width: '100%', maxHeight: '85%', backgroundColor: '#FFF', borderRadius: 20, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
-  modalCloseBtn: { position: 'absolute', top: 16, right: 16, zIndex: 10, padding: 4 },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, paddingRight: 24, marginTop: 10 },
-  modalIconBox: { width: 56, height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1C1C1E', marginBottom: 4 },
-  modalDate: { fontSize: 14, color: '#8E8E93' },
-  modalRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  modalRatingText: { fontSize: 14, fontWeight: 'bold', color: '#FACC15', marginLeft: 8 },
-  modalDescBox: { backgroundColor: '#F9FAFB', padding: 12, borderRadius: 12, marginBottom: 16 },
-  modalDescText: { fontSize: 15, color: '#4B5563', lineHeight: 22 },
-  modalSectionTitle: { fontSize: 14, fontWeight: '600', color: '#1C1C1E', marginBottom: 8 },
-  
-  // ✨ 重构：n*3 九宫格样式
-  modalImageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 8 },
-  modalImageGridItem: { width: '33.33%', padding: 4 },
-  modalGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#E5E5EA' },
-  videoThumbnailBox: { width: '100%', aspectRatio: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
-  playOverlay: { position: 'absolute', zIndex: 10, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 30 },
-
-  modalActionRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#F3F4F6', marginTop: 20, paddingTop: 16, justifyContent: 'space-around' },
-  actionBtn: { flexDirection: 'row', alignItems: 'center' },
-  actionBtnText: { fontSize: 16, fontWeight: '500', color: '#007AFF', marginLeft: 6 },
-
-  viewerContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
-  viewerCloseBtn: { position: 'absolute', left: 20, zIndex: 999, padding: 10 },
 
   mapWrapper: { flex: 1, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
   map: { flex: 1 },

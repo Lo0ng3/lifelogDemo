@@ -2,7 +2,7 @@
   "expo": {
     "name": "lifelog-app",
     "slug": "lifelog-app",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lifelogapp",
@@ -20,7 +20,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.lo0ng.lifelogapp"
+      "package": "com.lo0ng.lifelogapp",
+      "versionCode": 1
     },
     "web": {
       "output": "static",
@@ -40,7 +41,14 @@
           }
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "需要访问相册权限，App 将直接读取相册中的照片和视频，不会在应用内重复保存副本。",
+          "savePhotosPermission": "允许将照片保存到相册。"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
