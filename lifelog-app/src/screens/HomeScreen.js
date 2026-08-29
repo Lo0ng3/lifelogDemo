@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Animated, TextInput
+  Dimensions, Animated, TextInput, Alert
 } from 'react-native';
-import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, Star, StarHalf, ListFilter, Check, Share2, Search, X
+  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import Reanimated, { useAnimatedStyle, FadeIn } from 'react-native-reanimated';
 
 import {
   BottomSheetModal,
@@ -19,8 +20,8 @@ import {
 } from '@gorhom/bottom-sheet';
 
 import { LogContext } from '../context/LogContext';
-import { getIconConfig } from '../utils/icons';
-import { resolveMediaUri } from '../utils/media';
+import CoverIcon from '../components/CoverIcon';
+import PressableScale from '../components/PressableScale';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -29,44 +30,48 @@ const subTypeOptions = {
   media: [{ id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' }, { id: 'anime', label: '动漫' }, { id: 'game', label: '游戏' }, { id: 'book', label: '书籍' }]
 };
 
-// 列表左侧：设过封面（coverIndex）的记录显示那张图，其次显示已下载的网络海报，都没有则显示类型图标
-function CoverIcon({ item }) {
-  const { IconComponent, iconColor, iconBgColor } = getIconConfig(item);
-  const entry = item.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
-  const [uri, setUri] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    if (entry) resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
-    return () => { alive = false; };
-  }, [entry]);
-  const src = uri || item.coverUrl;
-  if (src) {
-    return <Image source={{ uri: src }} style={styles.iconBox} contentFit="cover" transition={150} cachePolicy="memory-disk" />;
-  }
+// 右滑操作区：固定宽度保证滑动距离可测，整体随拖拽从右侧滑入（静止时完全在行外不可见）
+const SWIPE_ACTIONS_WIDTH = 144;
+
+function SwipeRightActions({ drag, onEdit, onDelete }) {
+  const slideStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: drag.value + SWIPE_ACTIONS_WIDTH }],
+  }));
   return (
-    <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
-      <IconComponent color={iconColor} size={22} />
-    </View>
+    <Reanimated.View style={[styles.swipeActions, slideStyle]}>
+      <TouchableOpacity style={[styles.swipeBtn, styles.swipeEditBtn]} onPress={onEdit}>
+        <Edit3 size={17} color="#FFF" />
+        <Text style={styles.swipeBtnText}>修改</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={[styles.swipeBtn, styles.swipeDeleteBtn]} onPress={onDelete}>
+        <Trash2 size={17} color="#FFF" />
+        <Text style={styles.swipeBtnText}>删除</Text>
+      </TouchableOpacity>
+    </Reanimated.View>
   );
 }
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData } = useContext(LogContext);
+  const { logData, deleteLog } = useContext(LogContext);
   
   const [viewMode, setViewMode] = useState('list'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const sidebarAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.5)).current;
+  const overlayAnim = useRef(new Animated.Value(0)).current;
 
   const toggleSidebar = (open) => {
     setIsSidebarOpen(open);
-    Animated.spring(sidebarAnim, { 
-      toValue: open ? 0 : -SCREEN_WIDTH * 0.5, 
-      useNativeDriver: true, 
-      stiffness: 150,  // ✨ 增加刚度，让弹出更迅速
-      damping: 20,     // ✨ 增加阻尼，消除回弹的抖动
-      mass: 0.8        // ✨ 减轻质量，让动画看起来更轻盈
-    }).start();
+    Animated.spring(sidebarAnim,
+      {
+        toValue: open ? 0 : -SCREEN_WIDTH * 0.5,
+        useNativeDriver: true,
+        stiffness: 150,  // ✨ 增加刚度，让弹出更迅速
+        damping: 20,     // ✨ 增加阻尼，消除回弹的抖动
+        mass: 0.8        // ✨ 减轻质量，让动画看起来更轻盈
+      }
+    ).start();
+    Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 200, useNativeDriver: true }).start();
   };
 
   const [exportState, setExportState] = useState('idle'); 
@@ -161,38 +166,64 @@ export default function HomeScreen({ navigation }) {
     `;
   }, [filteredAndSortedData]);
 
+  const confirmDelete = (item) => {
+    Alert.alert('删除印记', `确定要删除「${item.title}」吗？删除后无法恢复。`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: () => deleteLog(item.id) },
+    ]);
+  };
+
   const renderItem = ({ item, index }) => {
     const isLast = index === filteredAndSortedData.length - 1;
 
+    // 右滑露出操作按钮；点击后先收起滑动，再执行
+    const renderRightActions = (_progress, drag, swipeable) => (
+      <SwipeRightActions
+        drag={drag}
+        onEdit={() => { swipeable.close(); navigation.navigate('Edit', { editItem: item }); }}
+        onDelete={() => { swipeable.close(); confirmDelete(item); }}
+      />
+    );
+
     return (
-      <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.navigate('Detail', { item })}>
-        <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
-          <CoverIcon item={item} />
-          <View style={styles.itemContent}>
-            <View style={styles.itemHeader}>
-              <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.itemDate}>{item.date.replace(/^\d{4}-/, '')}</Text>
+      <ReanimatedSwipeable
+        renderRightActions={renderRightActions}
+        overshootRight={false}
+        friction={2}
+      >
+        <PressableScale style={styles.cardRow} onPress={() => navigation.navigate('Detail', { item })}>
+          <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
+            <CoverIcon item={item} />
+            <View style={styles.itemContent}>
+              <View style={styles.itemHeader}>
+                <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+                <Text style={styles.itemDate}>{item.date.replace(/^\d{4}-/, '')}</Text>
+              </View>
+              <View style={styles.starContainer}>
+                {[1, 2, 3, 4, 5].map((i) => {
+                  const isFull = i <= item.rating;
+                  const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
+                  if (!item.rating) return null;
+                  if (isHalf) return <StarHalf key={i} size={12} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
+                  return <Star key={i} size={12} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
+                })}
+              </View>
+              {!!item.subtitle && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.subtitle}</Text>}
             </View>
-            <View style={styles.starContainer}>
-              {[1, 2, 3, 4, 5].map((i) => {
-                const isFull = i <= item.rating;
-                const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                if (!item.rating) return null;
-                if (isHalf) return <StarHalf key={i} size={12} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
-                return <Star key={i} size={12} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
-              })}
-            </View>
-            {!!item.subtitle && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.subtitle}</Text>}
           </View>
-        </View>
-      </TouchableOpacity>
+        </PressableScale>
+      </ReanimatedSwipeable>
     );
   };
 
   return (
     <View style={styles.container}>
 
-      {isSidebarOpen && <TouchableOpacity activeOpacity={1} style={styles.sidebarOverlay} onPress={() => toggleSidebar(false)} />}
+      {isSidebarOpen && (
+        <Animated.View style={[styles.sidebarOverlay, { opacity: overlayAnim }]}>
+          <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => toggleSidebar(false)} />
+        </Animated.View>
+      )}
       <Animated.View style={[styles.sidebar, { transform: [{ translateX: sidebarAnim }] }]}>
         <View style={[styles.sidebarContent, { paddingTop: insets.top + 20 }]}>
           <View style={styles.sidebarHeader}><View style={styles.largeAvatar}><User color="#FFF" size={40} /></View><Text style={styles.userName}>旅行者</Text></View>
@@ -230,12 +261,15 @@ export default function HomeScreen({ navigation }) {
 
         {viewMode === 'list' ? (
           <View style={styles.listWrapper}>
-            <FlatList 
-              data={filteredAndSortedData} 
-              keyExtractor={(item) => item.id.toString()} 
-              renderItem={renderItem}
-              showsVerticalScrollIndicator={false} 
-            />
+            {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
+            <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
+              <FlatList
+                data={filteredAndSortedData}
+                keyExtractor={(item) => item.id.toString()}
+                renderItem={renderItem}
+                showsVerticalScrollIndicator={false}
+              />
+            </Reanimated.View>
           </View>
         ) : (
           <View style={styles.mapWrapper}>
@@ -245,7 +279,13 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
-      <BottomSheetModal ref={filterSheetRef} index={0} snapPoints={snapPoints} backdropComponent={renderBackdrop}>
+      <BottomSheetModal
+        ref={filterSheetRef}
+        index={0}
+        snapPoints={snapPoints}
+        backdropComponent={renderBackdrop}
+        animationConfigs={{ damping: 24, stiffness: 220, mass: 0.9 }}
+      >
         <BottomSheetView style={styles.sheetHeader}>
           <BottomSheetTouchableOpacity onPress={() => {setActiveFilters([]); setYearFilters([]); setMonthFilters([]);}} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
           <Text style={styles.sheetTitle}>筛选</Text>
@@ -308,13 +348,19 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 14, color: '#9CA3AF' },
   cardItem: { flexDirection: 'row', padding: 16 },
   cardItemBorder: { borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
-  iconBox: { width: 44, height: 44, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   itemContent: { flex: 1, justifyContent: 'center' },
   itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
   itemTitle: { fontSize: 16, fontWeight: '600', color: '#1C1C1E', flex: 1, marginRight: 8 },
   itemDate: { fontSize: 12, color: '#8E8E93' },
   starContainer: { flexDirection: 'row', marginBottom: 4 },
   itemSubtitle: { fontSize: 14, color: '#8E8E93', lineHeight: 18 },
+
+  swipeActions: { flexDirection: 'row', alignItems: 'stretch', width: SWIPE_ACTIONS_WIDTH },
+  swipeBtn: { width: 72, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  swipeEditBtn: { backgroundColor: '#007AFF' },
+  swipeDeleteBtn: { backgroundColor: '#EF4444' },
+  swipeBtnText: { color: '#FFF', fontSize: 12, fontWeight: '600' },
+  cardRow: { backgroundColor: '#FFF' },
 
   mapWrapper: { flex: 1, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
   map: { flex: 1 },

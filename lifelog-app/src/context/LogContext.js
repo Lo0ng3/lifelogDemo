@@ -2,7 +2,7 @@ import React, { createContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions } from '../utils/search';
-import { downloadRemoteCover } from '../utils/media';
+import { downloadRemoteCover, cleanLegacyPickerCache } from '../utils/media';
 
 export const LogContext = createContext();
 
@@ -11,6 +11,7 @@ export const LogProvider = ({ children }) => {
 
   useEffect(() => {
     loadLogs();
+    cleanLegacyPickerCache();
   }, []);
 
   const loadLogs = async () => {

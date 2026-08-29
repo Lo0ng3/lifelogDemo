@@ -7,13 +7,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
 import {
-  Star, StarHalf, X, Edit3, Trash2, PlayCircle, ChevronLeft
+  Star, StarHalf, X, PlayCircle, ChevronLeft
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { LogContext } from '../context/LogContext';
+import CoverIcon from '../components/CoverIcon';
 import { getIconConfig } from '../utils/icons';
-import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry } from '../utils/media';
+import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource } from '../utils/media';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -31,7 +33,7 @@ function VideoThumb({ entry, style, contentFit = 'cover' }) {
 
 export default function DetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData, deleteLog, updateLog } = useContext(LogContext);
+  const { logData, updateLog } = useContext(LogContext);
 
   // 通过 id 从全局数据里取，编辑/删除后页面能自动同步
   const itemId = route.params?.item?.id;
@@ -62,10 +64,17 @@ export default function DetailScreen({ route, navigation }) {
     return () => { alive = false; };
   }, [item]);
 
-  const handleEdit = () => {
-    // Add 是 Tab 里的页面，必须通过外层 Stack 的 Main 路由嵌套导航，直接 navigate('Add') 会被丢弃
-    navigation.navigate('Main', { screen: 'Add', params: { editItem: item } });
-  };
+  // 封面：手动设置（coverIndex）的相册图优先，其次豆瓣海报
+  const coverEntry = item?.coverIndex != null ? resolvedMedia[item.coverIndex] : null;
+  const [coverUri, setCoverUri] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (coverEntry) resolveMediaUri(coverEntry).then(u => { if (alive) setCoverUri(u); });
+    return () => { alive = false; };
+  }, [coverEntry]);
+  const coverSource = coverUri
+    ? { uri: coverUri }
+    : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null);
 
   // 封面：长按九宫格里任意一张设为/取消封面，记录在 coverIndex 上
   const handleGridLongPress = (idx) => {
@@ -76,13 +85,6 @@ export default function DetailScreen({ route, navigation }) {
         ? [{ text: '取消封面', style: 'destructive', onPress: () => updateLog({ ...item, coverIndex: null }) }]
         : []),
       { text: isCurrentCover ? '重新设为封面' : '设为封面', onPress: () => updateLog({ ...item, coverIndex: idx }) },
-    ]);
-  };
-
-  const handleDelete = () => {
-    Alert.alert('删除印记', '你确定要永远抹去这条印记吗？', [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => { deleteLog(item.id); navigation.goBack(); } }
     ]);
   };
 
@@ -107,46 +109,44 @@ export default function DetailScreen({ route, navigation }) {
           <ChevronLeft size={24} color="#1C1C1E" />
         </TouchableOpacity>
         <Text style={styles.navTitle} numberOfLines={1}>{item.title}</Text>
-        <View style={styles.navBtn}>
-          <TouchableOpacity onPress={handleEdit}><Edit3 size={20} color="#007AFF" /></TouchableOpacity>
-        </View>
+        <View style={styles.navBtn} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        <View style={styles.detailHeader}>
-          <View style={[styles.iconBox, { backgroundColor: iconConfig.iconBgColor }]}>
-            {React.createElement(iconConfig.IconComponent, { color: iconConfig.iconColor, size: 28 })}
-          </View>
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.detailHeader}>
+          {coverSource ? (
+            <CoverIcon item={item} height={46} style={{ marginRight: 0 }} />
+          ) : (
+            <View style={[styles.iconBox, { backgroundColor: iconConfig.iconBgColor }]}>
+              {React.createElement(iconConfig.IconComponent, { color: iconConfig.iconColor, size: 28 })}
+            </View>
+          )}
           <View style={{ flex: 1 }}>
             <Text style={styles.detailTitle}>{item.title}</Text>
             <Text style={styles.detailDate}>{item.date}</Text>
           </View>
-          <TouchableOpacity onPress={handleDelete}>
-            <Trash2 size={20} color="#EF4444" />
-          </TouchableOpacity>
-        </View>
+        </Animated.View>
 
-        {item.rating && (
-          <View style={styles.ratingRow}>
-            {[1, 2, 3, 4, 5].map((i) => {
-              const isFull = i <= item.rating;
-              const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-              if (isHalf) return <StarHalf key={i} size={16} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
-              return <Star key={i} size={16} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
-            })}
-            <Text style={styles.ratingText}>{item.rating} 分</Text>
-          </View>
-        )}
-
-        {!!item.subtitle && (
-          <View style={styles.descBox}>
-            <Text style={styles.descText}>{item.subtitle}</Text>
-          </View>
+        {(item.rating || item.subtitle) && (
+          <Animated.View entering={FadeInDown.duration(300).delay(60)} style={styles.reviewBox}>
+            {!!item.rating && (
+              <View style={styles.reviewRatingRow}>
+                {[1, 2, 3, 4, 5].map((i) => {
+                  const isFull = i <= item.rating;
+                  const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
+                  if (isHalf) return <StarHalf key={i} size={22} color="#FACC15" fill="#FACC15" style={{ marginRight: 3 }} />;
+                  return <Star key={i} size={22} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 3 }} />;
+                })}
+                <Text style={styles.reviewScore}>{item.rating} 分</Text>
+              </View>
+            )}
+            {!!item.subtitle && <Text style={styles.reviewText}>{item.subtitle}</Text>}
+          </Animated.View>
         )}
 
         {/* 相关影像九宫格 */}
         {resolvedMedia.length > 0 && (
-          <View style={{ marginTop: 16 }}>
+          <Animated.View entering={FadeInDown.duration(300).delay(120)} style={{ marginTop: 16 }}>
             <Text style={styles.sectionTitle}>相关影像（长按可设为封面）</Text>
             <View style={styles.imageGrid}>
               {resolvedMedia.map((entry, idx) => (
@@ -171,7 +171,7 @@ export default function DetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
+          </Animated.View>
         )}
       </ScrollView>
 
@@ -232,12 +232,14 @@ const styles = StyleSheet.create({
   navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: '#1C1C1E', marginHorizontal: 4 },
   detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 14, padding: 14, gap: 12 },
   iconBox: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  detailTitle: { fontSize: 18, fontWeight: '700', color: '#1C1C1E' },
+  detailTitle: { fontSize: 19, fontWeight: '700', color: '#1C1C1E' },
   detailDate: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
   ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   ratingText: { marginLeft: 8, fontSize: 13, color: '#6B7280' },
-  descBox: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, marginTop: 12 },
-  descText: { fontSize: 14, color: '#374151', lineHeight: 21 },
+  reviewBox: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginTop: 12 },
+  reviewRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: '#FACC15' },
+  reviewText: { fontSize: 16, color: '#374151', lineHeight: 24 },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },

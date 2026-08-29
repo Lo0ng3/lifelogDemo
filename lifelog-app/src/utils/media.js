@@ -68,7 +68,16 @@ export const isVideoEntry = (entry) => {
   return uri.includes('video') || uri.split('?')[0].match(/\.(mp4|mov|m4v|3gp|avi)$/i) !== null;
 };
 
+// 豆瓣海报是竖版 2:3，用于没有宽高比信息时的封面显示
+export const DOUBAN_POSTER_RATIO = 2 / 3;
+
 // 把网络海报下载到本地持久目录，作为离线可用的封面；失败时返回原网络地址
+// 豆瓣图床有防盗链：必须带浏览器 UA + Referer，否则一律 418 拒绝
+const DOWNLOAD_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  Referer: 'https://www.douban.com/',
+};
+
 export const downloadRemoteCover = async (url) => {
   if (!url || !url.startsWith('http')) return url || null;
   try {
@@ -77,9 +86,28 @@ export const downloadRemoteCover = async (url) => {
     if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
     const ext = (url.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
     const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-    const { uri } = await FileSystem.downloadAsync(url, dest);
+    const { uri } = await FileSystem.downloadAsync(url, dest, { headers: DOWNLOAD_HEADERS });
     return uri;
   } catch {
     return url;
+  }
+};
+
+// 网络图直接显示时也要带防盗链头（旧记录里存的还是豆瓣热链）
+export const remoteImageSource = (url) => {
+  if (!url) return null;
+  return url.includes('doubanio.com')
+    ? { uri: url, headers: DOWNLOAD_HEADERS }
+    : { uri: url };
+};
+
+// 一次性清理：旧版本用系统选择器选图时留在缓存里的媒体拷贝（App 占用膨胀的历史遗留）
+export const cleanLegacyPickerCache = async () => {
+  try {
+    const legacyDir = `${FileSystem.cacheDirectory}ImagePicker`;
+    const info = await FileSystem.getInfoAsync(legacyDir);
+    if (info.exists) await FileSystem.deleteAsync(legacyDir, { idempotent: true });
+  } catch {
+    // 清理失败不影响使用
   }
 };

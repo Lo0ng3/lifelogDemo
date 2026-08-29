@@ -3,7 +3,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 
 import AppNavigator from './src/navigation/AppNavigator';
-import { LogProvider } from './src/context/LogContext'; 
+import { LogProvider } from './src/context/LogContext';
 
 export default function App() {
   return (

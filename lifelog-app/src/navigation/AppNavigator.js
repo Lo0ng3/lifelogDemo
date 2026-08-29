@@ -8,6 +8,7 @@ import { Compass, PlusCircle } from 'lucide-react-native';
 import HomeScreen from '../screens/HomeScreen';
 import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
+import MediaPickerScreen from '../screens/MediaPickerScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -49,10 +50,20 @@ function Tabs() {
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {/* 底部 Tab 作为根，详情页以全屏二级页面的形式压入栈中 */}
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          // 统一的页面切换动画：二级页面从右侧滑入，时长收敛到 260ms，不拖沓
+          animation: 'slide_from_right',
+          animationDuration: 260,
+        }}
+      >
+        {/* 底部 Tab 作为根；详情/编辑/选图为二级页面，进出配对，返回栈不会越叠越深 */}
         <Stack.Screen name="Main" component={Tabs} />
         <Stack.Screen name="Detail" component={DetailScreen} />
+        {/* 编辑复用添加表单，作为独立栈页：保存/取消直接返回详情，不再绕回 Tab */}
+        <Stack.Screen name="Edit" component={AddScreen} />
+        <Stack.Screen name="MediaPicker" component={MediaPickerScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

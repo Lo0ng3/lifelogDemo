@@ -8,14 +8,22 @@ import {
   Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book, 
   Search, ImagePlus, X, Star, StarHalf, Check 
 } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { Image as ExpoImage } from 'expo-image';
-
-import { LogContext } from '../context/LogContext';
-import { getIconConfig } from '../utils/icons';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover } from '../utils/media';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
+import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchLocationSuggestions, hasLocationSearch } from '../utils/search';
+
+// 联想词条：标题 + 作者/年份，自然换行展示
+function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
+  return (
+    <View style={{ flex: 1 }}>
+      <TouchableOpacity onPress={onPress}>
+        <Text style={textStyle}>{title}</Text>
+        {!!meta && <Text style={metaStyle}>{meta}</Text>}
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
@@ -158,21 +166,33 @@ export default function AddScreen({ navigation, route }) {
     };
   }, [searchQuery, baseType, subType]);
 
-  const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsEditing: false,
-      allowsMultipleSelection: true,
-      quality: 1, // 不压缩，只留引用；真实文件仍在相册里
+  // 打开相册直读选图器：只记录 assetId，全程零复制
+  const openMediaPicker = () => {
+    navigation.navigate('MediaPicker', {
+      selected: selectedImages,
+      returnTo: route.name === 'Edit' ? 'Edit' : 'tab',
     });
-    if (!result.canceled && result.assets) {
-      // 只记录相册资产的引用（assetId），uri 仅作备用；不再复制文件进 App
-      setSelectedImages([
-        ...selectedImages,
-        ...result.assets.map(a => ({ uri: a.uri, assetId: a.assetId || null, isVideo: a.type === 'video' })),
-      ]);
-    }
   };
+
+  // 选图器返回：合并所选（按 assetId 去重），并解析出相册原始路径供预览
+  useEffect(() => {
+    if (route.params?.picked) {
+      const picked = route.params.picked;
+      navigation.setParams({ picked: null });
+      if (Array.isArray(picked) && picked.length > 0) {
+        setSelectedImages(prev => {
+          const existing = new Set(prev.map(e => e?.assetId).filter(Boolean));
+          return [...prev, ...picked.filter(p => !p.assetId || !existing.has(p.assetId))];
+        });
+        Promise.all(picked.map(async (p) => ({ ...p, uri: await resolveMediaUri(p) }))).then(resolved => {
+          setSelectedImages(prev => prev.map(e => {
+            const hit = e?.assetId && resolved.find(r => r.assetId === e.assetId);
+            return hit || e;
+          }));
+        });
+      }
+    }
+  }, [route.params?.picked]);
 
   const handleStarPress = (s) => {
     if (rating === s - 0.5) setRating(s); 
@@ -217,30 +237,18 @@ export default function AddScreen({ navigation, route }) {
 
     if (editId) {
       updateLog(logDataToSave);
-      setEditId(null);
     } else {
       addLog(logDataToSave);
     }
 
-    cleanupTempCopies(logDataToSave.localImages);
-
     clearForm();
-    // 返回首页列表（Add 在 Tab 里，从二级页面进入时不能直接 goBack）
-    navigation.navigate('Main', { screen: 'Home' });
-  };
-
-  // 只存相册引用：记录里已保存 assetId 的条目，把选择时系统复制进 App 缓存的临时文件删掉，
-  // 显示时通过 assetId 从相册解析原件，不依赖这份拷贝
-  const cleanupTempCopies = (entries) => {
-    entries.forEach(async (entry) => {
-      if (entry?.assetId && entry.uri?.startsWith('file:')) {
-        try {
-          await FileSystem.deleteAsync(entry.uri, { idempotent: true });
-        } catch {
-          // 删除失败不影响保存，系统之后也会清理缓存
-        }
-      }
-    });
+    // 从详情页进来的编辑：goBack 直接回详情（数据由全局状态自动刷新）；
+    // 从添加 Tab 进来的：回首页列表
+    if (route.name === 'Edit') {
+      navigation.goBack();
+    } else {
+      navigation.navigate('Main', { screen: 'Home' });
+    }
   };
 
   const renderRating = () => {
@@ -294,7 +302,7 @@ export default function AddScreen({ navigation, route }) {
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => { clearForm(); setEditId(null); navigation.navigate('Main', { screen: 'Home' }); }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.goBack(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity onPress={handleSave}><Text style={styles.saveText}>保存</Text></TouchableOpacity>
       </View>
@@ -346,7 +354,7 @@ export default function AddScreen({ navigation, route }) {
               )}
 
               {hasLocationSearch() && showSearchAuto && searchResults.length > 0 && (
-                <View style={[styles.autoCompleteBox, { top: 75 }]}>
+                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>
                       <ActivityIndicator size="small" color="#007AFF" />
@@ -363,17 +371,22 @@ export default function AddScreen({ navigation, route }) {
                           setShowSearchAuto(false);
                         }}
                       >
-                        <View style={[styles.autoCompleteThumb, { backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center' }]}>
-                          <MapPin size={14} color="#EF4444" />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.autoCompleteText} numberOfLines={1}>{result.title}</Text>
-                          {!!result.meta && <Text style={styles.autoCompleteMeta} numberOfLines={1}>{result.meta}</Text>}
-                        </View>
+                        <SuggestionRow
+                          title={result.title}
+                          meta={result.meta}
+                          textStyle={styles.autoCompleteText}
+                          metaStyle={styles.autoCompleteMeta}
+                          onPress={() => {
+                            skipNextSearch.current = true;
+                            setSearchQuery(result.title);
+                            setLocationCoords(result.location || null);
+                            setShowSearchAuto(false);
+                          }}
+                        />
                       </TouchableOpacity>
                     ))
                   )}
-                </View>
+                </Reanimated.View>
               )}
             </View>
           )}
@@ -402,16 +415,9 @@ export default function AddScreen({ navigation, route }) {
                 <Text style={styles.autoCompleteHint}>游戏暂不支持网络检索，直接输入名称即可</Text>
               )}
 
-              {coverUrl && (
-                <View style={styles.coverPreviewRow}>
-                  <ExpoImage source={{ uri: coverUrl }} style={styles.coverPreviewThumb} contentFit="cover" />
-                  <Text style={styles.coverPreviewText}>已获取网络封面，保存后会在列表中显示</Text>
-                  <TouchableOpacity onPress={() => setCoverUrl(null)}><X size={16} color="#9CA3AF" /></TouchableOpacity>
-                </View>
-              )}
-
               {showSearchAuto && searchResults.length > 0 && (
-                <View style={[styles.autoCompleteBox, { top: 75 }]}>
+                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
+
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>
                       <ActivityIndicator size="small" color="#007AFF" />
@@ -428,21 +434,23 @@ export default function AddScreen({ navigation, route }) {
                           setShowSearchAuto(false);
                         }}
                       >
-                        {result.artwork ? (
-                          <ExpoImage source={{ uri: result.artwork }} style={styles.autoCompleteThumb} contentFit="cover" transition={100} />
-                        ) : (
-                          <View style={[styles.autoCompleteThumb, { backgroundColor: '#F3E8FF', alignItems: 'center', justifyContent: 'center' }]}>
-                            {(() => { const { IconComponent, iconColor } = getIconConfig({ baseType: 'media', subType }); return <IconComponent size={14} color={iconColor} />; })()}
-                          </View>
-                        )}
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.autoCompleteText} numberOfLines={1}>{result.title}</Text>
-                          {!!result.meta && <Text style={styles.autoCompleteMeta} numberOfLines={1}>{result.meta}</Text>}
-                        </View>
+                        {/* 长词条可横向拖动查看完整内容 */}
+                        <SuggestionRow
+                          title={result.title}
+                          meta={result.meta}
+                          textStyle={styles.autoCompleteText}
+                          metaStyle={styles.autoCompleteMeta}
+                          onPress={() => {
+                            skipNextSearch.current = true;
+                            setSearchQuery(result.title);
+                            setCoverUrl(result.artwork);
+                            setShowSearchAuto(false);
+                          }}
+                        />
                       </TouchableOpacity>
                     ))
                   )}
-                </View>
+                </Reanimated.View>
               )}
             </View>
           )}
@@ -496,7 +504,7 @@ export default function AddScreen({ navigation, route }) {
                 </View>
               ))}
               <View style={styles.imageGridItem}>
-                <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
+                <TouchableOpacity style={styles.addImageBtn} onPress={openMediaPicker}>
                   <ImagePlus size={24} color="#9CA3AF" />
                 </TouchableOpacity>
               </View>
@@ -530,7 +538,9 @@ const styles = StyleSheet.create({
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
   input: { flex: 1, fontSize: 15, color: '#1C1C1E' },
   autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
-  autoCompleteItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', gap: 8 },
+  autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  autoCompleteScroll: { flex: 1 },
+  autoCompleteContent: { alignItems: 'center', paddingVertical: 2 },
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
   autoCompleteText: { fontSize: 15, color: '#1C1C1E' },
   autoCompleteMeta: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
