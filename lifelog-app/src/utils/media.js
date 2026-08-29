@@ -4,6 +4,7 @@
 import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Image } from 'expo-image';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -101,12 +102,21 @@ export const remoteImageSource = (url) => {
     : { uri: url };
 };
 
-// 一次性清理：旧版本用系统选择器选图时留在缓存里的媒体拷贝（App 占用膨胀的历史遗留）
-export const cleanLegacyPickerCache = async () => {
+// 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损
+// - ImagePicker：旧版系统选择器留在缓存里的媒体拷贝（存储膨胀的历史遗留）
+// - VideoThumbnails：视频封面帧（每次启动会重新生成，不清会一直累积）
+// - expo-image 磁盘缓存（Glide）：相册缩略图等处理结果，浏览多了可达上百兆
+export const cleanTransientCaches = async () => {
   try {
-    const legacyDir = `${FileSystem.cacheDirectory}ImagePicker`;
-    const info = await FileSystem.getInfoAsync(legacyDir);
-    if (info.exists) await FileSystem.deleteAsync(legacyDir, { idempotent: true });
+    const dirs = [
+      `${FileSystem.cacheDirectory}ImagePicker`,
+      `${FileSystem.cacheDirectory}VideoThumbnails`,
+    ];
+    for (const dir of dirs) {
+      const info = await FileSystem.getInfoAsync(dir);
+      if (info.exists) await FileSystem.deleteAsync(dir, { idempotent: true });
+    }
+    await Image.clearDiskCache();
   } catch {
     // 清理失败不影响使用
   }

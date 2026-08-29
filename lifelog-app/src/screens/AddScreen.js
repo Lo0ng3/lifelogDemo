@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
-import { 
-  View, Text, StyleSheet, TextInput, TouchableOpacity, 
-  ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator
+import React, { useState, useEffect, useContext, useRef, useMemo } from 'react';
+import {
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
+  ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator, BackHandler
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { 
@@ -11,6 +11,7 @@ import {
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover } from '../utils/media';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
+import MediaPickerModal from '../components/MediaPickerModal';
 import { fetchSuggestions, fetchLocationSuggestions, hasLocationSearch } from '../utils/search';
 
 // 联想词条：标题 + 作者/年份，自然换行展示
@@ -27,7 +28,7 @@ function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
 
 export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { addLog, updateLog } = useContext(LogContext); 
+  const { logData, addLog, updateLog } = useContext(LogContext);
   
   const [editId, setEditId] = useState(null); 
   const [baseType, setBaseType] = useState('ticket'); 
@@ -51,6 +52,7 @@ export default function AddScreen({ navigation, route }) {
   const [searchResults, setSearchResults] = useState([]); // [{ title, meta, artwork }]
   const [isSearching, setIsSearching] = useState(false);
   const [coverUrl, setCoverUrl] = useState(null); // 检索命中后记录的网络封面
+  const [coverRatio, setCoverRatio] = useState(null); // 网络封面的宽高比（列表/详情按比例显示）
   const [locationCoords, setLocationCoords] = useState(null); // 地点联想命中的 "lng,lat"
 
   const skipNextSearch = useRef(false);
@@ -60,7 +62,7 @@ export default function AddScreen({ navigation, route }) {
     setRating(0); setComment(''); setTicketOrigin(''); setTicketDest(''); setTicketNo('');
     setYear(''); setMonth(''); setDay(''); setHour(''); setMinute('');
     setSelectedImages([]); setSearchQuery(''); setShowSearchAuto(false);
-    setSearchResults([]); setCoverUrl(null); setLocationCoords(null);
+    setSearchResults([]); setCoverUrl(null); setCoverRatio(null); setLocationCoords(null);
   };
 
   // 手动切换大类：切默认子类型并完全重置表单（不能用 effect 监听 baseType 来做，
@@ -80,6 +82,7 @@ export default function AddScreen({ navigation, route }) {
       setSubType(item.subType);
       setRating(item.rating || 0);
       setCoverUrl(item.coverUrl || null);
+      setCoverRatio(item.coverRatio || null);
       setComment(item.baseType !== 'ticket' ? item.subtitle || '' : '');
       // 保存时缓存里的临时拷贝已被清理，编辑时重新从相册解析原始路径用于预览
       Promise.all((item.localImages || []).map(async (e) => {
@@ -166,33 +169,43 @@ export default function AddScreen({ navigation, route }) {
     };
   }, [searchQuery, baseType, subType]);
 
-  // 打开相册直读选图器：只记录 assetId，全程零复制
-  const openMediaPicker = () => {
-    navigation.navigate('MediaPicker', {
-      selected: selectedImages,
-      returnTo: route.name === 'Edit' ? 'Edit' : 'tab',
-    });
+  // 相册选图器（全屏 Modal）：打开即选，不经过导航，表单状态不会丢失
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const openMediaPicker = () => setPickerVisible(true);
+
+  // 已被其它记录占用的相册资产：选图器里标记"已添加"且不可再选（编辑当前记录时排除自身）
+  const usedAssetIds = useMemo(() => {
+    const used = new Set();
+    logData.forEach(log => (log.localImages || []).forEach(e => {
+      const id = typeof e === 'string' ? null : e?.assetId;
+      if (id && !(editId && log.id === editId)) used.add(id);
+    }));
+    return [...used];
+  }, [logData, editId]);
+  const handlePicked = (picked) => {
+    if (Array.isArray(picked) && picked.length > 0) {
+      setSelectedImages(prev => {
+        const existing = new Set(prev.map(e => e?.assetId).filter(Boolean));
+        return [...prev, ...picked.filter(p => !p.assetId || !existing.has(p.assetId))];
+      });
+      Promise.all(picked.map(async (p) => ({ ...p, uri: await resolveMediaUri(p) }))).then(resolved => {
+        setSelectedImages(prev => prev.map(e => {
+          const hit = e?.assetId && resolved.find(r => r.assetId === e.assetId);
+          return hit || e;
+        }));
+      });
+    }
   };
 
-  // 选图器返回：合并所选（按 assetId 去重），并解析出相册原始路径供预览
+  // 编辑页的返回键直接回主界面（与其余二级页一致的返回策略）
   useEffect(() => {
-    if (route.params?.picked) {
-      const picked = route.params.picked;
-      navigation.setParams({ picked: null });
-      if (Array.isArray(picked) && picked.length > 0) {
-        setSelectedImages(prev => {
-          const existing = new Set(prev.map(e => e?.assetId).filter(Boolean));
-          return [...prev, ...picked.filter(p => !p.assetId || !existing.has(p.assetId))];
-        });
-        Promise.all(picked.map(async (p) => ({ ...p, uri: await resolveMediaUri(p) }))).then(resolved => {
-          setSelectedImages(prev => prev.map(e => {
-            const hit = e?.assetId && resolved.find(r => r.assetId === e.assetId);
-            return hit || e;
-          }));
-        });
-      }
-    }
-  }, [route.params?.picked]);
+    if (route.name !== 'Edit') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      navigation.popToTop();
+      return true;
+    });
+    return () => sub.remove();
+  }, [route.name, navigation]);
 
   const handleStarPress = (s) => {
     if (rating === s - 0.5) setRating(s); 
@@ -206,7 +219,7 @@ export default function AddScreen({ navigation, route }) {
       return;
     }
 
-    // 豆瓣海报下载到本地持久目录，列表封面离线也能显示
+    // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示
     const savedCoverUrl = baseType === 'media' && coverUrl ? await downloadRemoteCover(coverUrl) : null;
 
     // 地点：联想选中的用真实坐标，手填的退回随机坐标兜底
@@ -232,6 +245,7 @@ export default function AddScreen({ navigation, route }) {
       rating: rating > 0 ? rating : null,
       localImages: selectedImages,
       coverUrl: savedCoverUrl,
+      coverRatio: savedCoverUrl ? coverRatio : null,
       coordinates,
     };
 
@@ -242,10 +256,9 @@ export default function AddScreen({ navigation, route }) {
     }
 
     clearForm();
-    // 从详情页进来的编辑：goBack 直接回详情（数据由全局状态自动刷新）；
-    // 从添加 Tab 进来的：回首页列表
+    // 统一返回策略：二级页保存/取消都直接回主界面
     if (route.name === 'Edit') {
-      navigation.goBack();
+      navigation.popToTop();
     } else {
       navigation.navigate('Main', { screen: 'Home' });
     }
@@ -302,7 +315,7 @@ export default function AddScreen({ navigation, route }) {
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.goBack(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity onPress={handleSave}><Text style={styles.saveText}>保存</Text></TouchableOpacity>
       </View>
@@ -402,7 +415,7 @@ export default function AddScreen({ navigation, route }) {
                   returnKeyType="done"
                   onChangeText={(t) => {
                     setSearchQuery(t);
-                    setCoverUrl(null); // 手动改动标题后，之前的网络封面不再匹配
+                    setCoverUrl(null); setCoverRatio(null); // 手动改动标题后，之前的网络封面不再匹配
                     if(t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
                   }}
                   onFocus={() => { if(searchQuery.trim().length > 0) setShowSearchAuto(true); }}
@@ -410,10 +423,6 @@ export default function AddScreen({ navigation, route }) {
                   onSubmitEditing={() => setShowSearchAuto(false)}
                 />
               </View>
-
-              {baseType === 'media' && subType === 'game' && (
-                <Text style={styles.autoCompleteHint}>游戏暂不支持网络检索，直接输入名称即可</Text>
-              )}
 
               {showSearchAuto && searchResults.length > 0 && (
                 <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
@@ -430,7 +439,7 @@ export default function AddScreen({ navigation, route }) {
                         onPress={() => {
                           skipNextSearch.current = true;
                           setSearchQuery(result.title);
-                          setCoverUrl(result.artwork);
+                          setCoverUrl(result.artwork); setCoverRatio(result.ratio || null);
                           setShowSearchAuto(false);
                         }}
                       >
@@ -443,7 +452,7 @@ export default function AddScreen({ navigation, route }) {
                           onPress={() => {
                             skipNextSearch.current = true;
                             setSearchQuery(result.title);
-                            setCoverUrl(result.artwork);
+                            setCoverUrl(result.artwork); setCoverRatio(result.ratio || null);
                             setShowSearchAuto(false);
                           }}
                         />
@@ -512,6 +521,15 @@ export default function AddScreen({ navigation, route }) {
           </View>
         </View>
       </ScrollView>
+
+      {/* 相册直读选图器（全屏 Modal） */}
+      <MediaPickerModal
+        visible={pickerVisible}
+        onClose={() => setPickerVisible(false)}
+        onConfirm={(picked) => { setPickerVisible(false); handlePicked(picked); }}
+        selectedEntries={selectedImages}
+        usedAssetIds={usedAssetIds}
+      />
     </KeyboardAvoidingView>
   );
 }

@@ -7,9 +7,12 @@ const DOUBAN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 };
 
+// 豆瓣海报是竖版 2:3（与 Steam library_600x900 一致）
+const DOUBAN_POSTER_RATIO = 2 / 3;
+
 const doubanHostBySubType = { movie: 'movie', tv: 'movie', anime: 'movie', book: 'book' };
 
-export const supportsSearch = (subType) => !!doubanHostBySubType[subType];
+export const supportsSearch = (subType) => subType === 'game' || !!doubanHostBySubType[subType];
 
 // 地点联想（高德"输入提示"）：OSM/Nominatim 等免密钥服务在大陆网络不可直连，
 // 需要在 lbs.amap.com 免费注册 → 创建应用 → Key（服务平台选"Web服务"），把 Key 填到下面即可启用
@@ -35,8 +38,65 @@ export async function fetchLocationSuggestions(query, signal) {
     }));
 }
 
-// 返回 [{ title, meta, artwork }]；AbortError 原样抛出让调用方忽略
+// 游戏源 1：Steam 商店搜索（免密钥、国区可直连、带封面）
+// 竖版 library_600x900 封面对新老游戏普遍有效，和百科竖图一致适合当封面
+async function fetchSteamSuggestions(query, signal) {
+  const res = await fetch(
+    `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(query)}&l=schinese&cc=CN`,
+    { signal }
+  );
+  const data = await res.json();
+  return (data.items || []).slice(0, 6).map(item => ({
+    title: item.name,
+    meta: 'Steam',
+    artwork: item.id
+      ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.id}/library_600x900.jpg`
+      : null,
+    ratio: 2 / 3,
+  }));
+}
+
+// 游戏源 2：百度百科开放接口（覆盖未上架 Steam 的主机/手机游戏等）
+// 返回词条摘要 + 配图（bkimg CDN 无防盗链）+ 图片宽高
+async function fetchBaikeSuggestion(query, signal) {
+  const res = await fetch(
+    `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(query)}&bk_length=600`,
+    { signal }
+  );
+  const data = await res.json();
+  if (!data.title) return [];
+  // 百科会返回最接近的词条，标题和搜索词完全无关的结果过滤掉
+  const q = query.trim().toLowerCase();
+  const t = String(data.title).toLowerCase();
+  if (!t.includes(q) && !q.includes(t)) return [];
+  const ratio = data.imageWidth && data.imageHeight ? data.imageWidth / data.imageHeight : null;
+  return [{
+    title: data.title,
+    meta: data.desc || '百度百科词条',
+    artwork: data.image || null,
+    ratio,
+  }];
+}
+
+async function fetchGameSuggestions(query, signal) {
+  const results = await Promise.allSettled([
+    fetchSteamSuggestions(query, signal),
+    fetchBaikeSuggestion(query, signal),
+  ]);
+  const merged = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+  const seen = new Set();
+  return merged.filter(({ title }) => {
+    const key = title.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// 返回 [{ title, meta, artwork, ratio }]；AbortError 原样抛出让调用方忽略
 export async function fetchSuggestions(query, subType, signal) {
+  if (subType === 'game') return fetchGameSuggestions(query, signal);
+
   const host = doubanHostBySubType[subType];
   if (!host) return [];
   const res = await fetch(`https://${host}.douban.com/j/subject_suggest?q=${encodeURIComponent(query)}`, {
@@ -51,6 +111,7 @@ export async function fetchSuggestions(query, subType, signal) {
         title: item.title,
         meta: [item.author_name, item.year].filter(Boolean).join(' · '),
         artwork: item.pic || null,
+        ratio: null,
       };
     }
     return {
@@ -60,6 +121,7 @@ export async function fetchSuggestions(query, subType, signal) {
         item.year,
       ].filter(Boolean).join(' · '),
       artwork: item.img ? item.img.replace('s_ratio_poster', 'l_ratio_poster') : null,
+      ratio: DOUBAN_POSTER_RATIO,
     };
   }).filter(r => r.title);
 }

@@ -18,13 +18,18 @@ export default function CoverIcon({ item, height = 56, style }) {
 
   const src = uri || item?.coverUrl;
   if (src) {
+    // 比例优先级：相册图记录的比例 → 网络封面记录的比例 → 豆瓣海报 2:3 → 方形
+    const ratio = entry?.ratio
+      || item?.coverRatio
+      || (item?.coverUrl?.includes('doubanio.com') ? DOUBAN_POSTER_RATIO : 1);
+    const width = Math.min(Math.max(height * ratio, height * 0.55), height * 2.2);
     return (
       <Image
         source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
         style={[styles.cover, { width: height, height }, style]}
         contentFit="contain"
         transition={150}
-        cachePolicy="memory-disk"
+        cachePolicy="memory"
       />
     );
   }

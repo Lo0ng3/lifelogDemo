@@ -28,7 +28,7 @@ function VideoThumb({ entry, style, contentFit = 'cover' }) {
     return () => { alive = false; };
   }, [entry]);
   if (!thumb) return null;
-  return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} />;
+  return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} cachePolicy="memory" />;
 }
 
 export default function DetailScreen({ route, navigation }) {
@@ -163,7 +163,7 @@ export default function DetailScreen({ route, navigation }) {
                       <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
                     </View>
                   ) : (
-                    <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" />
+                    <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
                   )}
                   {item.coverIndex === idx && (
                     <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>
@@ -210,7 +210,7 @@ export default function DetailScreen({ route, navigation }) {
                     </View>
                   )
                 ) : (
-                  <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '80%' }} contentFit="contain" />
+                  <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '80%' }} contentFit="contain" cachePolicy="memory" />
                 )}
               </View>
             )}

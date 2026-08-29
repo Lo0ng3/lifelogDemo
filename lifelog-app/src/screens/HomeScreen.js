@@ -1,7 +1,7 @@
-import React, { useState, useRef, useCallback, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Animated, TextInput, Alert
+  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -94,6 +94,30 @@ export default function HomeScreen({ navigation }) {
   const [monthFilters, setMonthFilters] = useState([]);
   const filterSheetRef = useRef(null);
   const snapPoints = useMemo(() => ['60%', '85%'], []);
+  const lastBackRef = useRef(0);
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  // 返回策略：主界面按一次返回提示"再按一次退出"，2 秒内再按退出；
+  // 筛选面板打开时先关面板；二级页面在上面时（首页未聚焦）不拦截
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!navigation.isFocused()) return false;
+      if (sheetOpen) {
+        filterSheetRef.current?.dismiss();
+        return true;
+      }
+      const now = Date.now();
+      if (now - lastBackRef.current < 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+      lastBackRef.current = now;
+      ToastAndroid.show('再按一次退出应用', ToastAndroid.SHORT);
+      return true;
+    });
+    return () => sub.remove();
+  }, [navigation, sheetOpen]);
 
   const renderBackdrop = useCallback(
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
@@ -285,6 +309,8 @@ export default function HomeScreen({ navigation }) {
         snapPoints={snapPoints}
         backdropComponent={renderBackdrop}
         animationConfigs={{ damping: 24, stiffness: 220, mass: 0.9 }}
+        onChange={(index) => setSheetOpen(index != null && index >= 0)}
+        onDismiss={() => setSheetOpen(false)}
       >
         <BottomSheetView style={styles.sheetHeader}>
           <BottomSheetTouchableOpacity onPress={() => {setActiveFilters([]); setYearFilters([]); setMonthFilters([]);}} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
