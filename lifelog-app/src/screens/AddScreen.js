@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useContext, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator, BackHandler
+  ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
+  BackHandler, ToastAndroid
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { 
   Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book, 
@@ -11,7 +14,6 @@ import {
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover } from '../utils/media';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
-import MediaPickerModal from '../components/MediaPickerModal';
 import { fetchSuggestions, fetchLocationSuggestions, hasLocationSearch } from '../utils/search';
 
 // 联想词条：标题 + 作者/年份，自然换行展示
@@ -169,31 +171,40 @@ export default function AddScreen({ navigation, route }) {
     };
   }, [searchQuery, baseType, subType]);
 
-  // 相册选图器（全屏 Modal）：打开即选，不经过导航，表单状态不会丢失
-  const [pickerVisible, setPickerVisible] = useState(false);
-  const openMediaPicker = () => setPickerVisible(true);
+  // 选择影像：调用系统原生选择器（Android 13+ 的照片选择器自带多选和拖动多选），
+  // 只记录相册资产的引用（assetId + 宽高比），原件始终留在相册里
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (result.canceled || !result.assets) return;
 
-  // 已被其它记录占用的相册资产：选图器里标记"已添加"且不可再选（编辑当前记录时排除自身）
-  const usedAssetIds = useMemo(() => {
-    const used = new Set();
+    // 防重复：跳过已被其它记录使用、以及本次已选过的资产
+    const usedElsewhere = new Set();
     logData.forEach(log => (log.localImages || []).forEach(e => {
       const id = typeof e === 'string' ? null : e?.assetId;
-      if (id && !(editId && log.id === editId)) used.add(id);
+      if (id && !(editId && log.id === editId)) usedElsewhere.add(id);
     }));
-    return [...used];
-  }, [logData, editId]);
-  const handlePicked = (picked) => {
-    if (Array.isArray(picked) && picked.length > 0) {
-      setSelectedImages(prev => {
-        const existing = new Set(prev.map(e => e?.assetId).filter(Boolean));
-        return [...prev, ...picked.filter(p => !p.assetId || !existing.has(p.assetId))];
+    const existing = new Set(selectedImages.map(e => e?.assetId).filter(Boolean));
+    const fresh = [];
+    let skipped = 0;
+    result.assets.forEach(a => {
+      if (a.assetId && (usedElsewhere.has(a.assetId) || existing.has(a.assetId))) {
+        skipped++;
+        return;
+      }
+      fresh.push({
+        uri: a.uri,
+        assetId: a.assetId || null,
+        isVideo: a.type === 'video',
+        ratio: a.width && a.height ? a.width / a.height : null,
       });
-      Promise.all(picked.map(async (p) => ({ ...p, uri: await resolveMediaUri(p) }))).then(resolved => {
-        setSelectedImages(prev => prev.map(e => {
-          const hit = e?.assetId && resolved.find(r => r.assetId === e.assetId);
-          return hit || e;
-        }));
-      });
+    });
+    setSelectedImages(prev => [...prev, ...fresh]);
+    if (skipped > 0 && Platform.OS === 'android') {
+      ToastAndroid.show(`已跳过 ${skipped} 张重复添加的影像`, ToastAndroid.SHORT);
     }
   };
 
@@ -253,6 +264,18 @@ export default function AddScreen({ navigation, route }) {
       updateLog(logDataToSave);
     } else {
       addLog(logDataToSave);
+    }
+
+    // 只存相册引用：确认该资产能从相册解析出原件后，删除系统选择器留在缓存里的临时拷贝；
+    // 解析失败（如权限问题）则保留拷贝兜底，显示不受影响
+    for (const entry of logDataToSave.localImages) {
+      if (!entry?.assetId || !entry.uri?.startsWith('file:')) continue;
+      try {
+        const resolved = await resolveMediaUri(entry);
+        if (resolved && resolved !== entry.uri) {
+          await FileSystem.deleteAsync(entry.uri, { idempotent: true });
+        }
+      } catch {}
     }
 
     clearForm();
@@ -513,7 +536,7 @@ export default function AddScreen({ navigation, route }) {
                 </View>
               ))}
               <View style={styles.imageGridItem}>
-                <TouchableOpacity style={styles.addImageBtn} onPress={openMediaPicker}>
+                <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
                   <ImagePlus size={24} color="#9CA3AF" />
                 </TouchableOpacity>
               </View>
@@ -522,14 +545,6 @@ export default function AddScreen({ navigation, route }) {
         </View>
       </ScrollView>
 
-      {/* 相册直读选图器（全屏 Modal） */}
-      <MediaPickerModal
-        visible={pickerVisible}
-        onClose={() => setPickerVisible(false)}
-        onConfirm={(picked) => { setPickerVisible(false); handlePicked(picked); }}
-        selectedEntries={selectedImages}
-        usedAssetIds={usedAssetIds}
-      />
     </KeyboardAvoidingView>
   );
 }

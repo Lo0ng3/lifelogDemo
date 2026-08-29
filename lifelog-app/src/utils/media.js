@@ -25,9 +25,10 @@ export const resolveMediaUri = async (entry) => {
   // 用户拒绝过权限就不反复弹窗，直接用备用 URI
   if (permissionDenied) return uri;
   try {
-    let perm = await MediaLibrary.getPermissionsAsync();
+    // 只申请照片和视频权限；默认请求会带上 AUDIO，部分环境的 AndroidManifest 未声明会直接抛错
+    let perm = await MediaLibrary.getPermissionsAsync(false, ['photo', 'video']);
     if (!perm.granted) {
-      perm = await MediaLibrary.requestPermissionsAsync();
+      perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
       if (!perm.granted) {
         permissionDenied = true;
         return uri;
