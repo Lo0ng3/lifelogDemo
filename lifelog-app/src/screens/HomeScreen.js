@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2
+  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2, RefreshCw, Upload, Download
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -16,12 +16,14 @@ import {
   BottomSheetView,
   BottomSheetBackdrop,
   BottomSheetScrollView,
-  BottomSheetTouchableOpacity
+  // 该库导出的手势版触摸组件名为 TouchableOpacity（无 BottomSheet 前缀），别名以免与 RN 的重名
+  TouchableOpacity as BottomSheetTouchableOpacity
 } from '@gorhom/bottom-sheet';
 
 import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
 import PressableScale from '../components/PressableScale';
+import { exportBackup, importBackup } from '../utils/backup';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -53,7 +55,93 @@ function SwipeRightActions({ drag, onEdit, onDelete }) {
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData, deleteLog } = useContext(LogContext);
+  const { logData, deleteLog, syncMedia, importLogs } = useContext(LogContext);
+
+  const [syncing, setSyncing] = useState(false);
+
+  // 相册同步：把断链的影像重新关联到相册原片（升级/换机/重装后的修复入口）
+  const handleSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    toggleSidebar(false);
+    if (Platform.OS === 'android') ToastAndroid.show('正在扫描相册，同步影像…', ToastAndroid.SHORT);
+    try {
+      const report = await syncMedia();
+      if (report.permissionDenied) {
+        Alert.alert('无法同步', '需要相册访问权限才能把记录和相册里的原片重新关联，请在系统设置中授权。');
+        return;
+      }
+      const broken = report.unmatched;
+      let message;
+      if (report.matched > 0) {
+        message = `已重新关联 ${report.matched} 个影像。`;
+        if (broken.length > 0) {
+          message += `\n\n仍有 ${broken.length} 条记录无法自动恢复（原片可能已不在相册）：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
+        }
+      } else if (broken.length > 0) {
+        message = `没有可自动恢复的影像。${broken.length} 条记录的媒体在相册中找不到对应文件，可能需要重新添加：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
+      } else {
+        message = '所有影像都能正常显示，无需修复。';
+      }
+      Alert.alert('同步完成', message);
+    } catch (_) {
+      Alert.alert('同步失败', '扫描相册时出现问题，请稍后再试。');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // 备份导出：把全部记录写成 JSON 文件到用户选的文件夹
+  const handleExportBackup = async () => {
+    toggleSidebar(false);
+    const result = await exportBackup(logData);
+    if (result.canceled) return;
+    if (result.ok) {
+      Alert.alert('导出成功', `已备份 ${result.count} 条记录：\n${result.name}\n\n备份文件可在换机后通过"导入备份"恢复。`);
+    } else {
+      Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
+    }
+  };
+
+  // 备份导入：选备份所在文件夹 → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
+  const doImport = async (logs, mode) => {
+    const report = await importLogs(logs, mode);
+    Alert.alert(
+      '导入完成',
+      mode === 'replace'
+        ? `已覆盖恢复，当前共 ${report.total} 条记录。`
+        : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`,
+      [
+        { text: '稍后', style: 'cancel' },
+        { text: '立即同步', onPress: handleSync },
+      ]
+    );
+  };
+
+  const handleImportBackup = async () => {
+    toggleSidebar(false);
+    const result = await importBackup();
+    if (result.canceled) return;
+    if (!result.ok) {
+      const message = result.notFound
+        ? '所选文件夹里没有找到备份文件（需要 lifelog-backup-*.json）。'
+        : result.invalid
+          ? '备份文件内容无法识别，可能已损坏或不是本应用导出的备份。'
+          : (result.error || '读取备份文件时出现问题，请稍后再试。');
+      Alert.alert('导入失败', message);
+      return;
+    }
+    const exportedAt = result.exportedAt ? `\n导出时间：${result.exportedAt.replace('T', ' ').slice(0, 16)}` : '';
+    Alert.alert(
+      '导入备份',
+      `找到备份：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace') },
+        { text: '合并去重', onPress: () => doImport(result.logs, 'merge') },
+      ]
+    );
+  };
   
   const [viewMode, setViewMode] = useState('list'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -254,6 +342,20 @@ export default function HomeScreen({ navigation }) {
           <View style={styles.statsRow}>
             <View style={styles.statItem}><Text style={styles.statNum}>{logData.length}</Text><Text style={styles.statLabel}>总印记</Text></View>
           </View>
+          <View style={styles.sidebarMenu}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
+              <RefreshCw size={18} color="#4B5563" style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册影像'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup}>
+              <Upload size={18} color="#4B5563" style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>导出备份</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleImportBackup}>
+              <Download size={18} color="#4B5563" style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>导入备份</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Animated.View>
 
@@ -403,7 +505,7 @@ const styles = StyleSheet.create({
   statNum: { fontSize: 20, fontWeight: 'bold', color: '#1C1C1E' },
   statLabel: { fontSize: 12, color: '#8E8E93', marginTop: 4 },
   sidebarMenu: { borderTopWidth: 1, borderTopColor: '#F2F2F7', paddingTop: 10 },
-  menuItem: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
   menuItemText: { fontSize: 16, color: '#1C1C1E' },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', backgroundColor: '#FFFFFF', zIndex: 10 },
   headerHitSlop: { padding: 10, margin: -10 },

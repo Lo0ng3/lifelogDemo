@@ -181,7 +181,7 @@ export default function AddScreen({ navigation, route }) {
     });
     if (result.canceled || !result.assets) return;
 
-    // 防重复：跳过已被其它记录使用、以及本次已选过的资产
+    // 防重复：同一张照片（相册资产）只允许被添加一次
     const usedElsewhere = new Set();
     logData.forEach(log => (log.localImages || []).forEach(e => {
       const id = typeof e === 'string' ? null : e?.assetId;
@@ -200,6 +200,11 @@ export default function AddScreen({ navigation, route }) {
         assetId: a.assetId || null,
         isVideo: a.type === 'video',
         ratio: a.width && a.height ? a.width / a.height : null,
+        // 同步功能的匹配指纹：相册原始文件名 + 大小，跨设备/重装后靠它重新关联
+        filename: a.fileName || null,
+        size: typeof a.fileSize === 'number' ? a.fileSize : null,
+        w: a.width || null,
+        h: a.height || null,
       });
     });
     setSelectedImages(prev => [...prev, ...fresh]);

@@ -5,6 +5,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
+import { Image as RNImage } from 'react-native';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -120,5 +121,74 @@ export const cleanTransientCaches = async () => {
     await Image.clearDiskCache();
   } catch {
     // 清理失败不影响使用
+  }
+};
+
+// 读取迁移后文件的指纹（大小 + 图片尺寸），供相册同步时匹配用；
+// 视频拿不到尺寸就只记大小，同步时按大小兜底匹配
+const collectMeta = (uri, video) =>
+  new Promise((resolve) => {
+    (async () => {
+      const meta = {};
+      try {
+        const stat = await FileSystem.getInfoAsync(uri);
+        if (stat.exists && typeof stat.size === 'number' && stat.size >= 0) meta.size = stat.size;
+      } catch {}
+      if (!video) {
+        try {
+          RNImage.getSize(uri, (w, h) => {
+            if (w && h) { meta.w = w; meta.h = h; meta.ratio = w / h; }
+            resolve(meta);
+          }, () => resolve(meta));
+        } catch { resolve(meta); }
+      } else {
+        resolve(meta);
+      }
+    })();
+  });
+
+// 旧记录迁移：早期版本把系统选择器复制进缓存目录的媒体拷贝直接存进了记录里，
+// 而启动清理会删掉整个缓存目录，导致升级后老记录的图/视频全部失效。
+// 这里在清理之前把仍被记录引用的缓存文件复制到持久目录，并改写记录中的 URI；
+// 迁移出的条目统一为对象形态，并带上大小/尺寸指纹供同步功能匹配。
+const LEGACY_CACHE_PREFIXES = [
+  `${FileSystem.cacheDirectory}ImagePicker/`,
+  `${FileSystem.cacheDirectory}VideoThumbnails/`,
+];
+
+export const migrateLegacyMedia = async (logs) => {
+  try {
+    const dir = `${FileSystem.documentDirectory}media`;
+    let changed = false;
+    const next = await Promise.all((logs || []).map(async (log) => {
+      if (!Array.isArray(log.localImages) || log.localImages.length === 0) return log;
+      let logChanged = false;
+      const entries = await Promise.all(log.localImages.map(async (raw) => {
+        const entry = typeof raw === 'string' ? { uri: raw } : raw;
+        const uri = entry?.uri;
+        if (!uri || !uri.startsWith('file://') || !LEGACY_CACHE_PREFIXES.some(p => uri.startsWith(p))) return raw;
+        const info = await FileSystem.getInfoAsync(uri);
+        if (!info.exists) return raw;
+        try {
+          if (!(await FileSystem.getInfoAsync(dir)).exists) {
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          }
+          const ext = (uri.split('?')[0].match(/\.(jpe?g|png|webp|gif|heic|mp4|mov|m4v|3gp)$/i) || [])[1] || 'jpg';
+          const dest = `${dir}/legacy_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+          const { uri: newUri } = await FileSystem.copyAsync({ from: uri, to: dest });
+          const meta = await collectMeta(newUri, isVideoEntry(entry));
+          logChanged = true;
+          return { ...entry, uri: newUri, ...meta };
+        } catch {
+          return raw;
+        }
+      }));
+      if (!logChanged) return log;
+      changed = true;
+      return { ...log, localImages: entries };
+    }));
+    return { logs: changed ? next : logs, changed };
+  } catch {
+    return { logs, changed: false };
   }
 };
