@@ -13,10 +13,15 @@ export const normalizeMediaEntry = (entry) =>
 
 export const mediaUri = (entry) => normalizeMediaEntry(entry)?.uri;
 
-// assetId -> 原始文件路径 的内存缓存，避免每次渲染都查询相册
+// 相册里存的是引用时，显示端把 assetId 解析成原始路径；解析不到才回退到条目自带的 uri。
+// 条目里的备用 uri 可能是早已删除的缓存副本（死路径），所以解析失败时不缓存结果，下次再试。
 const resolvedCache = new Map();
 
 let permissionDenied = false;
+
+// expo-media-library 在"仅允许访问部分照片"时 granted 为 false 但 accessPrivileges 是 limited，
+// 这种状态下已选中的照片仍能正常查询，当作有权限处理，避免显示端一直回退到死路径
+export const hasGalleryAccess = (perm) => !!perm && (perm.granted || perm.accessPrivileges === 'limited');
 
 export const resolveMediaUri = async (entry) => {
   const { uri, assetId } = normalizeMediaEntry(entry) || {};
@@ -28,19 +33,23 @@ export const resolveMediaUri = async (entry) => {
   try {
     // 只申请照片和视频权限；默认请求会带上 AUDIO，部分环境的 AndroidManifest 未声明会直接抛错
     let perm = await MediaLibrary.getPermissionsAsync(false, ['photo', 'video']);
-    if (!perm.granted) {
+    if (!hasGalleryAccess(perm)) {
       perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
-      if (!perm.granted) {
+      if (!hasGalleryAccess(perm)) {
         permissionDenied = true;
         return uri;
       }
     }
     const info = await MediaLibrary.getAssetInfoAsync(assetId);
-    const localUri = info?.localUri || uri;
-    resolvedCache.set(assetId, localUri);
-    return localUri;
-  } catch {
+    // 拿不到 localUri（如云端照片未下载到本机）时不缓存，等下次有机会再解析
+    if (info?.localUri) {
+      resolvedCache.set(assetId, info.localUri);
+      return info.localUri;
+    }
+    return uri;
+  } catch (e) {
     // 资产可能已被删除或平台不支持，回退到保存时的 URI
+    console.warn('[media] 解析相册媒体失败，回退备用路径', assetId, e?.message || e);
     return uri;
   }
 };
@@ -48,15 +57,47 @@ export const resolveMediaUri = async (entry) => {
 // assetId -> 封面帧 的内存缓存（视频九宫格缩略图用，避免挂载真实播放器）
 const thumbCache = new Map();
 
+// 简易字符串哈希：给磁盘缓存的封面帧文件命名用
+const hashKey = (s) => {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36) + '_' + s.length.toString(36);
+};
+
 export const getVideoThumbnail = async (entry) => {
   const { uri, assetId } = normalizeMediaEntry(entry) || {};
   if (!uri) return null;
   const cacheKey = assetId || uri;
   if (thumbCache.has(cacheKey)) return thumbCache.get(cacheKey);
+
+  // 封面帧落盘缓存：生成要现场解码视频，很慢；落盘后重开 App 秒出
   try {
-    const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(uri, { time: 1000 });
-    thumbCache.set(cacheKey, thumbUri);
-    return thumbUri;
+    const dir = `${FileSystem.documentDirectory}videoThumbs`;
+    const dest = `${dir}/${hashKey(cacheKey)}.jpg`;
+    const info = await FileSystem.getInfoAsync(dest);
+    if (info.exists) {
+      thumbCache.set(cacheKey, dest);
+      return dest;
+    }
+  } catch {}
+
+  try {
+    // quality 压低：默认按视频原始分辨率出高质量 JPEG，4K 视频一张能到几 MB，
+    // 封面帧只用于小格子展示，低质量足够且落盘体积小一个数量级
+    const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(uri, { time: 1000, quality: 0.3 });
+    try {
+      const dir = `${FileSystem.documentDirectory}videoThumbs`;
+      if (!(await FileSystem.getInfoAsync(dir)).exists) {
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      }
+      const dest = `${dir}/${hashKey(cacheKey)}.jpg`;
+      await FileSystem.copyAsync({ from: thumbUri, to: dest });
+      thumbCache.set(cacheKey, dest);
+      return dest;
+    } catch {
+      thumbCache.set(cacheKey, thumbUri);
+      return thumbUri;
+    }
   } catch {
     thumbCache.set(cacheKey, null);
     return null;
@@ -104,6 +145,62 @@ export const remoteImageSource = (url) => {
     : { uri: url };
 };
 
+// 统计一个目录的大小（字节）；目录不存在或出错返回 0
+const dirSizeAsync = async (dir) => {
+  try {
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists) return 0;
+    const files = await FileSystem.readDirectoryAsync(dir);
+    let total = 0;
+    for (const f of files) {
+      try {
+        const fi = await FileSystem.getInfoAsync(`${dir}/${f}`);
+        if (fi.exists && typeof fi.size === 'number') total += fi.size;
+      } catch {}
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+};
+
+// 可再生缓存的总闸：封面帧/实况提取缓存超过上限就整体清掉，下次用时自动重建。
+// 启动时调用，防止长期使用后缓存无限膨胀
+export const enforceCacheCaps = async ({ thumbCapMB = 30, motionCapMB = 50 } = {}) => {
+  try {
+    const tDir = `${FileSystem.documentDirectory}videoThumbs`;
+    const mDir = `${FileSystem.documentDirectory}motionVideos`;
+    if ((await dirSizeAsync(tDir)) > thumbCapMB * 1024 * 1024) {
+      await FileSystem.deleteAsync(tDir, { idempotent: true });
+    }
+    if ((await dirSizeAsync(mDir)) > motionCapMB * 1024 * 1024) {
+      await FileSystem.deleteAsync(mDir, { idempotent: true });
+    }
+  } catch {}
+};
+
+// 手动清理所有可再生缓存（封面帧、实况提取、选图器临时拷贝、图片浏览缓存），返回释放的字节数
+export const cleanupMediaCaches = async () => {
+  let freed = 0;
+  const dirs = [
+    `${FileSystem.documentDirectory}videoThumbs`,
+    `${FileSystem.documentDirectory}motionVideos`,
+    `${FileSystem.cacheDirectory}ImagePicker`,
+    `${FileSystem.cacheDirectory}VideoThumbnails`,
+  ];
+  for (const dir of dirs) {
+    try {
+      freed += await dirSizeAsync(dir);
+      await FileSystem.deleteAsync(dir, { idempotent: true });
+    } catch {}
+  }
+  thumbCache.clear();
+  try {
+    await Image.clearDiskCache();
+  } catch {}
+  return freed;
+};
+
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损
 // - ImagePicker：旧版系统选择器留在缓存里的媒体拷贝（存储膨胀的历史遗留）
 // - VideoThumbnails：视频封面帧（每次启动会重新生成，不清会一直累积）
@@ -149,12 +246,21 @@ const collectMeta = (uri, video) =>
 
 // 旧记录迁移：早期版本把系统选择器复制进缓存目录的媒体拷贝直接存进了记录里，
 // 而启动清理会删掉整个缓存目录，导致升级后老记录的图/视频全部失效。
-// 这里在清理之前把仍被记录引用的缓存文件复制到持久目录，并改写记录中的 URI；
-// 迁移出的条目统一为对象形态，并带上大小/尺寸指纹供同步功能匹配。
+// 这里在清理之前把仍被记录引用、且没有相册引用可用的缓存文件复制到持久目录（最后兜底），
+// 并改写记录中的 URI；迁移出的条目统一为对象形态，并带上大小/尺寸指纹供同步功能匹配。
+// 带相册引用（assetId）的条目不复制——那是纯引用，副本留着只占空间。
 const LEGACY_CACHE_PREFIXES = [
   `${FileSystem.cacheDirectory}ImagePicker/`,
   `${FileSystem.cacheDirectory}VideoThumbnails/`,
 ];
+
+// 应用私有的媒体副本所在目录：选图器缓存 + 旧数据迁移出的持久副本。
+// 只有这些路径里的文件在重链到相册后可以放心删除（相册/用户文件绝不动）
+export const isAppOwnedMediaPath = (uri) =>
+  !!uri && uri.startsWith('file://') && (
+    LEGACY_CACHE_PREFIXES.some(p => uri.startsWith(p)) ||
+    uri.startsWith(`${FileSystem.documentDirectory}media/`)
+  );
 
 export const migrateLegacyMedia = async (logs) => {
   try {
@@ -167,6 +273,9 @@ export const migrateLegacyMedia = async (logs) => {
         const entry = typeof raw === 'string' ? { uri: raw } : raw;
         const uri = entry?.uri;
         if (!uri || !uri.startsWith('file://') || !LEGACY_CACHE_PREFIXES.some(p => uri.startsWith(p))) return raw;
+        // 已带相册引用的条目不复制：显示时按 assetId 实时解析原件；
+        // 缓存副本删掉后若解析失败，同步功能也能把备用路径重新指回相册原片
+        if (entry.assetId) return raw;
         const info = await FileSystem.getInfoAsync(uri);
         if (!info.exists) return raw;
         try {

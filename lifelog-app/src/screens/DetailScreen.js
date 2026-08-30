@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Modal, Alert
+  Dimensions, Modal, Alert, ActivityIndicator
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +16,7 @@ import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
 import { getIconConfig } from '../utils/icons';
 import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource } from '../utils/media';
+import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -29,6 +30,75 @@ function VideoThumb({ entry, style, contentFit = 'cover' }) {
   }, [entry]);
   if (!thumb) return null;
   return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} cachePolicy="memory" />;
+}
+
+// 实况徽标：异步检测动态照片（读文件头 XMP，会话内缓存），是实况才显示
+function LiveGridBadge({ entry }) {
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getLivePhotoInfo(entry).then(i => { if (alive) setLive(!!i?.live); });
+    return () => { alive = false; };
+  }, [entry]);
+  if (!live) return null;
+  return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
+}
+
+// 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放（解析失败停留在静帧）
+function LivePhotoPage({ entry }) {
+  const [info, setInfo] = useState(null);
+  const [playingUri, setPlayingUri] = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setPlayingUri(null);
+    getLivePhotoInfo(entry).then(i => { if (alive) setInfo(i); });
+    return () => { alive = false; };
+  }, [entry]);
+  const isLive = !!info?.live;
+  const handlePlay = async () => {
+    if (loading || playingUri) return;
+    setLoading(true);
+    try {
+      const uri = await extractMotionVideo(entry, info);
+      if (uri) setPlayingUri(uri);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
+      {playingUri ? (
+        <Video
+          source={{ uri: playingUri }}
+          style={{ width: '100%', height: '100%' }}
+          useNativeControls
+          resizeMode={ResizeMode.CONTAIN}
+          shouldPlay
+        />
+      ) : (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={isLive ? handlePlay : undefined}
+          style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="memory" />
+          {isLive && (
+            <View style={styles.livePlayBadge}>
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <>
+                  <Text style={styles.livePlayText}>实况</Text>
+                  <PlayCircle size={16} color="#FFF" />
+                </>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+      )}
+    </View>
+  );
 }
 
 export default function DetailScreen({ route, navigation }) {
@@ -163,7 +233,10 @@ export default function DetailScreen({ route, navigation }) {
                       <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
                     </View>
                   ) : (
-                    <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
+                    <>
+                      <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
+                      <LiveGridBadge entry={entry} />
+                    </>
                   )}
                   {item.coverIndex === idx && (
                     <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>
@@ -196,21 +269,26 @@ export default function DetailScreen({ route, navigation }) {
               <View style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, justifyContent: 'center' }}>
                 {isVideoEntry(entry) ? (
                   index === currentViewIndex ? (
-                    // 只有滑到当前页才真正挂载播放器，划走立即卸载，避免多个视频同时解码
-                    <Video
-                      source={{ uri: entry.uri }}
-                      style={{ width: '100%', height: '80%' }}
-                      useNativeControls
-                      resizeMode={ResizeMode.CONTAIN}
-                      shouldPlay
-                    />
+                    // 只有滑到当前页才真正挂载播放器，划走立即卸载，避免多个视频同时解码；
+                    // 播放器底下垫一层封面帧，首帧解码完成前不会黑屏闪烁
+                    <View style={{ width: '100%', height: '80%' }}>
+                      <VideoThumb entry={entry} style={StyleSheet.absoluteFill} contentFit="contain" />
+                      <Video
+                        source={{ uri: entry.uri }}
+                        style={{ width: '100%', height: '100%' }}
+                        useNativeControls
+                        resizeMode={ResizeMode.CONTAIN}
+                        shouldPlay
+                        onError={(e) => console.warn('[video] 播放失败', entry.uri, e)}
+                      />
+                    </View>
                   ) : (
                     <View style={{ width: '100%', height: '80%', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
                       <VideoThumb entry={entry} style={{ width: '100%', height: '100%' }} contentFit="contain" />
                     </View>
                   )
                 ) : (
-                  <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '80%' }} contentFit="contain" cachePolicy="memory" />
+                  <LivePhotoPage entry={entry} />
                 )}
               </View>
             )}
@@ -242,6 +320,10 @@ const styles = StyleSheet.create({
   reviewText: { fontSize: 16, color: '#374151', lineHeight: 24 },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
+  liveBadge: { position: 'absolute', left: 8, top: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  liveBadgeText: { color: '#FFF', fontSize: 10 },
+  livePlayBadge: { position: 'absolute', right: 16, bottom: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 },
+  livePlayText: { color: '#FFF', fontSize: 12, marginRight: 5 },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 8 },
   gridItem: { width: '33.33%', padding: 4 },

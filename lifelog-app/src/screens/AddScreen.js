@@ -4,14 +4,14 @@ import {
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
   BackHandler, ToastAndroid
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { 
-  Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book, 
-  Search, ImagePlus, X, Star, StarHalf, Check 
+import {
+  Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book,
+  Search, ImagePlus, X, Star, StarHalf, Check, PlayCircle
 } from 'lucide-react-native';
-import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover } from '../utils/media';
+import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
+import { relinkNewEntries } from '../utils/mediaSync';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchLocationSuggestions, hasLocationSearch } from '../utils/search';
@@ -24,6 +24,22 @@ function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
         <Text style={textStyle}>{title}</Text>
         {!!meta && <Text style={metaStyle}>{meta}</Text>}
       </TouchableOpacity>
+    </View>
+  );
+}
+
+// 视频条目的表单预览：Image 放不了视频，用封面帧（落盘缓存）+ 播放角标
+function VideoPreview({ entry }) {
+  const [thumb, setThumb] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    getVideoThumbnail(entry).then(t => { if (alive && t) setThumb(t); });
+    return () => { alive = false; };
+  }, [entry]);
+  return (
+    <View style={styles.imageGridImage}>
+      {thumb ? <Image source={{ uri: thumb }} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}
+      <View style={styles.playOverlay}><PlayCircle size={18} color="#FFF" /></View>
     </View>
   );
 }
@@ -171,46 +187,27 @@ export default function AddScreen({ navigation, route }) {
     };
   }, [searchQuery, baseType, subType]);
 
-  // 选择影像：调用系统原生选择器（Android 13+ 的照片选择器自带多选和拖动多选），
-  // 只记录相册资产的引用（assetId + 宽高比），原件始终留在相册里
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsMultipleSelection: true,
-      quality: 1,
+  // 选择影像：应用内相册直读选图器（MediaPicker），只记录相册资产引用（assetId），全程零复制。
+  // 用回调收结果 + goBack 返回，避免跨导航器跳转把本页草稿状态冲掉
+  const openMediaPicker = () => {
+    navigation.navigate('MediaPicker', {
+      selected: selectedImages,
+      onDone: (picked) => {
+        const usedElsewhere = new Set();
+        logData.forEach(log => {
+          if (editId && log.id === editId) return;
+          (log.localImages || []).forEach(e => { if (typeof e !== 'string' && e?.assetId) usedElsewhere.add(e.assetId); });
+        });
+        const existing = new Set(selectedImages.map(e => e?.assetId).filter(Boolean));
+        const list = Array.isArray(picked) ? picked : [];
+        const fresh = list.filter(p => p?.assetId && !existing.has(p.assetId) && !usedElsewhere.has(p.assetId));
+        const skipped = list.length - fresh.length;
+        if (skipped > 0 && Platform.OS === 'android') {
+          ToastAndroid.show(`已跳过 ${skipped} 个重复添加的影像`, ToastAndroid.SHORT);
+        }
+        if (fresh.length > 0) setSelectedImages(prev => [...prev, ...fresh]);
+      },
     });
-    if (result.canceled || !result.assets) return;
-
-    // 防重复：同一张照片（相册资产）只允许被添加一次
-    const usedElsewhere = new Set();
-    logData.forEach(log => (log.localImages || []).forEach(e => {
-      const id = typeof e === 'string' ? null : e?.assetId;
-      if (id && !(editId && log.id === editId)) usedElsewhere.add(id);
-    }));
-    const existing = new Set(selectedImages.map(e => e?.assetId).filter(Boolean));
-    const fresh = [];
-    let skipped = 0;
-    result.assets.forEach(a => {
-      if (a.assetId && (usedElsewhere.has(a.assetId) || existing.has(a.assetId))) {
-        skipped++;
-        return;
-      }
-      fresh.push({
-        uri: a.uri,
-        assetId: a.assetId || null,
-        isVideo: a.type === 'video',
-        ratio: a.width && a.height ? a.width / a.height : null,
-        // 同步功能的匹配指纹：相册原始文件名 + 大小，跨设备/重装后靠它重新关联
-        filename: a.fileName || null,
-        size: typeof a.fileSize === 'number' ? a.fileSize : null,
-        w: a.width || null,
-        h: a.height || null,
-      });
-    });
-    setSelectedImages(prev => [...prev, ...fresh]);
-    if (skipped > 0 && Platform.OS === 'android') {
-      ToastAndroid.show(`已跳过 ${skipped} 张重复添加的影像`, ToastAndroid.SHORT);
-    }
   };
 
   // 编辑页的返回键直接回主界面（与其余二级页一致的返回策略）
@@ -238,6 +235,20 @@ export default function AddScreen({ navigation, route }) {
     // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示
     const savedCoverUrl = baseType === 'media' && coverUrl ? await downloadRemoteCover(coverUrl) : null;
 
+    // 只有存在本地副本（旧数据/系统选择器时代）才需要重链；
+    // 应用内选图器产物是纯相册引用，保存零扫描零等待
+    const hasCopies = selectedImages.some(e => isAppOwnedMediaPath(mediaUri(e)));
+    if (hasCopies && Platform.OS === 'android') {
+      ToastAndroid.show('正在关联相册影像…', ToastAndroid.LONG);
+    }
+    const relink = await relinkNewEntries(selectedImages);
+    if (relink.keptCount > 0 && Platform.OS === 'android') {
+      ToastAndroid.show(
+        `${relink.keptCount} 个影像将以副本保存（${relink.reason || '未能关联到相册原片'}），可在"同步相册影像"中重试`,
+        ToastAndroid.LONG
+      );
+    }
+
     // 地点：联想选中的用真实坐标，手填的退回随机坐标兜底
     let coordinates = null;
     if (baseType === 'location') {
@@ -254,12 +265,12 @@ export default function AddScreen({ navigation, route }) {
       baseType,
       subType,
       title: baseType === 'ticket' ? `${ticketOrigin} → ${ticketDest}` : searchQuery || '未命名记录',
-      subtitle: baseType === 'ticket' ? ticketNo : comment, 
-      date: baseType === 'ticket' 
+      subtitle: baseType === 'ticket' ? ticketNo : comment,
+      date: baseType === 'ticket'
         ? `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')} ${hour ? hour.padStart(2,'0') : '00'}:${minute ? minute.padStart(2,'0') : '00'}`
         : `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`,
       rating: rating > 0 ? rating : null,
-      localImages: selectedImages,
+      localImages: relink.entries,
       coverUrl: savedCoverUrl,
       coverRatio: savedCoverUrl ? coverRatio : null,
       coordinates,
@@ -271,15 +282,10 @@ export default function AddScreen({ navigation, route }) {
       addLog(logDataToSave);
     }
 
-    // 只存相册引用：确认该资产能从相册解析出原件后，删除系统选择器留在缓存里的临时拷贝；
-    // 解析失败（如权限问题）则保留拷贝兜底，显示不受影响
-    for (const entry of logDataToSave.localImages) {
-      if (!entry?.assetId || !entry.uri?.startsWith('file:')) continue;
+    // 重链成功的条目已指向相册原片，选图器留在缓存里的临时拷贝直接删掉
+    for (const uri of relink.replacedUris) {
       try {
-        const resolved = await resolveMediaUri(entry);
-        if (resolved && resolved !== entry.uri) {
-          await FileSystem.deleteAsync(entry.uri, { idempotent: true });
-        }
+        await FileSystem.deleteAsync(uri, { idempotent: true });
       } catch {}
     }
 
@@ -534,14 +540,18 @@ export default function AddScreen({ navigation, route }) {
             <View style={styles.imageGrid}>
               {selectedImages.map((entry, idx) => (
                 <View key={idx} style={styles.imageGridItem}>
-                  <Image source={{ uri: mediaUri(entry) }} style={styles.imageGridImage} />
+                  {isVideoEntry(entry) ? (
+                    <VideoPreview entry={entry} />
+                  ) : (
+                    <Image source={{ uri: mediaUri(entry) }} style={styles.imageGridImage} />
+                  )}
                   <TouchableOpacity style={styles.removeImageBtn} onPress={() => { const n = [...selectedImages]; n.splice(idx,1); setSelectedImages(n); }}>
                     <X size={12} color="#FFF" />
                   </TouchableOpacity>
                 </View>
               ))}
               <View style={styles.imageGridItem}>
-                <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
+                <TouchableOpacity style={styles.addImageBtn} onPress={openMediaPicker}>
                   <ImagePlus size={24} color="#9CA3AF" />
                 </TouchableOpacity>
               </View>
@@ -597,7 +607,8 @@ const styles = StyleSheet.create({
   commentInput: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, fontSize: 15, height: 100, color: '#1C1C1E', borderWidth: 1, borderColor: '#E5E7EB' },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
   imageGridItem: { width: '33.33%', padding: 4 },
-  imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10 },
+  imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#E5E5EA', overflow: 'hidden' },
+  playOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   addImageBtn: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
   removeImageBtn: { position: 'absolute', top: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }
 });

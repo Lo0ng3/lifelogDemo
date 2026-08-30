@@ -1,7 +1,6 @@
 // 备份导出/导入：把全部记录写成 JSON 文件备份，或从备份文件恢复/迁入。
-// 使用 Android 的 SAF（Storage Access Framework）文件夹选择器，不依赖额外原生模块：
-// - 导出：用户选一个文件夹，写入 lifelog-backup-<时间戳>.json
-// - 导入：用户选备份所在的文件夹，自动扫描其中的 lifelog-backup-*.json 并取最新一份
+// - 导出：走 SAF 文件夹选择器，用户选一个文件夹，写入 lifelog-backup-<时间戳>.json
+// - 导入：系统文件选择器直接挑一份备份 JSON，所见即所得，不依赖备份放在哪个文件夹
 // 备份里的媒体条目带着相册指纹（文件名/大小/尺寸），换机导入后跑一次"同步相册影像"即可重新关联。
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -46,24 +45,24 @@ export const exportBackup = async (logData) => {
   }
 };
 
-// 读取用户选定文件夹里最新的备份文件，只解析不落库，返回给上层做覆盖/合并的确认
+// 文件选择器挑一份备份，只解析不落库，返回给上层做覆盖/合并的确认
 export const importBackup = async () => {
   try {
-    const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync();
-    if (!perms.granted) return { ok: false, canceled: true };
-
-    const entries = await StorageAccessFramework.readDirectoryAsync(perms.directoryUri);
-    const backups = entries
-      .map(uri => ({ uri, name: nameFromUri(uri) }))
-      .filter(({ name }) => name.startsWith(BACKUP_NAME_PREFIX) && name.endsWith('.json'))
-      .sort((a, b) => b.name.localeCompare(a.name)); // 文件名带时间戳，字典序即时间序
-
-    if (backups.length === 0) {
-      return { ok: false, notFound: true };
+    // 顶层 import 会在应用启动时加载原生模块，旧开发构建没有该模块会直接崩，
+    // 改为用到时才加载，缺失时给出明确提示而不是红屏
+    let DocumentPicker;
+    try {
+      DocumentPicker = require('expo-document-picker');
+    } catch {
+      return { ok: false, error: '当前安装的版本未包含文件选择模块，请使用最新打包的正式版。' };
     }
+    // 不按 MIME 过滤：部分机型的文件管理器会把 .json 标成 application/octet-stream，
+    // 过滤严了反而选不到备份文件，合法性交给内容校验
+    const picked = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: false });
+    if (picked.canceled || !picked.assets?.length) return { ok: false, canceled: true };
 
-    const latest = backups[0];
-    const content = await FileSystem.readAsStringAsync(latest.uri, { encoding: FileSystem.EncodingType.UTF8 });
+    const file = picked.assets[0];
+    const content = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.UTF8 });
     const payload = JSON.parse(content);
     const logs = Array.isArray(payload?.logs)
       ? payload.logs.filter(l => l && l.id != null && l.date)
@@ -74,9 +73,8 @@ export const importBackup = async () => {
       ok: true,
       logs,
       count: logs.length,
-      name: latest.name,
+      name: file.name || nameFromUri(file.uri),
       exportedAt: payload.exportedAt || null,
-      backupCount: backups.length, // 同文件夹里还有更早的备份时提示一下
     };
   } catch (e) {
     return { ok: false, canceled: false, error: e?.message || String(e) };

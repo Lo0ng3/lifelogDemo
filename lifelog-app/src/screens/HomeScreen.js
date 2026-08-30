@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2, RefreshCw, Upload, Download
+  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2, RefreshCw, Upload, Download, Eraser
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -24,6 +24,7 @@ import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
 import PressableScale from '../components/PressableScale';
 import { exportBackup, importBackup } from '../utils/backup';
+import { cleanupMediaCaches } from '../utils/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -66,15 +67,27 @@ export default function HomeScreen({ navigation }) {
     toggleSidebar(false);
     if (Platform.OS === 'android') ToastAndroid.show('正在扫描相册，同步影像…', ToastAndroid.SHORT);
     try {
-      const report = await syncMedia();
+      const report = await syncMedia((done, total) => {
+        // 记录多时整个过程可能要跑一阵子，定期刷一下进度避免看起来像卡死
+        if (Platform.OS === 'android' && total > 20 && done % 20 === 0 && done < total) {
+          ToastAndroid.show(`正在扫描相册，同步影像… ${done}/${total}`, ToastAndroid.SHORT);
+        }
+      });
       if (report.permissionDenied) {
-        Alert.alert('无法同步', '需要相册访问权限才能把记录和相册里的原片重新关联，请在系统设置中授权。');
+        const state = report.permState || {};
+        Alert.alert(
+          '无法同步',
+          `需要相册访问权限才能把记录和相册里的原片重新关联，请在系统设置中授权。\n（当前权限状态：granted=${state.granted}, accessPrivileges=${state.accessPrivileges}）`
+        );
         return;
       }
       const broken = report.unmatched;
       let message;
       if (report.matched > 0) {
         message = `已重新关联 ${report.matched} 个影像。`;
+        if (report.freedCopies > 0) {
+          message += `\n已清理 ${report.freedCopies} 个本地副本，改用相册原片（为应用释放了存储空间）。`;
+        }
         if (broken.length > 0) {
           message += `\n\n仍有 ${broken.length} 条记录无法自动恢复（原片可能已不在相册）：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
         }
@@ -84,8 +97,9 @@ export default function HomeScreen({ navigation }) {
         message = '所有影像都能正常显示，无需修复。';
       }
       Alert.alert('同步完成', message);
-    } catch (_) {
-      Alert.alert('同步失败', '扫描相册时出现问题，请稍后再试。');
+    } catch (e) {
+      console.error('同步相册失败', e);
+      Alert.alert('同步失败', `扫描相册时出现问题：${e?.message || e}`);
     } finally {
       setSyncing(false);
     }
@@ -103,7 +117,7 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // 备份导入：选备份所在文件夹 → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
+  // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
   const doImport = async (logs, mode) => {
     const report = await importLogs(logs, mode);
     Alert.alert(
@@ -123,18 +137,16 @@ export default function HomeScreen({ navigation }) {
     const result = await importBackup();
     if (result.canceled) return;
     if (!result.ok) {
-      const message = result.notFound
-        ? '所选文件夹里没有找到备份文件（需要 lifelog-backup-*.json）。'
-        : result.invalid
-          ? '备份文件内容无法识别，可能已损坏或不是本应用导出的备份。'
-          : (result.error || '读取备份文件时出现问题，请稍后再试。');
+      const message = result.invalid
+        ? '所选文件不是本应用导出的备份，或内容已损坏。'
+        : (result.error || '读取备份文件时出现问题，请稍后再试。');
       Alert.alert('导入失败', message);
       return;
     }
     const exportedAt = result.exportedAt ? `\n导出时间：${result.exportedAt.replace('T', ' ').slice(0, 16)}` : '';
     Alert.alert(
       '导入备份',
-      `找到备份：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
+      `备份文件：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
       [
         { text: '取消', style: 'cancel' },
         { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace') },
@@ -143,6 +155,18 @@ export default function HomeScreen({ navigation }) {
     );
   };
   
+  // 清理缓存：封面帧/实况提取/浏览缓存都是可再生内容，清掉立刻释放空间
+  const handleCleanCache = async () => {
+    toggleSidebar(false);
+    try {
+      const freed = await cleanupMediaCaches();
+      const mb = Math.round((freed / 1024 / 1024) * 10) / 10;
+      Alert.alert('清理完成', `已释放 ${mb} MB 缓存空间。封面帧等会在使用中自动重建。`);
+    } catch (e) {
+      Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
+    }
+  };
+
   const [viewMode, setViewMode] = useState('list'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const sidebarAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.5)).current;
@@ -354,6 +378,10 @@ export default function HomeScreen({ navigation }) {
             <TouchableOpacity style={styles.menuItem} onPress={handleImportBackup}>
               <Download size={18} color="#4B5563" style={{ marginRight: 10 }} />
               <Text style={styles.menuItemText}>导入备份</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache}>
+              <Eraser size={18} color="#4B5563" style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>清理缓存</Text>
             </TouchableOpacity>
           </View>
         </View>

@@ -8,6 +8,7 @@ import { Compass, PlusCircle } from 'lucide-react-native';
 import HomeScreen from '../screens/HomeScreen';
 import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
+import MediaPickerScreen from '../screens/MediaPickerScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -62,6 +63,8 @@ export default function AppNavigator() {
         <Stack.Screen name="Detail" component={DetailScreen} />
         {/* 编辑复用添加表单，作为独立栈页：保存/取消/返回都直接回主界面 */}
         <Stack.Screen name="Edit" component={AddScreen} />
+        {/* 相册直读选图器：应用内浏览相册，只记录 assetId 全程零复制 */}
+        <Stack.Screen name="MediaPicker" component={MediaPickerScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -3,8 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia } from '../utils/media';
-import { syncMediaFromGallery } from '../utils/mediaSync';
+import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps } from '../utils/media';
+import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
 export const LogContext = createContext();
 
@@ -48,6 +48,10 @@ export const LogProvider = ({ children }) => {
       console.error('加载数据失败', e);
     } finally {
       cleanTransientCaches();
+      // 封面帧/实况提取缓存超限则整体清理，防止长期使用缓存无限膨胀
+      enforceCacheCaps();
+      // 静默预热相册索引（不弹权限窗）：保存记录时把媒体重链成相册引用可以零等待
+      warmGalleryIndex();
     }
   };
 
@@ -120,8 +124,8 @@ export const LogProvider = ({ children }) => {
   };
 
   // 相册同步：扫描相册，把断链的媒体引用重新关联到原片（换机/重装/旧数据迁移后的修复入口）
-  const syncMedia = async () => {
-    const report = await syncMediaFromGallery(logData);
+  const syncMedia = async (onProgress) => {
+    const report = await syncMediaFromGallery(logData, onProgress);
     if (report.changed) {
       setLogData(report.logs);
       try {
@@ -130,6 +134,8 @@ export const LogProvider = ({ children }) => {
         console.error('保存数据失败', e);
       }
     }
+    // 同步完成后立刻补拉缺失的封面，不用等下次重启
+    backfillCovers(report.changed ? report.logs : logData);
     return report;
   };
 
@@ -157,6 +163,8 @@ export const LogProvider = ({ children }) => {
     } catch (e) {
       console.error('保存数据失败', e);
     }
+    // 导入完成后立刻补拉缺失的封面，不用等下次重启
+    backfillCovers(next);
     return { total: next.length, added, updated };
   };
 
