@@ -1,20 +1,30 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import React, { useState, useEffect, useContext, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
   BackHandler, ToastAndroid
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, Train, Bus, Ship, MapPin, Film, Tv, Ghost, Gamepad2, Book,
-  Search, ImagePlus, X, Star, StarHalf, Check, PlayCircle
+  Plane, MapPin, Film, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
 } from 'lucide-react-native';
+import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
-import { fetchSuggestions, fetchLocationSuggestions, hasLocationSearch } from '../utils/search';
+import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch } from '../utils/search';
+
+// 二级类型选择：第一级大类 → 第二级子类；地点无子类
+const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐' };
+const SUB_OPTIONS = {
+  ticket: [{ id: 'flight', label: '机票' }, { id: 'train', label: '火车票' }, { id: 'bus', label: '汽车票' }, { id: 'ship', label: '轮船' }],
+  media: [{ id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' }, { id: 'anime', label: '动漫' }, { id: 'game', label: '游戏' }, { id: 'book', label: '书籍' }],
+};
+const SUB_LABEL = { flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船', movie: '电影', tv: '剧集', anime: '动漫', game: '游戏', book: '书籍' };
+const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '班次' };
 
 // 联想词条：标题 + 作者/年份，自然换行展示
 function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
@@ -46,7 +56,7 @@ function VideoPreview({ entry }) {
 
 export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { logData, addLog, updateLog } = useContext(LogContext);
+  const { logData, addLog, updateLog, tdtKey } = useContext(LogContext);
   
   const [editId, setEditId] = useState(null); 
   const [baseType, setBaseType] = useState('ticket'); 
@@ -71,9 +81,29 @@ export default function AddScreen({ navigation, route }) {
   const [isSearching, setIsSearching] = useState(false);
   const [coverUrl, setCoverUrl] = useState(null); // 检索命中后记录的网络封面
   const [coverRatio, setCoverRatio] = useState(null); // 网络封面的宽高比（列表/详情按比例显示）
-  const [locationCoords, setLocationCoords] = useState(null); // 地点联想命中的 "lng,lat"
+  const [locationCoords, setLocationCoords] = useState(null); // 地点联想选中的坐标 {lng,lat}
+  const [originResults, setOriginResults] = useState([]);     // 旅票出发地联想
+  const [showOriginAuto, setShowOriginAuto] = useState(false);
+  const [originCoord, setOriginCoord] = useState(null);       // 出发地联想选中的坐标
+  const [destResults, setDestResults] = useState([]);         // 旅票目的地联想
+  const [showDestAuto, setShowDestAuto] = useState(false);
+  const [destCoord, setDestCoord] = useState(null);           // 目的地联想选中的坐标
+  const [photoCoord, setPhotoCoord] = useState(null);         // 首张带 GPS 照片的位置（地点坐标兜底）
 
   const skipNextSearch = useRef(false);
+  const skipOriginSearch = useRef(false);
+  const skipDestSearch = useRef(false);
+  // 联想只在输入框被点入（聚焦）后检索：进入编辑页、路过表单都不会自动弹出
+  const [originFocused, setOriginFocused] = useState(false);
+  const [destFocused, setDestFocused] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+
+  // 类型选择的底部弹层（二级：大类 → 子类）
+  const typeSheetRef = useRef(null);
+  const [sheetBase, setSheetBase] = useState('ticket'); // 弹层里正在浏览的大类
+  const renderTypeBackdrop = useCallback(
+    (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
+  );
 
   const clearForm = () => {
     setEditId(null);
@@ -81,15 +111,15 @@ export default function AddScreen({ navigation, route }) {
     setYear(''); setMonth(''); setDay(''); setHour(''); setMinute('');
     setSelectedImages([]); setSearchQuery(''); setShowSearchAuto(false);
     setSearchResults([]); setCoverUrl(null); setCoverRatio(null); setLocationCoords(null);
+    setOriginResults([]); setShowOriginAuto(false); setOriginCoord(null);
+    setDestResults([]); setShowDestAuto(false); setDestCoord(null);
+    setPhotoCoord(null);
   };
 
-  // 手动切换大类：切默认子类型并完全重置表单（不能用 effect 监听 baseType 来做，
-  // 否则编辑预填改 baseType 时会把刚填入的记录内容清掉）
-  const handleBaseTypeChange = (type) => {
-    if (type === baseType) return;
-    setBaseType(type);
-    setSubType(type === 'ticket' ? 'flight' : (type === 'location' ? 'location' : 'movie'));
-    clearForm();
+  // 二级选择的最终结果；切换大类不清空表单，日期/评论/影像等已填内容保留
+  const applyType = (base, sub) => {
+    setBaseType(base);
+    setSubType(sub);
   };
 
   useEffect(() => {
@@ -101,7 +131,7 @@ export default function AddScreen({ navigation, route }) {
       setRating(item.rating || 0);
       setCoverUrl(item.coverUrl || null);
       setCoverRatio(item.coverRatio || null);
-      setComment(item.baseType !== 'ticket' ? item.subtitle || '' : '');
+      setComment(item.baseType !== 'ticket' ? item.subtitle || '' : item.comment || '');
       // 保存时缓存里的临时拷贝已被清理，编辑时重新从相册解析原始路径用于预览
       Promise.all((item.localImages || []).map(async (e) => {
         const entry = normalizeMediaEntry(e);
@@ -113,12 +143,17 @@ export default function AddScreen({ navigation, route }) {
         setTicketOrigin(origin ? origin.trim() : '');
         setTicketDest(dest ? dest.trim() : '');
         setTicketNo(item.subtitle || '');
+        // 编辑时不自动弹联想；坐标从记录回填，保存时原样带回
+        skipOriginSearch.current = true;
+        skipDestSearch.current = true;
+        setOriginCoord(item.start && item.start.longitude != null ? { lng: item.start.longitude, lat: item.start.latitude } : null);
+        setDestCoord(item.end && item.end.longitude != null ? { lng: item.end.longitude, lat: item.end.latitude } : null);
       } else {
         skipNextSearch.current = true;
         setSearchQuery(item.title || '');
       }
       if (item.baseType === 'location' && item.coordinates) {
-        setLocationCoords(`${item.coordinates.longitude},${item.coordinates.latitude}`);
+        setLocationCoords({ lng: item.coordinates.longitude, lat: item.coordinates.latitude });
       }
 
       const [datePart, timePart] = item.date.split(' ');
@@ -137,6 +172,11 @@ export default function AddScreen({ navigation, route }) {
   useEffect(() => {
     if (skipNextSearch.current) {
       skipNextSearch.current = false;
+      return;
+    }
+    if (!searchFocused) {
+      setSearchResults([]);
+      setShowSearchAuto(false);
       return;
     }
     if (!searchQuery.trim()) {
@@ -158,7 +198,7 @@ export default function AddScreen({ navigation, route }) {
       try {
         let candidates;
         if (baseType === 'location') {
-          candidates = await fetchLocationSuggestions(searchQuery.trim(), controller.signal);
+          candidates = await fetchPlaceSuggestions(searchQuery.trim(), tdtKey, controller.signal);
         } else {
           candidates = await fetchSuggestions(searchQuery.trim(), subType, controller.signal);
           // 精确/前缀匹配优先排序，让候选更贴近用户想记的作品
@@ -175,7 +215,12 @@ export default function AddScreen({ navigation, route }) {
         }
         setSearchResults(candidates.slice(0, 6));
       } catch (error) {
-        if (error.name !== 'AbortError') setSearchResults([]);
+        if (error.name !== 'AbortError') {
+          setSearchResults([]);
+          if (baseType === 'location' && Platform.OS === 'android') {
+            ToastAndroid.show('地点联想失败：' + (error.message || error), ToastAndroid.SHORT);
+          }
+        }
       } finally {
         if (!controller.signal.aborted) setIsSearching(false);
       }
@@ -185,7 +230,58 @@ export default function AddScreen({ navigation, route }) {
       controller.abort();
       clearTimeout(delayDebounceFn);
     };
-  }, [searchQuery, baseType, subType]);
+  }, [searchQuery, baseType, subType, tdtKey, searchFocused]);
+
+  // 旅票出发地/目的地：天地图地名联想（isPrompt 的联想词无坐标，选中后拿它继续搜）
+  useEffect(() => {
+    if (baseType !== 'ticket') return;
+    if (skipOriginSearch.current) { skipOriginSearch.current = false; return; }
+    if (!originFocused) { setOriginResults([]); setShowOriginAuto(false); return; }
+    if (!ticketOrigin.trim()) { setOriginResults([]); setShowOriginAuto(false); return; }
+    const controller = new AbortController();
+    const t = setTimeout(() => {
+      fetchPlaceSuggestions(ticketOrigin, tdtKey, controller.signal)
+        .then(results => { setOriginResults(results); setShowOriginAuto(true); })
+        .catch(error => {
+          if (error?.name !== 'AbortError' && Platform.OS === 'android') {
+            ToastAndroid.show('出发地联想失败：' + (error.message || error), ToastAndroid.SHORT);
+          }
+        });
+    }, 300);
+    return () => { controller.abort(); clearTimeout(t); };
+  }, [ticketOrigin, baseType, tdtKey, originFocused]);
+
+  useEffect(() => {
+    if (baseType !== 'ticket') return;
+    if (skipDestSearch.current) { skipDestSearch.current = false; return; }
+    if (!destFocused) { setDestResults([]); setShowDestAuto(false); return; }
+    if (!ticketDest.trim()) { setDestResults([]); setShowDestAuto(false); return; }
+    const controller = new AbortController();
+    const t = setTimeout(() => {
+      fetchPlaceSuggestions(ticketDest, tdtKey, controller.signal)
+        .then(results => { setDestResults(results); setShowDestAuto(true); })
+        .catch(error => {
+          if (error?.name !== 'AbortError' && Platform.OS === 'android') {
+            ToastAndroid.show('目的地联想失败：' + (error.message || error), ToastAndroid.SHORT);
+          }
+        });
+    }, 300);
+    return () => { controller.abort(); clearTimeout(t); };
+  }, [ticketDest, baseType, tdtKey, destFocused]);
+
+  // 联想选中：普通结果记住坐标并收起（跳过自动重搜）；联想词没有坐标，换词后继续搜
+  const pickOrigin = (item) => {
+    setTicketOrigin(item.name);
+    setShowOriginAuto(false);
+    setOriginCoord(!item.isPrompt && item.lng != null ? { lng: item.lng, lat: item.lat } : null);
+    skipOriginSearch.current = !item.isPrompt;
+  };
+  const pickDest = (item) => {
+    setTicketDest(item.name);
+    setShowDestAuto(false);
+    setDestCoord(!item.isPrompt && item.lng != null ? { lng: item.lng, lat: item.lat } : null);
+    skipDestSearch.current = !item.isPrompt;
+  };
 
   // 选择影像：应用内相册直读选图器（MediaPicker），只记录相册资产引用（assetId），全程零复制。
   // 用回调收结果 + goBack 返回，避免跨导航器跳转把本页草稿状态冲掉
@@ -205,9 +301,28 @@ export default function AddScreen({ navigation, route }) {
         if (skipped > 0 && Platform.OS === 'android') {
           ToastAndroid.show(`已跳过 ${skipped} 个重复添加的影像`, ToastAndroid.SHORT);
         }
-        if (fresh.length > 0) setSelectedImages(prev => [...prev, ...fresh]);
+        if (fresh.length > 0) {
+          setSelectedImages(prev => [...prev, ...fresh]);
+          capturePhotoCoord(fresh);
+        }
       },
     });
+  };
+
+  // 从新选的照片里读第一张带 GPS 的位置，作为"地点"印记的坐标兜底（截图等无定位的照片会跳过）
+  const capturePhotoCoord = async (fresh) => {
+    try {
+      for (const entry of fresh) {
+        if (!entry?.assetId) continue;
+        const info = await MediaLibrary.getAssetInfoAsync(entry.assetId);
+        const loc = info?.location;
+        if (loc && loc.latitude != null && loc.longitude != null) {
+          setPhotoCoord({ longitude: loc.longitude, latitude: loc.latitude });
+          if (Platform.OS === 'android') ToastAndroid.show('已从照片读取位置', ToastAndroid.SHORT);
+          return;
+        }
+      }
+    } catch {}
   };
 
   // 编辑页的返回键直接回主界面（与其余二级页一致的返回策略）
@@ -224,6 +339,17 @@ export default function AddScreen({ navigation, route }) {
     if (rating === s - 0.5) setRating(s); 
     else if (rating === s) setRating(0); 
     else setRating(s - 0.5); 
+  };
+
+  // 出发地/目的地落库：联想选中的坐标优先，没选中则天地图地理编码兜底；名称始终保留
+  const resolvePlace = async (name, coord) => {
+    if (!name.trim()) return null;
+    let lng = coord ? coord.lng : null, lat = coord ? coord.lat : null;
+    if (lng == null && hasLocationSearch(tdtKey)) {
+      const g = await fetchPlaceGeocode(name, tdtKey).catch(() => null);
+      if (g) { lng = g.lng; lat = g.lat; }
+    }
+    return { name: name.trim(), longitude: lng, latitude: lat };
   };
 
   const handleSave = async () => {
@@ -249,15 +375,24 @@ export default function AddScreen({ navigation, route }) {
       );
     }
 
-    // 地点：联想选中的用真实坐标，手填的退回随机坐标兜底
+    // 旅票出发/到达：坐标来自联想选择，没选中则地理编码兜底（无 Key 时只存名称，地图上不标点）
+    let start = null, end = null;
+    if (baseType === 'ticket') {
+      start = await resolvePlace(ticketOrigin, originCoord);
+      end = await resolvePlace(ticketDest, destCoord);
+    }
+
+    // 地点坐标优先级：联想选中的 > 照片 GPS > 天地图地理编码兜底；都没有则不标点
     let coordinates = null;
     if (baseType === 'location') {
-      if (locationCoords) {
-        const [lng, lat] = locationCoords.split(',').map(Number);
-        coordinates = { latitude: lat, longitude: lng };
-      } else {
-        coordinates = { latitude: 39.90 + Math.random() * 0.1, longitude: 116.40 + Math.random() * 0.1 };
+      let lng = locationCoords ? locationCoords.lng : null;
+      let lat = locationCoords ? locationCoords.lat : null;
+      if (lng == null && photoCoord) { lng = photoCoord.longitude; lat = photoCoord.latitude; }
+      if (lng == null && hasLocationSearch(tdtKey)) {
+        const g = await fetchPlaceGeocode(searchQuery, tdtKey).catch(() => null);
+        if (g) { lng = g.lng; lat = g.lat; }
       }
+      if (lng != null && lat != null) coordinates = { latitude: lat, longitude: lng };
     }
 
     const logDataToSave = {
@@ -266,10 +401,14 @@ export default function AddScreen({ navigation, route }) {
       subType,
       title: baseType === 'ticket' ? `${ticketOrigin} → ${ticketDest}` : searchQuery || '未命名记录',
       subtitle: baseType === 'ticket' ? ticketNo : comment,
-      date: baseType === 'ticket'
-        ? `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')} ${hour ? hour.padStart(2,'0') : '00'}:${minute ? minute.padStart(2,'0') : '00'}`
-        : `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`,
+      // 旅票的 subtitle 被车次/航班号占用，评论单独存字段，否则保存时会丢掉
+      comment: baseType === 'ticket' && comment.trim() ? comment : null,
+      // 时间选填：填了才拼进日期，不填只存日期（不再出现 00:00 凑数时间）
+      date: `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`
+        + ((hour || minute) ? ` ${(hour || '00').padStart(2,'0')}:${(minute || '00').padStart(2,'0')}` : ''),
       rating: rating > 0 ? rating : null,
+      start,
+      end,
       localImages: relink.entries,
       coverUrl: savedCoverUrl,
       coverRatio: savedCoverUrl ? coverRatio : null,
@@ -299,7 +438,6 @@ export default function AddScreen({ navigation, route }) {
   };
 
   const renderRating = () => {
-    if (baseType === 'ticket') return null;
     return (
       <View style={styles.ratingSection}>
         <Text style={styles.inputLabel}>评分</Text>
@@ -319,33 +457,6 @@ export default function AddScreen({ navigation, route }) {
     );
   };
 
-  const renderSubTypes = () => {
-    let options = [];
-    if (baseType === 'ticket') {
-      options = [
-        { id: 'flight', label: '机票', Icon: Plane }, { id: 'train', label: '火车票', Icon: Train },
-        { id: 'bus', label: '汽车票', Icon: Bus }, { id: 'ship', label: '轮船', Icon: Ship }
-      ];
-    } else if (baseType === 'media') {
-      options = [
-        { id: 'movie', label: '电影', Icon: Film }, { id: 'tv', label: '剧集', Icon: Tv },
-        { id: 'anime', label: '动漫', Icon: Ghost }, { id: 'game', label: '游戏', Icon: Gamepad2 },
-        { id: 'book', label: '书籍', Icon: Book }
-      ];
-    } else { return null; }
-
-    return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.subTypeContainer}>
-        {options.map(opt => (
-          <TouchableOpacity key={opt.id} style={[styles.subTypeChip, subType === opt.id && styles.subTypeChipActive]} onPress={() => { setSubType(opt.id); clearForm(); }}>
-            <opt.Icon size={16} color={subType === opt.id ? '#007AFF' : '#6B7280'} />
-            <Text style={[styles.subTypeChipText, subType === opt.id && styles.subTypeChipTextActive]}>{opt.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-    );
-  };
-
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
@@ -355,24 +466,72 @@ export default function AddScreen({ navigation, route }) {
       </View>
 
       <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-        <View style={styles.segmentedControl}>
-          {[{ id: 'ticket', label: '旅票' }, { id: 'location', label: '地点' }, { id: 'media', label: '娱乐' }].map(t => (
-            <TouchableOpacity key={t.id} style={[styles.segmentBtn, baseType === t.id && styles.segmentBtnActive]} onPress={() => handleBaseTypeChange(t.id)}>
-              <Text style={[styles.segmentText, baseType === t.id && styles.segmentTextActive]}>{t.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {renderSubTypes()}
-
         <View style={styles.cardSection}>
+          {/* 类型字段：点开底部弹层做二级选择（大类 → 子类） */}
+          <TouchableOpacity
+            style={styles.typeRow}
+            onPress={() => { setSheetBase(baseType); typeSheetRef.current?.present(); }}
+          >
+            <Text style={styles.typeLabel}>类型</Text>
+            <Text style={styles.typeValue}>{baseType === 'location' ? '地点' : `${BASE_LABEL[baseType]} · ${SUB_LABEL[subType]}`}</Text>
+            <ChevronRight size={16} color="#C7CAD1" />
+          </TouchableOpacity>
           {baseType === 'ticket' && (
             <View style={{ zIndex: 10 }}>
               <Text style={styles.inputLabel}>出发地</Text>
-              <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketOrigin} onChangeText={setTicketOrigin} /></View>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  value={ticketOrigin}
+                  onChangeText={setTicketOrigin}
+                  onFocus={() => { setOriginFocused(true); if (ticketOrigin.trim()) setShowOriginAuto(true); }}
+                  onBlur={() => { setOriginFocused(false); setTimeout(() => setShowOriginAuto(false), 200); }}
+                />
+              </View>
+              {showOriginAuto && originResults.length > 0 && (
+                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
+                  {originResults.map((result, idx) => (
+                    <TouchableOpacity key={idx} style={styles.autoCompleteItem} onPress={() => pickOrigin(result)}>
+                      <SuggestionRow
+                        title={result.name}
+                        meta={result.district}
+                        textStyle={styles.autoCompleteText}
+                        metaStyle={styles.autoCompleteMeta}
+                        onPress={() => pickOrigin(result)}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </Reanimated.View>
+              )}
               <Text style={[styles.inputLabel, { marginTop: 16 }]}>目的地</Text>
-              <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketDest} onChangeText={setTicketDest} /></View>
-              <Text style={[styles.inputLabel, { marginTop: 16 }]}>{subType === 'flight' ? '航班号' : subType === 'train' ? '车次' : '班次'}</Text>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  value={ticketDest}
+                  onChangeText={setTicketDest}
+                  onFocus={() => { setDestFocused(true); if (ticketDest.trim()) setShowDestAuto(true); }}
+                  onBlur={() => { setDestFocused(false); setTimeout(() => setShowDestAuto(false), 200); }}
+                />
+              </View>
+              {showDestAuto && destResults.length > 0 && (
+                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 160 }]}>
+                  {destResults.map((result, idx) => (
+                    <TouchableOpacity key={idx} style={styles.autoCompleteItem} onPress={() => pickDest(result)}>
+                      <SuggestionRow
+                        title={result.name}
+                        meta={result.district}
+                        textStyle={styles.autoCompleteText}
+                        metaStyle={styles.autoCompleteMeta}
+                        onPress={() => pickDest(result)}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </Reanimated.View>
+              )}
+              {!hasLocationSearch(tdtKey) && (
+                <Text style={styles.autoCompleteHint}>提示：在侧边栏「地图服务 Key」填入天地图 Key（免费）后，出发地/目的地才能联想定位</Text>
+              )}
+              <Text style={[styles.inputLabel, { marginTop: 16 }]}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
               <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketNo} onChangeText={setTicketNo} /></View>
             </View>
           )}
@@ -386,21 +545,21 @@ export default function AddScreen({ navigation, route }) {
                   style={styles.input}
                   value={searchQuery}
                   onChangeText={(t) => {
+                    // 手改名称视为"别名"：坐标跟随选中的地点，改名不影响标点位置
                     setSearchQuery(t);
-                    setLocationCoords(null); // 手动改名后，之前的联想坐标不再匹配
                     if (t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
                   }}
-                  onFocus={() => { if (searchQuery.trim().length > 0) setShowSearchAuto(true); }}
-                  onBlur={() => setTimeout(() => setShowSearchAuto(false), 200)}
+                  onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); }}
+                  onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
                   onSubmitEditing={() => setShowSearchAuto(false)}
                 />
               </View>
 
-              {!hasLocationSearch() && (
-                <Text style={styles.autoCompleteHint}>提示：在 src/utils/search.js 填入免费的高德 Key 后，可联想地点并自动定位</Text>
+              {!hasLocationSearch(tdtKey) && (
+                <Text style={styles.autoCompleteHint}>提示：在侧边栏「地图服务 Key」填入天地图 Key（免费）后，可联想地点并自动定位</Text>
               )}
 
-              {hasLocationSearch() && showSearchAuto && searchResults.length > 0 && (
+              {hasLocationSearch(tdtKey) && showSearchAuto && searchResults.length > 0 && (
                 <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>
@@ -412,22 +571,22 @@ export default function AddScreen({ navigation, route }) {
                         key={idx}
                         style={styles.autoCompleteItem}
                         onPress={() => {
-                          skipNextSearch.current = true;
-                          setSearchQuery(result.title);
-                          setLocationCoords(result.location || null);
-                          setShowSearchAuto(false);
+                          skipNextSearch.current = !result.isPrompt;
+                          setSearchQuery(result.name);
+                          setLocationCoords(!result.isPrompt && result.lng != null ? { lng: result.lng, lat: result.lat } : null);
+                          if (!result.isPrompt) setShowSearchAuto(false);
                         }}
                       >
                         <SuggestionRow
-                          title={result.title}
-                          meta={result.meta}
+                          title={result.name}
+                          meta={result.district}
                           textStyle={styles.autoCompleteText}
                           metaStyle={styles.autoCompleteMeta}
                           onPress={() => {
-                            skipNextSearch.current = true;
-                            setSearchQuery(result.title);
-                            setLocationCoords(result.location || null);
-                            setShowSearchAuto(false);
+                            skipNextSearch.current = !result.isPrompt;
+                            setSearchQuery(result.name);
+                            setLocationCoords(!result.isPrompt && result.lng != null ? { lng: result.lng, lat: result.lat } : null);
+                            if (!result.isPrompt) setShowSearchAuto(false);
                           }}
                         />
                       </TouchableOpacity>
@@ -452,8 +611,8 @@ export default function AddScreen({ navigation, route }) {
                     setCoverUrl(null); setCoverRatio(null); // 手动改动标题后，之前的网络封面不再匹配
                     if(t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
                   }}
-                  onFocus={() => { if(searchQuery.trim().length > 0) setShowSearchAuto(true); }}
-                  onBlur={() => setTimeout(() => setShowSearchAuto(false), 200)}
+                  onFocus={() => { setSearchFocused(true); if(searchQuery.trim().length > 0) setShowSearchAuto(true); }}
+                  onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
                   onSubmitEditing={() => setShowSearchAuto(false)}
                 />
               </View>
@@ -511,22 +670,20 @@ export default function AddScreen({ navigation, route }) {
               <Text style={styles.dateLabelText}>日</Text>
             </View>
 
-            {baseType === 'ticket' && (
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.inputLabel}>具体时间</Text>
-                <View style={styles.dateRow}>
-                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={hour} onChangeText={setHour} />
-                  <Text style={styles.dateLabelText}>时</Text>
-                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={minute} onChangeText={setMinute} />
-                  <Text style={styles.dateLabelText}>分</Text>
-                </View>
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.inputLabel}>具体时间（选填）</Text>
+              <View style={styles.dateRow}>
+                <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={hour} onChangeText={setHour} />
+                <Text style={styles.dateLabelText}>时</Text>
+                <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={minute} onChangeText={setMinute} />
+                <Text style={styles.dateLabelText}>分</Text>
               </View>
-            )}
+            </View>
           </View>
 
           <View style={styles.divider} />
           {renderRating()}
-          {baseType !== 'ticket' && <View style={[styles.divider, { marginVertical: 12 }]} />}
+          <View style={[styles.divider, { marginVertical: 12 }]} />
 
           <View>
             <Text style={styles.inputLabel}>评论</Text>
@@ -560,6 +717,65 @@ export default function AddScreen({ navigation, route }) {
         </View>
       </ScrollView>
 
+      {/* 二级类型选择：第一级大类卡片，第二级子类 chips；地点无子类直接选中 */}
+      <BottomSheetModal
+        ref={typeSheetRef}
+        backdropComponent={renderTypeBackdrop}
+        handleIndicatorStyle={{ backgroundColor: '#D1D5DB' }}
+      >
+        <BottomSheetView style={styles.sheetContent}>
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>选择类型</Text>
+            <TouchableOpacity onPress={() => typeSheetRef.current?.dismiss()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <X size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.catRow}>
+            {[
+              { id: 'ticket', label: '旅票', Icon: Plane, color: '#007AFF', bg: '#E0F2FE' },
+              { id: 'location', label: '地点', Icon: MapPin, color: '#EF4444', bg: '#FEE2E2' },
+              { id: 'media', label: '娱乐', Icon: Film, color: '#A855F7', bg: '#F3E8FF' },
+            ].map(cat => (
+              <TouchableOpacity
+                key={cat.id}
+                style={[styles.catCard, sheetBase === cat.id && styles.catCardActive]}
+                onPress={() => {
+                  if (cat.id === 'location') {
+                    applyType('location', 'location');
+                    typeSheetRef.current?.dismiss();
+                    return;
+                  }
+                  setSheetBase(cat.id);
+                }}
+              >
+                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><cat.Icon size={20} color={cat.color} /></View>
+                <Text style={[styles.catLabel, sheetBase === cat.id && styles.catLabelActive]}>{cat.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {sheetBase === 'location' ? (
+            <Text style={styles.lv2Hint}>地点不分子类，点上方卡片即可选中</Text>
+          ) : (
+            <View style={styles.chipWrap}>
+              {SUB_OPTIONS[sheetBase].map(opt => {
+                const active = sheetBase === baseType && subType === opt.id;
+                return (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => { applyType(sheetBase, opt.id); typeSheetRef.current?.dismiss(); }}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </BottomSheetView>
+      </BottomSheetModal>
+
     </KeyboardAvoidingView>
   );
 }
@@ -571,31 +787,34 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
   saveText: { fontSize: 16, fontWeight: '600', color: '#007AFF' },
   formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  segmentedControl: { flexDirection: 'row', backgroundColor: '#E5E5EA', borderRadius: 8, padding: 2, marginBottom: 16 },
-  segmentBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 6 },
-  segmentBtnActive: { backgroundColor: '#FFF', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1 },
-  segmentText: { fontSize: 14, color: '#8E8E93', fontWeight: '500' },
-  segmentTextActive: { color: '#1C1C1E' },
-  subTypeContainer: { flexDirection: 'row', marginBottom: 16 },
-  subTypeChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E5E7EB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginRight: 10 },
-  subTypeChipActive: { backgroundColor: '#E0F2FE' },
-  subTypeChipText: { marginLeft: 6, fontSize: 14, color: '#6B7280', fontWeight: '500' },
-  subTypeChipTextActive: { color: '#007AFF' },
+  typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
+  typeLabel: { fontSize: 15, color: '#9CA3AF', marginRight: 8 },
+  typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
+  sheetContent: { paddingHorizontal: 16, paddingBottom: 24 },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  sheetTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
+  catRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  catCard: { flex: 1, borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  catCardActive: { borderColor: '#007AFF', backgroundColor: '#F0F8FF' },
+  catIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  catLabel: { fontSize: 14, fontWeight: '500', color: '#6B7280' },
+  catLabelActive: { color: '#007AFF', fontWeight: '600' },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  chip: { paddingVertical: 9, paddingHorizontal: 18, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#F3F4F6', borderRadius: 19 },
+  chipActive: { backgroundColor: '#E0F2FE', borderColor: '#BAE6FD' },
+  chipText: { fontSize: 14, color: '#4B5563' },
+  chipTextActive: { color: '#007AFF', fontWeight: '500' },
+  lv2Hint: { fontSize: 13, color: '#9CA3AF', paddingVertical: 10 },
   cardSection: { backgroundColor: '#FFF', borderRadius: 14, padding: 16, marginBottom: 40 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: '#9CA3AF', marginBottom: 8 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
   input: { flex: 1, fontSize: 15, color: '#1C1C1E' },
   autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
   autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  autoCompleteScroll: { flex: 1 },
-  autoCompleteContent: { alignItems: 'center', paddingVertical: 2 },
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
   autoCompleteText: { fontSize: 15, color: '#1C1C1E' },
   autoCompleteMeta: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
   autoCompleteHint: { fontSize: 12, color: '#9CA3AF', marginTop: 8 },
-  coverPreviewRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, backgroundColor: '#F9FAFB', borderRadius: 10, padding: 8, gap: 8 },
-  coverPreviewThumb: { width: 40, height: 40, borderRadius: 6 },
-  coverPreviewText: { flex: 1, fontSize: 12, color: '#6B7280' },
   divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 16 },
   dateRow: { flexDirection: 'row', alignItems: 'center' },
   dateBox: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: '#1C1C1E' },

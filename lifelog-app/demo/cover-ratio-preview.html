@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>封面最终形态 · 固定槽位 · 原比例 · 文字对齐 · Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #F2F2F7; color: #1C1C1E; padding: 32px 24px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6B7280; margin-bottom: 24px; line-height: 1.7; max-width: 880px; }
+  h2 { font-size: 15px; margin: 26px 0 12px; }
+  h2 .tag { font-size: 11px; background: #E0F2FE; color: #007AFF; border-radius: 5px; padding: 2px 7px; vertical-align: 2px; margin-right: 8px; }
+  .cols { display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; }
+  .panel { background: #FFF; border-radius: 14px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+  .note { font-size: 12.5px; color: #6B7280; line-height: 1.75; }
+  .note b { color: #1C1C1E; }
+
+  /* 列表 mock */
+  .listGroup { background: #FFF; border-radius: 12px; overflow: hidden; border: 1px solid #EEF0F3; position: relative; }
+  .row { display: flex; align-items: center; gap: 12px; height: 84px; padding: 0 14px; border-bottom: 1px solid #F2F2F7; }
+  .row:last-child { border-bottom: none; }
+  .slot { width: 64px; height: 64px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+  .slot .cap { position: absolute; bottom: 1px; right: 3px; font-size: 8px; color: #B0B6BE; }
+  .cov { display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.92); font-size: 9px; border-radius: 4px; overflow: hidden; }
+  .r23 { width: 43px; height: 64px; background: linear-gradient(160deg,#4A6CF7,#2F4FBF); }
+  .r32 { width: 64px; height: 43px; background: linear-gradient(135deg,#84fab0,#3B9E8F); }
+  .r43 { width: 64px; height: 48px; background: linear-gradient(135deg,#f6d365,#e08a3c); }
+  .r169 { width: 64px; height: 36px; background: linear-gradient(135deg,#2b2b3c,#565676); }
+  .r11 { width: 64px; height: 64px; background: linear-gradient(135deg,#fbc2eb,#a6c1ee); }
+  .r916 { width: 36px; height: 64px; background: linear-gradient(160deg,#4A6CF7,#2F4FBF); }
+  .noimg { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+  .rtext { flex: 1; min-width: 0; }
+  .rt1 { font-size: 14.5px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+  .rt1 .d { font-size: 11px; color: #8E8E93; font-weight: 400; flex: none; }
+  .rt2 { font-size: 11.5px; color: #8E8E93; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alignline { position: absolute; top: 0; bottom: 0; width: 1px; background: #FF9500; opacity: .65; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; font-size: 11.5px; color: #6B7280; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  /* 详情 mock */
+  .dhead { display: flex; align-items: center; gap: 12px; background: #FFF; border-radius: 12px; border: 1px solid #EEF0F3; height: 108px; padding: 0 14px; position: relative; overflow: hidden; }
+  .dslot { width: 80px; height: 80px; flex: none; border-radius: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+</style>
+</head>
+<body>
+  <h1>封面最终形态：固定槽位 · 原比例完整显示 · 文字起点统一 · 左侧留边</h1>
+  <p class="sub">规则汇总：<b>槽位固定 64×64（左侧留 14px 边距）→ 所有行的文字起点完全一致</b>；封面在槽位内<b>按原比例完整显示、居中</b>——不裁切、不拉伸、不强制铺满，槽位内的空隙是均匀的背景色；无封面回退类型图标。比例来自选图时记录的指纹（已有数据），豆瓣海报固定 2:3。</p>
+
+  <h2><span class="tag">列表</span>同一槽位下的各种比例（含极端竖图 9:16）</h2>
+  <div class="cols">
+    <div class="panel" style="flex:1; min-width: 360px; position: relative;">
+      <div class="alignline" style="left: 90px"></div>
+      <div class="listGroup">
+        <div class="row">
+          <div class="slot"><div class="cov r23">2:3</div><span class="cap">2:3</span></div>
+          <div class="rtext"><div class="rt1"><span>流浪地球2</span><span class="d">10-04</span></div><div class="rt2">豆瓣海报 · 竖版占满高度 · ★★★★★</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="cov r32">3:2</div><span class="cap">3:2</span></div>
+          <div class="rtext"><div class="rt1"><span>北京 → 上海</span><span class="d">10-01</span></div><div class="rt2">横版占满宽度 · MU5101</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="cov r43">4:3</div><span class="cap">4:3</span></div>
+          <div class="rtext"><div class="rt1"><span>外滩 &amp; 南京东路</span><span class="d">10-02</span></div><div class="rt2">风很大，夜景绝美</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="cov r11">1:1</div><span class="cap">1:1</span></div>
+          <div class="rtext"><div class="rt1"><span>方图记录</span><span class="d">10-06</span></div><div class="rt2">正方形正好铺满槽位</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="cov r169">16:9</div><span class="cap">16:9</span></div>
+          <div class="rtext"><div class="rt1"><span>视频记录</span><span class="d">10-05</span></div><div class="rt2">视频封面帧（横扁居中）</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="cov r916">9:16</div><span class="cap">9:16</span></div>
+          <div class="rtext"><div class="rt1"><span>竖构图照片</span><span class="d">10-07</span></div><div class="rt2">极端竖图：占满高度、左右居中</div></div>
+        </div>
+        <div class="row">
+          <div class="slot"><div class="noimg">🖼</div></div>
+          <div class="rtext"><div class="rt1"><span>无封面记录</span><span class="d">10-08</span></div><div class="rt2">回退类型图标（现状一致）</div></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#4A6CF7"></i>旅票照片</span>
+        <span><i style="background:#3B9E8F"></i>地点照片</span>
+        <span><i style="background:#565676"></i>视频帧</span>
+        <span><i style="background:#fbc2eb"></i>豆瓣海报</span>
+        <span style="color:#FF9500">橙色线 = 文字统一起点</span>
+      </div>
+    </div>
+    <div class="panel" style="flex:1; min-width: 260px;">
+      <p class="note">
+        <b>规则细节：</b><br>
+        1. <b>左侧留 14px 边距</b>，封面不顶着屏幕边缘；<br>
+        2. <b>槽位固定 64×64 且完全透明</b>——只显示图片本身，按原比例居中；空隙就是卡片白底，没有任何底色；<br>
+        3. <b>不裁切、不拉伸、不强制铺满</b>——竖图占满高度、横图占满宽度，剩下的就是对称的背景空隙；<br>
+        4. 文字起点由槽位决定，<b>所有行完全一致</b>；<br>
+        5. 无封面时槽位内显示类型图标（现状一致）。<br><br>
+        <b>对比之前两版：</b>v1 就是这个方案（当时你说要"零留白"所以改掉了）——这版把它加了浅灰槽位底色，让空隙看起来是有意的设计而不是没对齐；同时左侧加了边距。
+      </p>
+    </div>
+  </div>
+
+  <h2><span class="tag">详情</span>头部封面同一规则（槽位 80×80）</h2>
+  <div class="cols">
+    <div class="panel" style="flex:1; min-width: 360px; position: relative;">
+      <div class="alignline" style="left: 106px"></div>
+      <div class="dhead">
+        <div class="dslot"><div class="cov r23" style="width: 53px; height: 80px;">2:3</div><span class="cap" style="position:absolute;bottom:1px;right:4px;font-size:8px;color:#B0B6BE">2:3</span></div>
+        <div style="flex:1">
+          <div style="font-size: 16px; font-weight: 700;">流浪地球2</div>
+          <div style="font-size: 11.5px; color: #8E8E93; margin-top: 3px;">2026年9月4日 · ★★★★★ 5 分</div>
+          <div style="font-size: 12px; color: #374151; margin-top: 6px; line-height: 1.6;">详情头部与列表同规则：槽位固定、原比例居中、文字起点对齐。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="tag">体积</span>封面小图保存（不变）</h2>
+  <div class="panel">
+    <p class="note">封面下载时缩到<b>长边 360px</b>（槽位显示只需 64×3 倍屏 = 192px，余量充足），单张 ~25KB；备份里的封面随之变小。存量的大封面在重新回填/导出时自动换成小图。</p>
+  </div>
+</body>
+</html>

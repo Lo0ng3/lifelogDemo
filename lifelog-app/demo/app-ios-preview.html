@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>印记 · 全应用 iOS 风格重设计</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #E5E5EA; color: #1C1C1E; padding: 32px 24px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6B7280; margin-bottom: 24px; line-height: 1.6; max-width: 860px; }
+  h2 { font-size: 15px; margin: 26px 0 10px; color: #3C3C43; }
+  h2 .no { display: inline-block; background: #007AFF; color: #FFF; border-radius: 10px; font-size: 11px; padding: 1px 8px; margin-right: 8px; vertical-align: 2px; }
+
+  .tokens { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .tok { background: #FFF; border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #3C3C43; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .tok i { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-right: 6px; vertical-align: -1px; }
+
+  .wrap { display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; }
+  .cap { text-align: center; font-size: 12px; color: #6B7280; margin-top: 10px; line-height: 1.6; }
+
+  /* 手机壳 */
+  .phone { width: 300px; flex: none; border: 7px solid #1C1C1E; border-radius: 34px; overflow: hidden; background: #F2F2F7; position: relative; }
+  .ph-body { height: 560px; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+
+  /* iOS 组件 */
+  .nav { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px 8px; background: rgba(242,242,247,.94); border-bottom: 0.5px solid rgba(60,60,67,.29); }
+  .nav .t { font-size: 14px; font-weight: 600; }
+  .nav .a { font-size: 13px; color: #007AFF; }
+  .large { font-size: 27px; font-weight: 700; padding: 10px 16px 4px; }
+  .search { margin: 8px 14px; background: rgba(118,118,128,.12); border-radius: 10px; height: 34px; display: flex; align-items: center; padding: 0 8px; color: #8E8E93; font-size: 13px; }
+  .seg { margin: 4px 14px 8px; display: flex; background: rgba(118,118,128,.12); border-radius: 9px; padding: 2px; }
+  .seg span { flex: 1; text-align: center; font-size: 12.5px; padding: 5px 0; border-radius: 7px; color: #6B7280; }
+  .seg span.on { background: #FFF; color: #1C1C1E; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .group { background: #FFF; border-radius: 12px; margin: 8px 14px; overflow: hidden; }
+  .row { display: flex; align-items: center; padding: 10px 14px; border-bottom: 0.5px solid rgba(60,60,67,.18); }
+  .row:last-child { border-bottom: none; }
+  .row .lab { font-size: 13.5px; color: #1C1C1E; }
+  .row .lab.gray { color: #8E8E93; }
+  .row .val { margin-left: auto; font-size: 13.5px; color: #8E8E93; display: flex; align-items: center; gap: 6px; }
+  .row .val.blue { color: #007AFF; }
+  .chev { color: #C7C7CC; font-size: 14px; margin-left: 4px; }
+  .sq { width: 27px; height: 27px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; margin-right: 10px; flex: none; }
+  .sw2 { width: 38px; height: 23px; border-radius: 12px; background: #34C759; position: relative; flex: none; margin-left: auto; }
+  .sw2::after { content: ""; position: absolute; top: 2px; right: 2px; width: 19px; height: 19px; border-radius: 10px; background: #FFF; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .sectitle { font-size: 12px; color: #8E8E93; text-transform: none; margin: 14px 28px 6px; }
+  .inputrow { margin-left: auto; text-align: right; font-size: 13.5px; color: #C7C7CC; flex: 1; }
+  .btn-blue { background: #007AFF; color: #FFF; font-size: 13px; font-weight: 600; border-radius: 12px; padding: 10px 0; text-align: center; margin: 8px 14px; }
+  .stars { color: #FFCC00; font-size: 15px; letter-spacing: 2px; }
+  .tile-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 4px; }
+  .tile { aspect-ratio: 1; border-radius: 6px; position: relative; }
+  .addtile { border: 1.5px dashed #C7C7CC; display: flex; align-items: center; justify-content: center; color: #C7C7CC; font-size: 18px; }
+  .live { position: absolute; left: 3px; top: 3px; font-size: 8.5px; background: rgba(0,0,0,.55); color: #FFF; border-radius: 3px; padding: 1px 4px; }
+  .pin-badge { position: absolute; left: 3px; top: 3px; font-size: 8.5px; background: rgba(0,0,0,.55); color: #FFF; border-radius: 3px; padding: 1px 4px; }
+</style>
+</head>
+<body>
+  <h1>印记 · 全应用 iOS 风格重设计</h1>
+  <p class="sub">设计语言统一后套到每个页面：系统灰底 #F2F2F7、白色圆角分组卡片（inset grouped）、毛玻璃导航栏 + 居中标题、大标题排版、iOS 系统色（蓝 #007AFF / 绿 #34C759 / 红 #FF3B30 / 橙 #FF9500）、iOS 开关与搜索框。<b>交互逻辑全部不变</b>（二级类型弹层、右滑操作、轨迹开关等照旧，只是换皮）。</p>
+
+  <h2>设计规范</h2>
+  <div class="tokens">
+    <span class="tok"><i style="background:#F2F2F7;border:1px solid #ddd"></i>背景 F2F2F7</span>
+    <span class="tok"><i style="background:#FFF;border:1px solid #ddd"></i>卡片 FFFFFF·r12</span>
+    <span class="tok"><i style="background:#007AFF"></i>主色 007AFF</span>
+    <span class="tok"><i style="background:#34C759"></i>绿 34C759</span>
+    <span class="tok"><i style="background:#FF3B30"></i>红 FF3B30</span>
+    <span class="tok"><i style="background:#FF9500"></i>橙 FF9500</span>
+    <span class="tok"><i style="background:rgba(118,118,128,.12)"></i>填充 12%</span>
+    <span class="tok">分隔线 hairline · 标题 17/600 · 大标题 28/700 · 说明 12/灰</span>
+  </div>
+
+  <h2><span class="no">1</span>印记 · 列表（首页）</h2>
+  <div class="wrap">
+    <div>
+      <div class="phone"><div class="ph-body">
+        <div class="nav"><span class="a">‹　</span><span class="t">印记</span><span class="a">＋</span></div>
+        <div class="large">印记</div>
+        <div class="seg"><span class="on">列表</span><span>地图</span></div>
+        <div class="search">🔍 搜索标题、关键字...</div>
+        <div class="group">
+          <div class="row" style="gap:10px">
+            <div class="sq" style="background:#E0F2FE">✈️</div>
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between"><span class="lab">北京首都 → 上海虹桥</span><span style="font-size:11px;color:#8E8E93">10-01</span></div>
+              <div style="font-size:11.5px;color:#8E8E93;margin-top:2px">MU5101 · 假期出发</div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="row" style="gap:10px">
+            <div class="sq" style="background:#FEE2E2">📍</div>
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between"><span class="lab">外滩 &amp; 南京东路</span><span style="font-size:11px;color:#8E8E93">10-02</span></div>
+              <div style="font-size:11.5px;color:#8E8E93;margin-top:2px">风很大，夜景绝美</div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="row" style="gap:10px">
+            <div class="sq" style="background:#F3E8FF">🎬</div>
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between"><span class="lab">流浪地球2</span><span style="font-size:11px;color:#8E8E93">10-04</span></div>
+              <div style="font-size:11.5px;color:#8E8E93;margin-top:2px"><span class="stars">★★★★★</span> 5 分</div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="row" style="gap:10px">
+            <div class="sq" style="background:#E0F2FE">🚄</div>
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between"><span class="lab">上海虹桥 → 北京南</span><span style="font-size:11px;color:#8E8E93">10-07</span></div>
+              <div style="font-size:11.5px;color:#8E8E93;margin-top:2px">G1</div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+        </div>
+        <div class="group" style="opacity:.5">
+          <div class="row" style="gap:10px"><div class="sq" style="background:#FEE2E2">📍</div><div class="lab gray">Luneurs 咖啡馆</div><span class="chev">›</span></div>
+        </div>
+      </div></div>
+      <p class="cap">列表：大标题 + iOS 搜索框 + 分组卡片<br>右滑 修改/删除 保留，图标换彩色底</p>
+    </div>
+
+    <div>
+      <div class="phone"><div class="ph-body">
+        <div class="nav"><span class="a">‹　</span><span class="t">印记</span><span class="a">＋</span></div>
+        <div class="large">地图</div>
+        <div class="seg"><span>列表</span><span class="on">地图</span></div>
+        <div style="flex:1; position:relative; background:#F6F4EF; margin:6px 14px 14px; border-radius:12px; overflow:hidden">
+          <svg viewBox="0 0 272 380" width="272" height="380">
+            <rect width="272" height="380" fill="#F6F4EF"/>
+            <ellipse cx="50" cy="90" rx="60" ry="38" fill="#DCE9D5"/>
+            <path d="M -10 250 C 80 225, 180 265, 282 240" fill="none" stroke="#C7DDF2" stroke-width="18" stroke-linecap="round"/>
+            <path d="M -10 120 C 90 112, 190 148, 282 122" fill="none" stroke="#FFFFFF" stroke-width="8"/>
+            <path d="M 70 -10 C 78 100, 52 240, 86 390" fill="none" stroke="#FFFFFF" stroke-width="7"/>
+            <path d="M 55 310 Q 130 262 168 205" fill="none" stroke="#10B981" stroke-width="3.6" stroke-linecap="round" opacity=".85"/>
+            <path d="M 168 205 Q 208 135 222 75" fill="none" stroke="#2F7BF6" stroke-width="3.6" stroke-linecap="round" opacity=".85"/>
+            <circle cx="55" cy="310" r="5.5" fill="#EE4D3D" stroke="#FFF" stroke-width="1.8"/>
+            <circle cx="168" cy="205" r="5" fill="#10B981" stroke="#FFF" stroke-width="1.8"/>
+            <circle cx="222" cy="75" r="5" fill="#2F7BF6" stroke="#FFF" stroke-width="1.8"/>
+            <circle cx="100" cy="160" r="5" fill="#EE4D3D" stroke="#FFF" stroke-width="1.8"/>
+            <circle cx="190" cy="290" r="5" fill="#EE4D3D" stroke="#FFF" stroke-width="1.8"/>
+          </svg>
+          <div style="position:absolute; right:10px; top:10px; background:rgba(255,255,255,.88); border-radius:18px; box-shadow:0 4px 14px rgba(0,0,0,.14); width:40px">
+            <div style="height:38px;display:flex;align-items:center;justify-content:center;font-size:16px">＋</div>
+            <div style="height:38px;display:flex;align-items:center;justify-content:center;font-size:16px;border-top:0.5px solid rgba(60,60,67,.18)">－</div>
+            <div style="height:38px;display:flex;align-items:center;justify-content:center;font-size:13px;border-top:0.5px solid rgba(60,60,67,.18)">⌖</div>
+          </div>
+          <div style="position:absolute; left:10px; bottom:12px; background:rgba(255,255,255,.9); border-radius:12px; box-shadow:0 4px 14px rgba(0,0,0,.14); padding:9px 12px; width:150px">
+            <div style="display:flex; justify-content:space-between; align-items:center"><b style="font-size:12px">出行轨迹</b><span class="sw2" style="transform:scale(.85); transform-origin:right"></span></div>
+            <div style="font-size:9.5px; color:#8E8E93; margin-top:3px">关闭时同时隐藏旅票起终点</div>
+          </div>
+          <div style="position:absolute; bottom:12px; right:10px; background:rgba(255,255,255,.9); border-radius:14px; box-shadow:0 4px 14px rgba(0,0,0,.14); padding:6px 12px; font-size:10.5px; color:#3C3C43">3 段行程 · 5 个地点</div>
+        </div>
+      </div></div>
+      <p class="cap">地图：上一版确认的 iOS 控件照搬<br>（胶囊缩放 / 轨迹开关 / 摘要胶囊）</p>
+    </div>
+  </div>
+
+  <h2><span class="no">2</span>添加 / 编辑印记（iOS 分组表单）</h2>
+  <div class="wrap">
+    <div>
+      <div class="phone"><div class="ph-body">
+        <div class="nav"><span class="a">取消</span><span class="t">新印记</span><span class="a" style="font-weight:600">保存</span></div>
+        <div class="sectitle">类型</div>
+        <div class="group">
+          <div class="row"><span class="lab">类型</span><span class="val">旅票 · 机票 <span class="chev">›</span></span></div>
+        </div>
+        <div class="sectitle">行程</div>
+        <div class="group">
+          <div class="row"><span class="lab gray" style="width:56px">出发地</span><span class="inputrow">北京首都国际机场</span></div>
+          <div class="row"><span class="lab gray" style="width:56px">目的地</span><span class="inputrow">搜索或输入</span></div>
+          <div class="row"><span class="lab gray" style="width:56px">航班号</span><span class="inputrow">选填</span></div>
+        </div>
+        <div class="sectitle">时间</div>
+        <div class="group">
+          <div class="row"><span class="lab">发生日期</span><span class="val">2026年9月12日 <span class="chev">›</span></span></div>
+          <div class="row"><span class="lab">具体时间</span><span class="val">08:30</span></div>
+        </div>
+        <div class="sectitle">评价</div>
+        <div class="group">
+          <div class="row"><span class="lab">评分</span><span class="val"><span class="stars">★★★★☆</span></span></div>
+        </div>
+        <div class="sectitle">评论与影像</div>
+        <div class="group">
+          <div class="row"><span class="inputrow" style="text-align:left; color:#C7C7CC">写点什么…</span></div>
+          <div class="tile-grid">
+            <div class="tile g1" style="background:linear-gradient(135deg,#84fab0,#8fd3f4)"><span class="pin-badge">实况</span></div>
+            <div class="tile" style="background:linear-gradient(135deg,#fbc2eb,#a6c1ee)"></div>
+            <div class="tile addtile">＋</div>
+          </div>
+        </div>
+      </div></div>
+      <p class="cap">表单：Settings 式分组行（标签左 · 内容右）<br>类型行点开底部弹层（交互不变）· 时间手输不变</p>
+    </div>
+
+    <div>
+      <div class="phone"><div class="ph-body">
+        <div class="nav"><span class="a">‹ 印记</span><span class="t"></span><span class="a" style="font-weight:600">编辑</span></div>
+        <div class="group" style="margin-top:14px; padding:14px; display:flex; gap:12px; align-items:center">
+          <div class="sq" style="background:#E0F2FE; width:44px; height:44px; border-radius:11px; font-size:20px">✈️</div>
+          <div style="flex:1">
+            <div style="font-size:16px; font-weight:700">北京首都 → 上海虹桥</div>
+            <div style="font-size:11.5px; color:#8E8E93; margin-top:2px">2026年9月1日 08:30</div>
+          </div>
+        </div>
+        <div class="group" style="padding:14px">
+          <div class="stars" style="font-size:17px">★★★★☆</div>
+          <div style="font-size:13px; color:#374151; margin-top:6px; line-height:1.6">假期出发，第一次去西安。落地直接去了兵马俑，讲解很值。</div>
+        </div>
+        <div class="sectitle">相关影像（长按可设为封面）</div>
+        <div class="group">
+          <div class="tile-grid" style="padding:8px">
+            <div class="tile" style="background:linear-gradient(135deg,#fbc2eb,#a6c1ee)"><span class="pin-badge">封面</span></div>
+            <div class="tile" style="background:linear-gradient(135deg,#84fab0,#8fd3f4)"><span class="live">实况</span></div>
+            <div class="tile" style="background:linear-gradient(135deg,#f6d365,#fda085)"></div>
+          </div>
+        </div>
+        <div class="group">
+          <div class="row"><span class="lab">出发地</span><span class="val">北京首都国际机场 <span class="chev">›</span></span></div>
+          <div class="row"><span class="lab">到达地</span><span class="val">上海虹桥国际机场 <span class="chev">›</span></span></div>
+          <div class="row"><span class="lab">航班号</span><span class="val">MU5101</span></div>
+        </div>
+      </div></div>
+      <p class="cap">详情：信息分组化 + 轨迹信息卡<br>（长按设封面 / 全屏查看器不变）</p>
+    </div>
+  </div>
+
+  <h2><span class="no">3</span>侧边栏「我的」与设置</h2>
+  <div class="wrap">
+    <div>
+      <div class="phone"><div class="ph-body">
+        <div class="nav"><span class="a">‹　</span><span class="t">印记</span><span class="a">＋</span></div>
+        <div style="display:flex; gap:12px; align-items:center; padding:16px 16px 10px">
+          <div style="width:52px; height:52px; border-radius:26px; background:#007AFF; display:flex; align-items:center; justify-content:center; color:#FFF; font-size:22px">👤</div>
+          <div><div style="font-size:17px; font-weight:700">旅行者</div><div style="font-size:11.5px; color:#8E8E93">12 条印记 · 4 段行程</div></div>
+        </div>
+        <div class="group">
+          <div class="row"><div class="sq" style="background:#007AFF">🗺</div><span class="lab">地图服务 Key</span><span class="val">已配置 <span class="chev">›</span></span></div>
+          <div class="row"><div class="sq" style="background:#34C759">🔄</div><span class="lab">同步相册影像</span><span class="chev">›</span></div>
+        </div>
+        <div class="group">
+          <div class="row"><div class="sq" style="background:#FF9500">⬆️</div><span class="lab">导出备份</span><span class="chev">›</span></div>
+          <div class="row"><div class="sq" style="background:#2F7BF6">⬇️</div><span class="lab">导入备份</span><span class="chev">›</span></div>
+          <div class="row"><div class="sq" style="background:#8E8E93">🧹</div><span class="lab">清理缓存</span><span class="chev">›</span></div>
+        </div>
+        <div class="btn-blue">＋ 添加印记</div>
+      </div></div>
+      <p class="cap">「我的」抽屉：iOS 设置风格<br>彩色功能图标 + 分组 + 箭头，Key 行显示状态</p>
+    </div>
+    <div class="panel" style="flex:1; min-width:250px;">
+      <p class="note">
+        <b>统一改动的范围：</b><br>
+        1. <b>列表</b>：大标题、iOS 搜索框、分组卡片、彩色类型图标、右侧箭头；右滑操作保留；<br>
+        2. <b>地图</b>：沿用已确认的 iOS 控件方案；<br>
+        3. <b>添加/编辑</b>：改成 Settings 式分组表单（类型行 → 底部弹层不变；日期时间仍是手输框，只是样式内嵌到行里）；<br>
+        4. <b>详情</b>：分组信息卡；全屏查看器、长按设封面不变；<br>
+        5. <b>侧边栏</b>：改为 iOS 设置风格（彩色图标 + 分组 + 箭头），Key 状态直接显示在行上；<br>
+        6. <b>选图器</b>：按你已确认的方案改（默认相机/视频/截图），导航栏同步 iOS 化；<br>
+        7. 所有弹窗（删除确认、设置）换成 iOS 弹窗样式。<br><br>
+        <b>不变：</b>数据结构、所有交互逻辑、天地图/豆瓣接口、实况与封面修复项。
+      </p>
+    </div>
+  </div>
+</body>
+</html>

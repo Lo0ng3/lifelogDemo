@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>印记地图 · 底图与打点 Demo</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #F2F2F7; color: #1C1C1E;
+    display: flex; flex-direction: column;
+  }
+
+  /* ---------- 顶栏 ---------- */
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; background: #FFF; border-bottom: 1px solid #E5E7EB;
+  }
+  header h1 { font-size: 17px; margin-right: 8px; }
+  header select, header input {
+    height: 34px; border: 1px solid #E5E7EB; border-radius: 8px;
+    padding: 0 10px; font-size: 13px; outline: none; font-family: inherit; background: #FFF;
+  }
+  header select:focus, header input:focus { border-color: #007AFF; }
+  #tdtKey { width: 170px; }
+  .badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 12px; background: #E0F2FE; color: #007AFF; }
+
+  /* ---------- 主体 ---------- */
+  main { flex: 1; display: flex; gap: 12px; padding: 12px 16px 16px; min-height: 0; }
+  aside { width: 300px; flex: none; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .panel { background: #FFF; border-radius: 12px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .sideTitle { font-size: 13px; font-weight: 600; color: #9CA3AF; margin-bottom: 8px; }
+
+  #entryList { overflow-y: auto; flex: 1; min-height: 0; }
+  .entry {
+    display: flex; gap: 10px; padding: 10px 8px; border-radius: 10px; cursor: pointer;
+    border-bottom: 1px solid #F3F4F6; align-items: flex-start;
+  }
+  .entry:hover { background: #F9FAFB; }
+  .entry .ico { flex: none; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .entry .ico.location { background: #FEE2E2; } .entry .ico.ticket { background: #E0F2FE; }
+  .entry .t { font-size: 14px; font-weight: 600; }
+  .entry .m { font-size: 12px; color: #8E8E93; margin-top: 2px; }
+  .entry .n { font-size: 12px; color: #6B7280; margin-top: 2px; }
+
+  .trajBox label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #374151; padding: 4px 0; cursor: pointer; }
+  .trajNote { font-size: 11.5px; color: #9CA3AF; margin-top: 6px; line-height: 1.5; }
+
+  /* ---------- 地图区 ---------- */
+  .mapWrap { flex: 1; position: relative; border-radius: 14px; overflow: hidden; border: 1px solid #E2E5EA; min-width: 560px; }
+  #map { position: absolute; inset: 0; background: #E8ECEF; }
+  .leaflet-popup-content { font-family: inherit; }
+  .leaflet-popup-content .t { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .leaflet-popup-content .m { color: #8E8E93; font-size: 12px; }
+  .leaflet-popup-content .n { color: #374151; font-size: 12px; margin-top: 4px; }
+
+  /* 标记（Leaflet divIcon 复用） */
+  .pin {
+    width: 20px; height: 20px; border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg); border: 2px solid #FFF; box-shadow: 0 2px 5px rgba(0,0,0,.3);
+  }
+  .pin::after { content: ""; position: absolute; inset: 5px; background: #FFF; border-radius: 50%; }
+  .pin.temp { background: #9CA3AF; }
+  .cntBadge {
+    width: 24px; height: 24px; border-radius: 12px; background: #FFF;
+    border: 2px solid #007AFF; color: #007AFF; font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,.2);
+    font-family: inherit;
+  }
+
+  /* 缩放按钮 */
+  .zoomCtl { position: absolute; right: 14px; top: 14px; z-index: 900; display: flex; flex-direction: column; background: #FFF; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.15); overflow: hidden; }
+  .zoomCtl button { width: 38px; height: 38px; border: none; background: transparent; font-size: 17px; color: #374151; cursor: pointer; font-family: inherit; }
+  .zoomCtl button + button { border-top: 1px solid #F3F4F6; }
+  .zoomCtl button:active { background: #F3F4F6; }
+
+  /* 搜索框 */
+  .searchBox { position: absolute; top: 14px; left: 14px; z-index: 900; width: 320px; }
+  .searchBox input {
+    width: 100%; height: 40px; border: none; border-radius: 10px;
+    padding: 0 12px 0 36px; font-size: 14px; outline: none; font-family: inherit;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); background: #FFF;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="%239CA3AF" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>');
+    background-repeat: no-repeat; background-position: 12px center;
+  }
+  .drop {
+    margin-top: 6px; background: #FFF; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18); max-height: 240px; overflow-y: auto;
+  }
+  .drop .di { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #F3F4F6; }
+  .drop .di:last-child { border-bottom: none; }
+  .drop .di:hover { background: #F9FAFB; }
+  .drop .di .n { font-size: 14px; }
+  .drop .di .d { font-size: 12px; color: #9CA3AF; margin-top: 2px; }
+  .drop .empty { padding: 10px 12px; font-size: 13px; color: #9CA3AF; cursor: default; }
+
+  /* 添加卡片 */
+  .addCard { position: absolute; left: 14px; bottom: 14px; z-index: 900; width: 320px; background: #FFF; border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 12px; }
+  .addTabs { display: flex; background: #E5E5EA; border-radius: 8px; padding: 2px; margin-bottom: 10px; }
+  .addTabs button { flex: 1; border: none; background: transparent; padding: 6px 0; border-radius: 6px; font-size: 13px; color: #8E8E93; cursor: pointer; font-family: inherit; }
+  .addTabs button.on { background: #FFF; color: #1C1C1E; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .addField { position: relative; margin-bottom: 8px; }
+  .addField input {
+    width: 100%; height: 36px; border: 1px solid #E5E7EB; border-radius: 8px;
+    padding: 0 10px; font-size: 13px; outline: none; font-family: inherit; background: #F9FAFB;
+  }
+  .addField input:focus { border-color: #007AFF; background: #FFF; }
+  .addField .drop { position: absolute; top: 38px; left: 0; right: 0; z-index: 5; }
+  .photoBtn {
+    width: 100%; height: 36px; margin-bottom: 8px; border: 1.5px dashed #C7CAD1; border-radius: 8px;
+    background: #F9FAFB; color: #374151; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .photoBtn:active { background: #F3F4F6; }
+  .addRow { display: flex; gap: 8px; align-items: center; }
+  #addBtn { flex: none; height: 36px; padding: 0 16px; border: none; border-radius: 8px; background: #007AFF; color: #FFF; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  #addHint { font-size: 12px; color: #6B7280; line-height: 1.4; }
+  #addHint.err { color: #EF4444; }
+
+  @media (max-width: 900px) {
+    main { flex-direction: column; }
+    aside { width: 100%; }
+    #entryList { max-height: 220px; }
+    .mapWrap { min-width: 0; height: 480px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>印记地图 · 底图与打点 Demo</h1>
+  <select id="tileSel">
+    <option value="amap" selected>高德街道（无 Key · 大陆快）</option>
+    <option value="amapSat">高德卫星（无 Key）</option>
+    <option value="tianditu">天地图（免费 Key · 官方）</option>
+    <option value="osm">OSM（境外 · 慢）</option>
+  </select>
+  <input id="tdtKey" placeholder="天地图 Key（底图 / 真实搜索）" style="width:210px;">
+  <span class="badge" id="modeBadge">底图坐标系 GCJ-02 · 数据坐标已自动纠偏</span>
+</header>
+
+<main>
+  <aside>
+    <div class="panel" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+      <div class="sideTitle">印记列表（点击定位）</div>
+      <div id="entryList"></div>
+    </div>
+    <div class="panel trajBox">
+      <div class="sideTitle">出行轨迹</div>
+      <label><input type="radio" name="traj" value="none">不显示</label>
+      <label><input type="radio" name="traj" value="line" checked>单向弧线（按旅票逐段）</label>
+      <div class="trajNote">每张旅票单独成段（单向）；往返画在弧线两侧不重叠；同一段重复走，线更粗并显示 ×次数 角标。颜色区分交通方式：<span style="color:#2F7BF6">✈️ 蓝</span> / <span style="color:#10B981">🚄 绿</span> / <span style="color:#F97316">🚌 橙</span> / <span style="color:#8B5CF6">🚢 紫</span>；地点标点为红色。名称可当别名随意改，坐标跟随选中的地点。</div>
+    </div>
+  </aside>
+
+  <section class="mapWrap">
+    <div id="map"></div>
+
+    <div class="zoomCtl">
+      <button id="zoomIn" title="放大">＋</button>
+      <button id="zoomOut" title="缩小">－</button>
+      <button id="zoomFit" title="显示全部">⌂</button>
+    </div>
+
+    <div class="searchBox">
+      <input id="searchInput" placeholder="搜机场/车站/地点；填天地图 Key 可搜全国真实地名" autocomplete="off">
+      <div class="drop" id="searchDrop" hidden></div>
+    </div>
+
+    <div class="addCard">
+      <div class="addTabs">
+        <button id="tabTicket" class="on">旅票</button>
+        <button id="tabLocation">地点</button>
+      </div>
+      <div id="ticketFields">
+        <div class="addField"><input id="originInput" placeholder="出发地（天地图联想）" autocomplete="off"><div class="drop" id="originDrop" hidden></div></div>
+        <div class="addField"><input id="destInput" placeholder="目的地（天地图联想）" autocomplete="off"><div class="drop" id="destDrop" hidden></div></div>
+      </div>
+      <div id="locationFields" hidden>
+        <button class="photoBtn" id="photoBtn">📷 读取照片位置（EXIF GPS）</button>
+        <input type="file" id="photoFile" accept="image/*" hidden>
+        <div class="addField"><input id="locInput" placeholder="地点名称" autocomplete="off"><div class="drop" id="locDrop" hidden></div></div>
+      </div>
+      <div class="addRow">
+        <button id="addBtn">添加到地图</button>
+        <span id="addHint">全部走天地图联想；地点可读照片 GPS 兜底</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exifr@7.2.0/full.min.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+
+  // ================= 示意数据 =================
+  // 示意种子数据（坐标直接写死；真实应用里所有记录的坐标都来自天地图联想 / 照片 GPS）
+  let entries = [
+    { id: 1, type: 'ticket', sub: 'train',  origin: '北京西站', dest: '西安北站', no: 'G87', date: '2026-09-01 08:00', note: '假期出发，第一次去西安', oc: [116.322, 39.895], dc: [108.938, 34.376] },
+    { id: 2, type: 'location', name: '秦始皇兵马俑博物馆', date: '2026-09-02', note: '震撼，一定请讲解', c: [109.278, 34.384] },
+    { id: 3, type: 'location', name: '大雁塔', date: '2026-09-03', note: '晚上有音乐喷泉', c: [108.964, 34.219] },
+    { id: 4, type: 'ticket', sub: 'train',  origin: '西安北站', dest: '成都东站', no: 'D1917', date: '2026-09-04 09:30', note: '一路穿越秦岭', oc: [108.938, 34.376], dc: [104.140, 30.630] },
+    { id: 5, type: 'location', name: '宽窄巷子', date: '2026-09-05', note: '盖碗茶坐了一下午', c: [104.053, 30.665] },
+    { id: 6, type: 'location', name: '成都大熊猫繁育研究基地', date: '2026-09-06', note: '早上去熊猫最活泼', c: [104.147, 30.733] },
+    { id: 7, type: 'ticket', sub: 'flight', origin: '成都天府国际机场', dest: '丽江三义国际机场', no: 'MU5835', date: '2026-09-07 11:20', note: '', oc: [104.441, 30.312], dc: [100.251, 26.685] },
+    { id: 8, type: 'location', name: '丽江古城', date: '2026-09-08', note: '雪山下的慢生活', c: [100.234, 26.872] },
+    { id: 9, type: 'ticket', sub: 'train',  origin: '西安北站', dest: '北京西站', no: 'G88', date: '2026-10-09 15:00', note: '返程', oc: [108.938, 34.376], dc: [116.322, 39.895] },
+    { id: 10, type: 'ticket', sub: 'train', origin: '北京西站', dest: '西安北站', no: 'G87', date: '2026-10-02 08:00', note: '国庆又去了一次', oc: [116.322, 39.895], dc: [108.938, 34.376] },
+  ];
+
+  let trajMode = 'line';
+  let addType = 'ticket';
+  let nextId = 100;
+
+  // ================= 数据辅助 =================
+  const entryPoints = e => e.type === 'location'
+    ? [{ key: e.id + '', name: e.name, lnglat: e.c, entry: e }]
+    : [{ key: e.id + '-o', name: e.origin, lnglat: e.oc, entry: e }, { key: e.id + '-d', name: e.dest, lnglat: e.dc, entry: e }];
+  const allPoints = () => entries.flatMap(entryPoints);
+
+  // 轨迹段：按 出发地→目的地 聚合（单向），同一段重复走记次数，往返是两条独立的段。
+  // 分段键用坐标而不是名称：同一段被改成不同别名后仍算同一条线
+  function segments() {
+    const map = new Map();
+    entries.filter(e => e.type === 'ticket' && e.oc && e.dc)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .forEach(t => {
+        const key = t.oc[0].toFixed(4) + ',' + t.oc[1].toFixed(4) + '→' + t.dc[0].toFixed(4) + ',' + t.dc[1].toFixed(4);
+        if (!map.has(key)) map.set(key, { key, origin: t.origin, dest: t.dest, count: 0, oc: t.oc, dc: t.dc, subType: t.sub });
+        const seg = map.get(key);
+        seg.count++;
+        seg.origin = t.origin; seg.dest = t.dest;   // 显示名称取最近一次的别名
+        seg.oc = t.oc; seg.dc = t.dc;
+      });
+    return [...map.values()];
+  }
+
+  function entryTitle(e) { return e.type === 'ticket' ? `${e.origin} → ${e.dest}` : e.name; }
+  function entryMeta(e) {
+    return e.type === 'ticket'
+      ? `${e.date} · ${e.no || (e.sub === 'flight' ? '航班' : '车次')}`
+      : e.date;
+  }
+  function entryIcon(e) { return e.type === 'ticket' ? (e.sub === 'flight' ? '✈️' : '🚄') : '📍'; }
+  function popHtml(e) {
+    return `<div class="t">${entryTitle(e)}</div><div class="m">${entryMeta(e)}</div>` + (e.note ? `<div class="n">${e.note}</div>` : '');
+  }
+  function focusList(id) {
+    document.querySelectorAll('.entry').forEach(el => el.style.background = '');
+    const li = document.querySelector(`.entry[data-id="${id}"]`);
+    if (li) { li.style.background = '#E0F2FE'; li.scrollIntoView({ block: 'nearest' }); }
+  }
+
+  // ================= 坐标系：WGS-84 → GCJ-02（火星坐标）纠偏 =================
+  // 高德/腾讯底图用 GCJ-02，GPS/EXIF/内置场站数据是 WGS-84，直接叠加会偏 300~600 米。
+  // 底图切换时通过 toMap() 决定是否纠偏（天地图/OSM 为 WGS-84 系，不偏移）。
+  const GCJ_A = 6378245.0, GCJ_EE = 0.00669342162296594323;
+  function transformLat(x, y) {
+    let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320.0 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+    return ret;
+  }
+  function transformLng(x, y) {
+    let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+    return ret;
+  }
+  function wgs84ToGcj02(lnglat) {
+    const [lng, lat] = lnglat;
+    if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return lnglat;
+    let dLat = transformLat(lng - 105.0, lat - 35.0);
+    let dLng = transformLng(lng - 105.0, lat - 35.0);
+    const radLat = lat / 180.0 * Math.PI;
+    let magic = Math.sin(radLat); magic = 1 - GCJ_EE * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((GCJ_A * (1 - GCJ_EE)) / (magic * sqrtMagic) * Math.PI);
+    dLng = (dLng * 180.0) / (GCJ_A / sqrtMagic * Math.cos(radLat) * Math.PI);
+    return [lng + dLng, lat + dLat];
+  }
+  let tileCrs = 'gcj02';
+  const toMap = lnglat => tileCrs === 'gcj02' ? wgs84ToGcj02(lnglat) : lnglat;
+  // Leaflet 的坐标是 [纬度, 经度]，数据统一 [经度, 纬度]，进 Leaflet 前统一在这里换序
+  const llOf = lnglat => { const p = toMap(lnglat); return L.latLng(p[1], p[0]); };
+
+  // ================= 底图 =================
+  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([33.5, 110], 5);
+  map.attributionControl.setPrefix('');
+  let baseLayer = null, labelLayer = null;
+
+  // 徽标：setBadge 定基础文案，flashBadge 临时提示后自动恢复
+  let badgeBase = '', badgeTimer = null;
+  function setBadge(text) { badgeBase = text; $('modeBadge').textContent = text; }
+  function flashBadge(msg) {
+    $('modeBadge').textContent = msg;
+    clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(() => { $('modeBadge').textContent = badgeBase; }, 2800);
+  }
+
+  const TILES = {
+    amap:     { crs: 'gcj02', sub: '1234',       url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', attribution: '© 高德地图' },
+    amapSat:  { crs: 'gcj02', sub: '1234',       url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', label: 'https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}', attribution: '© 高德地图' },
+    tianditu: { crs: 'wgs84', sub: '01234567',   url: 'https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk={TK}', label: 'https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk={TK}', attribution: '© 天地图', needKey: true },
+    osm:      { crs: 'wgs84', sub: 'abc',        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap' },
+  };
+
+  function switchTiles() {
+    const v = $('tileSel').value;
+    const cfg = TILES[v];
+    let url = cfg.url;
+    if (cfg.needKey) {
+      const tk = $('tdtKey').value.trim();
+      if (!tk) { flashBadge('天地图需免费 Key：lbs.tianditu.gov.cn 注册'); return; }
+      url = url.replace('{TK}', encodeURIComponent(tk));
+      try { localStorage.setItem('tdt_demo_key', tk); } catch {}
+    }
+    if (baseLayer) map.removeLayer(baseLayer);
+    if (labelLayer) map.removeLayer(labelLayer);
+    tileCrs = cfg.crs;
+    baseLayer = L.tileLayer(url, { subdomains: cfg.sub, maxZoom: 18, attribution: cfg.attribution }).addTo(map);
+    if (cfg.label) {
+      const lurl = cfg.needKey ? cfg.label.replace('{TK}', encodeURIComponent($('tdtKey').value.trim())) : cfg.label;
+      labelLayer = L.tileLayer(lurl, { subdomains: cfg.sub, maxZoom: 18 }).addTo(map);
+    }
+    setBadge(tileCrs === 'gcj02'
+      ? '底图坐标系 GCJ-02 · 数据坐标已自动纠偏'
+      : '底图坐标系 WGS-84 · 坐标直接叠加');
+    renderAll();
+  }
+  $('tileSel').addEventListener('change', switchTiles);
+  $('tdtKey').addEventListener('change', () => { if ($('tileSel').value === 'tianditu') switchTiles(); });
+  try { const k = localStorage.getItem('tdt_demo_key'); if (k) $('tdtKey').value = k; } catch {}
+
+  // 交通方式配色：✈️ 蓝 / 🚄 绿 / 🚌 橙 / 🚢 紫；地点标点固定红
+  const COLORS = { flight: '#2F7BF6', train: '#10B981', bus: '#F97316', ship: '#8B5CF6' };
+  const pointColor = e => e.type === 'location' ? '#EE4D3D' : (COLORS[e.sub] || '#2F7BF6');
+
+  // ================= 标记 / 轨迹（Leaflet） =================
+  const markersLayer = L.layerGroup().addTo(map);
+  const trajLayer = L.layerGroup().addTo(map);
+  let markerRefs = {};
+
+  const pinIcon = color => L.divIcon({ className: '', html: `<div class="pin" style="margin:4px;background:${color}"></div>`, iconSize: [28, 28], iconAnchor: [14, 25] });
+  const badgeIcon = (n, color) => L.divIcon({ className: '', html: `<div class="cntBadge" style="border-color:${color};color:${color}">×${n}</div>`, iconSize: [24, 24], iconAnchor: [12, 12], interactive: false });
+
+  function renderMarkers() {
+    markersLayer.clearLayers();
+    markerRefs = {};
+    entries.forEach(e => entryPoints(e).forEach(p => {
+      if (!p.lnglat) return;
+      const m = L.marker(llOf(p.lnglat), { icon: pinIcon(pointColor(e)) });
+      m.bindPopup(popHtml(e), { closeButton: false, offset: [0, -14] });
+      markersLayer.addLayer(m);
+      markerRefs[p.key] = m;
+    }));
+    setTrajectory(trajMode);
+  }
+
+  function setTrajectory(mode) {
+    trajLayer.clearLayers();
+    if (mode === 'none') return;
+    segments().forEach(seg => {
+      if (!seg.oc || !seg.dc) return;
+      const A = toMap(seg.oc), B = toMap(seg.dc);
+      // 弧线朝行进方向左侧弯：往返两段自然分居两侧，不重叠
+      const dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy) || 1;
+      const bend = Math.min(1.6, Math.max(.12, len * .14));
+      const C = [(A[0] + B[0]) / 2 + dy / len * bend, (A[1] + B[1]) / 2 - dx / len * bend];
+      const path = [];
+      for (let i = 0; i <= 28; i++) {
+        const t = i / 28, u = 1 - t;
+        path.push(llOf([
+          u * u * A[0] + 2 * u * t * C[0] + t * t * B[0],
+          u * u * A[1] + 2 * u * t * C[1] + t * t * B[1],
+        ]));
+      }
+      L.polyline(path, {
+        color: COLORS[seg.subType] || '#007AFF',
+        weight: Math.min(9, 3 + (seg.count - 1) * 1.8),   // 粗细表示次数
+        opacity: .85, lineCap: 'round', lineJoin: 'round',
+      }).addTo(trajLayer);
+      // 次数角标（颜色随交通方式）
+      if (seg.count > 1) L.marker(path[14], { icon: badgeIcon(seg.count, COLORS[seg.subType] || '#007AFF') }).addTo(trajLayer);
+    });
+  }
+
+  function focusEntry(id, key) {
+    const m = markerRefs[key];
+    if (!m) return;
+    map.setView(m.getLatLng(), Math.max(map.getZoom(), 11));
+    m.openPopup();
+    focusList(id);
+  }
+  function addTemp(name, lnglat) {
+    const m = L.marker(llOf(lnglat), { icon: pinIcon('temp') }).addTo(markersLayer);
+    m.bindPopup(`<div class="t">${name}</div><div class="m">搜索结果</div>`, { closeButton: false, offset: [0, -14] }).openPopup();
+    map.setView(m.getLatLng(), Math.max(map.getZoom(), 11));
+    setTimeout(() => markersLayer.removeLayer(m), 6000);
+  }
+  function fitAll() {
+    const pts = allPoints().filter(p => p.lnglat).map(p => llOf(p.lnglat));
+    if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.15));
+  }
+
+  // ================= 联想（全部内置数据，离线零 Key） =================
+  // 天地图地名搜索 V2.0：模糊搜索做输入联想（真实应用中对应原生侧 fetch，无跨域限制）
+  function parseLonlat(s) {
+    if (!s) return null;
+    const [lng, lat] = String(s).split(',').map(Number);
+    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+  }
+  async function tdtSuggest(q, tk) {
+    const postStr = JSON.stringify({
+      keyWord: q,
+      level: 12,                                  // 搜索级别，影响排序
+      mapBound: '73.0,3.0,136.0,54.0',            // 全国范围
+      queryType: '1',                             // 1 = 普通搜索
+      start: 0, count: 8,
+    });
+    const url = `https://api.tianditu.gov.cn/v2/search?postStr=${encodeURIComponent(postStr)}&type=query&tk=${encodeURIComponent(tk)}`;
+    const res = await fetch(url);
+    const body = await res.text();
+    let data = null;
+    try { data = JSON.parse(body); } catch { throw new Error(`HTTP ${res.status} 返回非 JSON`); }
+    if (!res.ok || data.code) throw new Error(data.message || `HTTP ${res.status}`);
+    if (data.status && data.status.infocode != null && String(data.status.infocode) !== '1000') {
+      throw new Error(data.status.cndesc || `infocode ${data.status.infocode}`);
+    }
+    const items = [];
+    // 1) 普通 POI 结果（兼容 pois 为对象{poi:[]}或数组两种结构）
+    const poiList = Array.isArray(data.pois) ? data.pois : (data.pois && data.pois.poi) || [];
+    poiList.forEach(p => {
+      if (p && p.name) items.push({ name: p.name, district: [p.typeName, p.address].filter(Boolean).join(' · '), lnglat: parseLonlat(p.lonlat) });
+    });
+    // 2) 行政区划直接命中（如搜"北京"返回北京市，带坐标）
+    if (data.area && data.area.name) {
+      items.push({ name: data.area.name, district: '行政区划', lnglat: parseLonlat(data.area.lonlat) });
+    }
+    // 3) 联想词（无坐标，选中后拿这个词再搜一次）
+    (data.prompt || []).forEach(p => {
+      if (p && p.keyword) {
+        const admins = (p.admins || []).map(a => a.adminName).filter(Boolean).join('');
+        items.push({ name: p.keyword, district: '联想词 · ' + (admins || '点击继续搜索'), lnglat: null, isPrompt: true });
+      }
+    });
+    // suggestions 字段（部分接口版本）
+    (data.suggests || []).forEach(s => {
+      if (s && s.name) items.push({ name: s.name, district: s.address || '', lnglat: parseLonlat(s.lonlat) });
+    });
+    const seen = new Set();
+    return items.filter(it => {
+      if (seen.has(it.name)) return false;
+      seen.add(it.name);
+      return true;
+    }).slice(0, 8);
+  }
+
+  function requireKey() {
+    const tk = $('tdtKey').value.trim();
+    if (!tk) flashBadge('未填天地图 Key，联想不可用');
+    return tk;
+  }
+
+  // 地理编码兜底：手输名称没走联想选择时，用天地图正地理编码解析坐标
+  async function tdtGeocode(name, tk) {
+    const url = `https://api.tianditu.gov.cn/geocoder?postStr=${encodeURIComponent(JSON.stringify({ keyWord: name }))}&tk=${encodeURIComponent(tk)}`;
+    const res = await fetch(url);
+    const body = await res.text();
+    let data = null;
+    try { data = JSON.parse(body); } catch { throw new Error(`HTTP ${res.status} 返回非 JSON`); }
+    if (data.code) throw new Error(data.message || `错误码 ${data.code}`);
+    const loc = data.location || {};
+    const lng = Number(loc.lon), lat = Number(loc.lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) throw new Error('未解析到坐标');
+    return [lng, lat];
+  }
+
+  const providers = {
+    // 搜索框 / 旅票出发地目的地 / 地点名称：统一走天地图联想
+    suggest: (q, cb) => {
+      const tk = requireKey();
+      if (!tk) return cb([]);
+      try { localStorage.setItem('tdt_demo_key', tk); } catch {}
+      tdtSuggest(q, tk)
+        .then(list => cb(list))
+        .catch(err => {
+          flashBadge('天地图搜索失败：' + (err.message || err));
+          cb([]);
+        });
+    },
+  };
+
+  function attachSuggest(input, drop, onPick, providerKey = 'suggest') {
+    let timer = null;
+    function runSearch() {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (!q) { drop.hidden = true; return; }
+      timer = setTimeout(() => providers[providerKey](q, list => {
+        drop.innerHTML = '';
+        (list || []).slice(0, 6).forEach(item => {
+          const di = document.createElement('div');
+          di.className = 'di';
+          di.innerHTML = `<div class="n">${item.name}</div><div class="d">${item.district || ''}</div>`;
+          di.addEventListener('mousedown', ev => {   // mousedown 抢在 blur 前
+            ev.preventDefault();
+            input.value = item.name;
+            drop.hidden = true;
+            if (item.isPrompt) { runSearch(); return; }   // 联想词没有坐标，拿它继续搜
+            onPick(item);
+          });
+          drop.appendChild(di);
+        });
+        if (!(list || []).length) drop.innerHTML = '<div class="empty">没有匹配的结果</div>';
+        drop.hidden = false;
+      }), 220);
+    }
+    input.addEventListener('input', runSearch);
+    input.addEventListener('blur', () => setTimeout(() => { drop.hidden = true; }, 200));
+  }
+
+  // 地图顶部搜索框：选中 → 已有印记则定位，否则落一个临时标记
+  attachSuggest($('searchInput'), $('searchDrop'), item => {
+    if (!item.lnglat) { flashBadge('该结果缺少坐标，换更具体的关键词试试'); return; }
+    const hit = allPoints().find(p => p.name === item.name && p.lnglat);
+    if (hit) focusEntry(hit.entry.id, hit.key);
+    else addTemp(item.name, item.lnglat);
+  });
+
+  // ================= 侧栏列表 =================
+  function renderList() {
+    $('entryList').innerHTML = '';
+    [...entries].sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach(e => {
+      const div = document.createElement('div');
+      div.className = 'entry'; div.dataset.id = e.id;
+      div.innerHTML = `<div class="ico ${e.type}">${entryIcon(e)}</div>
+        <div><div class="t">${entryTitle(e)}</div><div class="m">${entryMeta(e)}</div>${e.note ? `<div class="n">${e.note}</div>` : ''}</div>`;
+      div.addEventListener('click', () => {
+        const pts = entryPoints(e).filter(p => p.lnglat);
+        if (pts.length) focusEntry(e.id, pts[0].key);
+      });
+      $('entryList').appendChild(div);
+    });
+  }
+  function renderAll() { renderList(); renderMarkers(); }
+
+  // ================= 添加面板 =================
+  const picked = { origin: null, dest: null, loc: null };
+  let photoCoord = null;
+  $('tabTicket').addEventListener('click', () => setAddType('ticket'));
+  $('tabLocation').addEventListener('click', () => setAddType('location'));
+  function setAddType(t) {
+    addType = t;
+    $('tabTicket').classList.toggle('on', t === 'ticket');
+    $('tabLocation').classList.toggle('on', t === 'location');
+    $('ticketFields').hidden = t !== 'ticket';
+    $('locationFields').hidden = t !== 'location';
+  }
+  attachSuggest($('originInput'), $('originDrop'), item => { picked.origin = item; });
+  attachSuggest($('destInput'), $('destDrop'), item => { picked.dest = item; });
+  attachSuggest($('locInput'), $('locDrop'), item => { picked.loc = item; });
+
+  function hint(msg, err) { const h = $('addHint'); h.textContent = msg; h.className = err ? 'err' : ''; }
+
+  // 地点：从照片 EXIF 读 GPS（真实应用对应 expo-media-library 的 asset.location）
+  $('photoBtn').addEventListener('click', () => $('photoFile').click());
+  $('photoFile').addEventListener('change', async ev => {
+    const file = ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (!window.exifr) return hint('照片解析组件未加载（需联网加载 exifr）', true);
+    try {
+      const gps = await exifr.gps(file);
+      if (!gps || gps.latitude == null) return hint('这张照片没有 GPS 信息，换一张带定位的试试', true);
+      photoCoord = [gps.longitude, gps.latitude];
+      hint(`已读取照片位置（${gps.latitude.toFixed(4)}, ${gps.longitude.toFixed(4)}），填个名字即可添加`);
+      addTemp('照片位置预览', photoCoord);
+    } catch (e) {
+      hint('照片解析失败：' + (e.message || e), true);
+    }
+  });
+
+  $('addBtn').addEventListener('click', async () => {
+    if (addType === 'location') {
+      const name = $('locInput').value.trim();
+      if (!name) return hint('请先填写地点名称', true);
+      // 坐标优先级：照片 GPS > 联想选中的坐标 > 天地图地理编码兜底
+      let ll = photoCoord || (picked.loc && picked.loc.lnglat);
+      if (!ll) {
+        const tk = $('tdtKey').value.trim();
+        if (!tk) return hint('没有坐标：读取照片位置、从联想中选择，或填天地图 Key', true);
+        try { ll = await tdtGeocode(name, tk); } catch (e) { return hint('没解析到坐标：' + e.message, true); }
+      }
+      entries.push({ id: ++nextId, type: 'location', name, date: '今天', note: photoCoord ? '📷 来自照片 GPS' : '来自天地图', c: ll });
+      $('locInput').value = ''; picked.loc = null; photoCoord = null;
+      hint('已添加地点印记 ✓');
+    } else {
+      const origin = $('originInput').value.trim(), dest = $('destInput').value.trim();
+      if (!origin || !dest) return hint('出发地和目的地都要填', true);
+      if (origin === dest) return hint('出发地和目的地不能相同', true);
+      // 出发/到达都走天地图：联想选中的带坐标，手输名称用地理编码兜底
+      const tk = $('tdtKey').value.trim();
+      let oc = picked.origin && picked.origin.lnglat, dc = picked.dest && picked.dest.lnglat;
+      try {
+        if (!oc) {
+          if (!tk) return hint('出发地没有坐标：从联想中选择，或填天地图 Key', true);
+          oc = await tdtGeocode(origin, tk);
+        }
+        if (!dc) {
+          if (!tk) return hint('目的地没有坐标：从联想中选择，或填天地图 Key', true);
+          dc = await tdtGeocode(dest, tk);
+        }
+      } catch (e) { return hint('解析坐标失败：' + e.message, true); }
+      entries.push({
+        id: ++nextId, type: 'ticket', sub: 'train', origin, dest, no: '', date: '今天 12:00', note: '手动添加',
+        oc, dc,
+      });
+      $('originInput').value = ''; $('destInput').value = '';
+      picked.origin = picked.dest = null;
+      hint('已添加旅票，轨迹已更新 ✓');
+    }
+    renderAll();
+  });
+
+  // ================= 轨迹切换 / 缩放 =================
+  document.querySelectorAll('input[name="traj"]').forEach(r => r.addEventListener('change', () => {
+    trajMode = r.value;
+    setTrajectory(trajMode);
+  }));
+  $('zoomIn').addEventListener('click', () => map.zoomIn());
+  $('zoomOut').addEventListener('click', () => map.zoomOut());
+  $('zoomFit').addEventListener('click', fitAll);
+
+  // ================= 启动 =================
+  renderAll();
+  switchTiles();          // 默认高德瓦片
+  setTimeout(fitAll, 300); // 等首屏瓦片尺寸稳定后再取景
+</script>
+</body>
+</html>

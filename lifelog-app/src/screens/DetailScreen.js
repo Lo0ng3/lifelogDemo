@@ -17,6 +17,7 @@ import CoverIcon from '../components/CoverIcon';
 import { getIconConfig } from '../utils/icons';
 import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
+import { shortTicketTitle } from '../utils/format';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -32,27 +33,30 @@ function VideoThumb({ entry, style, contentFit = 'cover' }) {
   return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} cachePolicy="memory" />;
 }
 
-// 实况徽标：异步检测动态照片（读文件头 XMP，会话内缓存），是实况才显示
+// 实况徽标：异步检测动态照片，是实况才显示；详情内用全量模式（结果持久缓存，只算一次）
 function LiveGridBadge({ entry }) {
   const [live, setLive] = useState(false);
   useEffect(() => {
     let alive = true;
-    getLivePhotoInfo(entry).then(i => { if (alive) setLive(!!i?.live); });
+    getLivePhotoInfo(entry, { full: true }).then(i => { if (alive) setLive(!!i?.live); });
     return () => { alive = false; };
   }, [entry]);
   if (!live) return null;
   return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
 }
 
-// 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放（解析失败停留在静帧）
+// 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放。
+// 静帧始终垫底：视频出首帧才盖上来（消除开始时的闪黑），播完自动回到静帧、可再次点按重播
 function LivePhotoPage({ entry }) {
   const [info, setInfo] = useState(null);
   const [playingUri, setPlayingUri] = useState(null);
+  const [videoReady, setVideoReady] = useState(false);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let alive = true;
     setPlayingUri(null);
-    getLivePhotoInfo(entry).then(i => { if (alive) setInfo(i); });
+    setVideoReady(false);
+    getLivePhotoInfo(entry, { full: true }).then(i => { if (alive) setInfo(i); });
     return () => { alive = false; };
   }, [entry]);
   const isLive = !!info?.live;
@@ -61,41 +65,51 @@ function LivePhotoPage({ entry }) {
     setLoading(true);
     try {
       const uri = await extractMotionVideo(entry, info);
-      if (uri) setPlayingUri(uri);
+      if (uri) { setVideoReady(false); setPlayingUri(uri); }
     } finally {
       setLoading(false);
     }
   };
   return (
     <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
-      {playingUri ? (
-        <Video
-          source={{ uri: playingUri }}
-          style={{ width: '100%', height: '100%' }}
-          useNativeControls
-          resizeMode={ResizeMode.CONTAIN}
-          shouldPlay
-        />
-      ) : (
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={isLive ? handlePlay : undefined}
-          style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={isLive && !videoReady ? handlePlay : undefined}
+        style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
+      >
+        <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="memory" />
+        {isLive && !videoReady && (
+          <View style={styles.livePlayBadge}>
+            {loading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Text style={styles.livePlayText}>实况</Text>
+                <PlayCircle size={16} color="#FFF" />
+              </>
+            )}
+          </View>
+        )}
+      </TouchableOpacity>
+      {playingUri && (
+        <View
+          style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, opacity: videoReady ? 1 : 0 }}
+          pointerEvents={videoReady ? 'auto' : 'none'}
         >
-          <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="memory" />
-          {isLive && (
-            <View style={styles.livePlayBadge}>
-              {loading ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <>
-                  <Text style={styles.livePlayText}>实况</Text>
-                  <PlayCircle size={16} color="#FFF" />
-                </>
-              )}
-            </View>
-          )}
-        </TouchableOpacity>
+          <Video
+            source={{ uri: playingUri }}
+            style={{ width: '100%', height: '100%' }}
+            useNativeControls
+            resizeMode={ResizeMode.CONTAIN}
+            shouldPlay
+            onPlaybackStatusUpdate={(s) => {
+              if (!s.isLoaded) return;
+              setVideoReady(true);
+              // 播完回到封面帧，再次点按可重播
+              if (s.didJustFinish) { setPlayingUri(null); setVideoReady(false); }
+            }}
+          />
+        </View>
       )}
     </View>
   );
@@ -168,6 +182,7 @@ export default function DetailScreen({ route, navigation }) {
   }
 
   const iconConfig = getIconConfig(item);
+  const displayTitle = item.baseType === 'ticket' ? shortTicketTitle(item.title) : item.title;
 
   return (
     <View style={styles.container}>
@@ -178,26 +193,26 @@ export default function DetailScreen({ route, navigation }) {
         <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
           <ChevronLeft size={24} color="#1C1C1E" />
         </TouchableOpacity>
-        <Text style={styles.navTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={styles.navTitle} numberOfLines={1}>{displayTitle}</Text>
         <View style={styles.navBtn} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
         <Animated.View entering={FadeInDown.duration(300)} style={styles.detailHeader}>
           {coverSource ? (
-            <CoverIcon item={item} height={46} style={{ marginRight: 0 }} />
+            <CoverIcon item={item} height={80} style={{ marginRight: 0 }} />
           ) : (
             <View style={[styles.iconBox, { backgroundColor: iconConfig.iconBgColor }]}>
               {React.createElement(iconConfig.IconComponent, { color: iconConfig.iconColor, size: 28 })}
             </View>
           )}
           <View style={{ flex: 1 }}>
-            <Text style={styles.detailTitle}>{item.title}</Text>
+            <Text style={styles.detailTitle}>{displayTitle}</Text>
             <Text style={styles.detailDate}>{item.date}</Text>
           </View>
         </Animated.View>
 
-        {(item.rating || item.subtitle) && (
+        {(item.rating || item.subtitle || item.comment) && (
           <Animated.View entering={FadeInDown.duration(300).delay(60)} style={styles.reviewBox}>
             {!!item.rating && (
               <View style={styles.reviewRatingRow}>
@@ -211,6 +226,8 @@ export default function DetailScreen({ route, navigation }) {
               </View>
             )}
             {!!item.subtitle && <Text style={styles.reviewText}>{item.subtitle}</Text>}
+            {/* 旅票的 subtitle 是车次/航班号，评论存在独立字段里 */}
+            {!!item.comment && <Text style={styles.reviewText}>{item.comment}</Text>}
           </Animated.View>
         )}
 
@@ -312,8 +329,6 @@ const styles = StyleSheet.create({
   iconBox: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   detailTitle: { fontSize: 19, fontWeight: '700', color: '#1C1C1E' },
   detailDate: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  ratingText: { marginLeft: 8, fontSize: 13, color: '#6B7280' },
   reviewBox: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginTop: 12 },
   reviewRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: '#FACC15' },

@@ -1,20 +1,43 @@
 import React, { useState, useEffect, useMemo, useCallback, useContext, useRef } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Dimensions
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Dimensions, Image
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Image } from 'expo-image';
 import { Check, PlayCircle, ChevronDown, ChevronUp } from 'lucide-react-native';
 import ImageViewing from 'react-native-image-viewing';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
 
 import { LogContext } from '../context/LogContext';
-import { getVideoThumbnail, hasGalleryAccess } from '../utils/media';
-import { getLivePhotoInfo } from '../utils/livePhoto';
+import { hasGalleryAccess } from '../utils/media';
+
+// 系统微缩略图原生模块（仅 Android 打包内置）：走系统相册同款的微缩略图管道，
+// 毫秒级出图且原生侧有缓存；模块缺失（旧构建/iOS）时回退原图显示
+let Thumbs = null;
+try {
+  Thumbs = require('../modules/thumbs').default;
+} catch {}
 
 const COLS = 3;
 const CELL = Math.floor(Dimensions.get('window').width / COLS);
+const THUMB_SIZE = 512;
+
+// 常用相册白名单：相册面板默认只展示这些，其余收进「更多相册」
+const COMMON_ALBUM_KEYWORDS = ['camera', '相机', 'video', '视频', 'screenshot', '截图', 'screenshots'];
+const isCommonAlbum = (title) => {
+  const t = String(title || '').toLowerCase();
+  return COMMON_ALBUM_KEYWORDS.some(k => t.includes(k));
+};
+// 缓存/垃圾相册关键词：微信、QQ 等应用的缓存图片对选图没有意义，仅在"显示全部"时出现
+const JUNK_ALBUM_KEYWORDS = [
+  'cache', '缓存', 'thumb', 'micromsg', 'weixin', '微信', 'tencent', '腾讯',
+  'qqimg', 'mobileqq', '临时', 'temp', 'nomedia',
+];
+const isJunkAlbum = (title) => {
+  const t = String(title || '').toLowerCase();
+  return JUNK_ALBUM_KEYWORDS.some(k => t.includes(k));
+};
 
 const formatDuration = (sec) => {
   if (!sec || sec < 0) return '';
@@ -32,30 +55,23 @@ const mediaStoreUri = (asset) => {
     : `content://media/external/images/media/${asset.id}`;
 };
 
-// 视频格子封面：帧生成落盘缓存过，滑到可见才生成，开销可控
-function VideoCellThumb({ asset }) {
-  const [thumb, setThumb] = useState(null);
+// 格子缩略图：优先走系统微缩略图（毫秒级、原生侧缓存），拿不到回退原图
+function ThumbImage({ asset, style }) {
+  const isVideo = asset.mediaType === 'video';
+  const [uri, setUri] = useState(null);
   useEffect(() => {
     let alive = true;
-    getVideoThumbnail({ assetId: asset.id, uri: mediaStoreUri(asset) })
-      .then(t => { if (alive) setThumb(t); });
+    if (!Thumbs) {
+      setUri(mediaStoreUri(asset));
+      return;
+    }
+    Thumbs.getThumbnailAsync(asset.id, isVideo, THUMB_SIZE)
+      .then(r => { if (alive && r?.uri) setUri(r.uri); else if (alive) setUri(mediaStoreUri(asset)); })
+      .catch(() => { if (alive) setUri(mediaStoreUri(asset)); });
     return () => { alive = false; };
-  }, [asset.id]);
-  if (!thumb) return <View style={StyleSheet.absoluteFill} />;
-  return <Image source={{ uri: thumb }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory" />;
-}
-
-// 实况徽标：异步检测动态照片（读文件头 XMP，会话内缓存），是实况才显示
-function LiveBadge({ asset }) {
-  const [live, setLive] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    getLivePhotoInfo({ assetId: asset.id, uri: mediaStoreUri(asset) })
-      .then(info => { if (alive) setLive(!!info?.live); });
-    return () => { alive = false; };
-  }, [asset.id]);
-  if (!live) return null;
-  return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
+  }, [asset.id, isVideo]);
+  if (!uri) return <View style={[style, styles.thumbLoading]} />;
+  return <Image source={{ uri }} style={style} resizeMode="cover" />;
 }
 
 // 相册直读选图器：通过 expo-media-library 浏览相册并只记录 assetId，
@@ -90,6 +106,32 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   // 本次会话里浏览过的资产都记下来：切换相册后，之前相册里选中的项在确认时仍能取到完整信息
   const seenAssets = useRef(new Map());
+
+  // 相册面板：默认只给 常用（相机/视频/截图），其余收进「更多相册」，缓存仅在"显示全部"时沉底出现
+  const [showMoreAlbums, setShowMoreAlbums] = useState(false);
+  const [showAllAlbums, setShowAllAlbums] = useState(false);
+  const { commonAlbums, otherAlbums, junkAlbums } = useMemo(() => {
+    const common = [], other = [], junk = [];
+    albums.forEach(a => {
+      if (isJunkAlbum(a.title)) junk.push(a);
+      else if (isCommonAlbum(a.title)) common.push(a);
+      else other.push(a);
+    });
+    // 设备相册命名对不上白名单时，直接把其他相册当常用展示，避免面板空掉
+    if (common.length === 0 && other.length > 0) { common.push(...other); other.length = 0; }
+    return { commonAlbums: common, otherAlbums: other, junkAlbums: junk };
+  }, [albums]);
+
+  const panelRows = useMemo(() => {
+    const rows = [{ id: null, kind: 'all', title: '全部照片', assetCount: albums.reduce((n, a) => n + a.assetCount, 0) }];
+    commonAlbums.forEach(a => rows.push({ ...a, kind: 'common' }));
+    if (otherAlbums.length > 0) {
+      rows.push({ id: '__more__', kind: 'more', title: showMoreAlbums ? '其他相册' : `更多相册（${otherAlbums.length}）`, assetCount: otherAlbums.reduce((n, a) => n + a.assetCount, 0) });
+      if (showMoreAlbums) otherAlbums.forEach(a => rows.push({ ...a, kind: 'other' }));
+    }
+    if (showAllAlbums) junkAlbums.forEach(a => rows.push({ ...a, kind: 'junk' }));
+    return rows;
+  }, [albums, commonAlbums, otherAlbums, junkAlbums, showMoreAlbums, showAllAlbums]);
 
   // 已被其它记录引用的资产：禁止重复添加（同一张照片/视频只允许挂在一个记录上）
   const usedElsewhere = useMemo(() => {
@@ -132,13 +174,12 @@ export default function MediaPickerScreen({ route, navigation }) {
         setLimited(perm.accessPrivileges === 'limited');
         setStatus('granted');
         load(null, null);
-        // 相册列表按媒体数排序，取前 30 个足够覆盖日常使用
+        // 相册列表按媒体数排序；缓存相册在展示层过滤（可用"显示全部"找回）
         MediaLibrary.getAlbumsAsync({ mediaType: ['photo', 'video'] })
           .then(list => {
             setAlbums(list
               .filter(a => a.assetCount > 0)
-              .sort((a, b) => b.assetCount - a.assetCount)
-              .slice(0, 30));
+              .sort((a, b) => b.assetCount - a.assetCount));
           })
           .catch(() => {});
       } else {
@@ -246,21 +287,13 @@ export default function MediaPickerScreen({ route, navigation }) {
       >
         {isVideo ? (
           <View style={styles.videoBox}>
-            <VideoCellThumb asset={item} />
+            <ThumbImage asset={item} style={styles.videoThumb} />
             <View style={styles.playOverlay}><PlayCircle size={26} color="#FFF" /></View>
             {!!item.duration && <Text style={styles.duration}>{formatDuration(item.duration)}</Text>}
           </View>
         ) : (
-          <Image
-            source={{ uri: mediaStoreUri(item) }}
-            style={styles.thumb}
-            contentFit="cover"
-            transition={80}
-            recyclingKey={item.id}
-            cachePolicy="memory"
-          />
+          <ThumbImage asset={item} style={styles.thumb} />
         )}
-        {!isVideo && <LiveBadge asset={item} />}
         {isUsed ? (
           <View style={styles.usedOverlay}><Text style={styles.usedText}>已添加</Text></View>
         ) : (
@@ -329,6 +362,7 @@ export default function MediaPickerScreen({ route, navigation }) {
             renderItem={renderItem}
             onEndReachedThreshold={0.5}
             onEndReached={() => { if (!loading && endCursor) load(endCursor, albumId); }}
+            getItemLayout={(_, index) => ({ length: CELL, offset: CELL * Math.floor(index / COLS), index })}
             ListFooterComponent={loading ? <ActivityIndicator style={{ margin: 16 }} color="#007AFF" /> : null}
             ListHeaderComponent={limited ? (
               <Text style={styles.limitedHint}>当前仅允许访问部分照片，如需完整相册请在系统设置中开放「所有照片」</Text>
@@ -336,18 +370,46 @@ export default function MediaPickerScreen({ route, navigation }) {
             ListEmptyComponent={!loading ? <Text style={styles.emptyText}>相册里没有照片或视频</Text> : null}
           />
           {showAlbums && (
-            <View style={styles.albumPanel}>
-              <FlatList
-                data={[{ id: null, title: '全部照片', assetCount: albums.reduce((n, a) => n + a.assetCount, 0) }, ...albums]}
-                keyExtractor={(a, i) => String(a.id ?? 'all') + i}
-                renderItem={({ item }) => (
-                  <TouchableOpacity style={styles.albumRow} onPress={() => switchAlbum(item)}>
-                    <Text style={[styles.albumName, (item.id || null) === albumId && styles.albumNameActive]} numberOfLines={1}>{item.title}</Text>
-                    <Text style={styles.albumCount}>{item.assetCount}</Text>
+            <Reanimated.View entering={FadeIn.duration(150)} style={styles.albumPanel}>
+              {junkAlbums.length > 0 && (
+                <View style={styles.albumFilterRow}>
+                  <Text style={styles.albumFilterText}>
+                    {showAllAlbums ? `已显示 ${junkAlbums.length} 个缓存相册` : `${junkAlbums.length} 个缓存相册已隐藏`}
+                  </Text>
+                  <TouchableOpacity onPress={() => setShowAllAlbums(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={styles.albumFilterBtn}>{showAllAlbums ? '收起' : '显示'}</Text>
                   </TouchableOpacity>
-                )}
+                </View>
+              )}
+              <FlatList
+                data={panelRows}
+                keyExtractor={(a) => String(a.id ?? a.kind ?? 'x')}
+                renderItem={({ item }) => {
+                  const isMore = item.kind === 'more';
+                  const isJunk = item.kind === 'junk';
+                  const isCurrent = !isMore && (item.id || null) === albumId;
+                  return (
+                    <TouchableOpacity
+                      style={[styles.albumRow, isJunk && styles.albumRowJunk]}
+                      onPress={() => (isMore ? setShowMoreAlbums(v => !v) : switchAlbum(item))}
+                    >
+                      <Text
+                        style={[
+                          styles.albumName,
+                          isCurrent && styles.albumNameActive,
+                          isJunk && styles.albumNameJunk,
+                          isMore && styles.albumNameMore,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {item.title}
+                      </Text>
+                      <Text style={styles.albumCount}>{isMore ? (showMoreAlbums ? '▴' : '▾') : item.assetCount}</Text>
+                    </TouchableOpacity>
+                  );
+                }}
               />
-            </View>
+            </Reanimated.View>
           )}
         </View>
       )}
@@ -392,6 +454,8 @@ const styles = StyleSheet.create({
   cell: { width: CELL, height: CELL, padding: 1.5 },
   cellSelected: { opacity: 1 },
   thumb: { flex: 1, borderRadius: 4, backgroundColor: '#E5E5EA' },
+  thumbLoading: { backgroundColor: '#E5E5EA' },
+  videoThumb: { flex: 1, backgroundColor: '#26262A' },
   videoBox: { flex: 1, borderRadius: 4, backgroundColor: '#1C1C1E', overflow: 'hidden' },
   playOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   duration: { position: 'absolute', right: 4, bottom: 4, color: '#FFF', fontSize: 10, textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 2 },
@@ -410,7 +474,13 @@ const styles = StyleSheet.create({
   albumRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F2F2F7' },
   albumName: { flex: 1, fontSize: 15, color: '#1C1C1E', marginRight: 12 },
   albumNameActive: { color: '#007AFF', fontWeight: '600' },
+  albumNameMore: { color: '#007AFF' },
+  albumNameJunk: { color: '#C7CAD1' },
+  albumRowJunk: { opacity: 0.6 },
   albumCount: { fontSize: 13, color: '#8E8E93' },
+  albumFilterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#F9FAFB' },
+  albumFilterText: { fontSize: 12, color: '#9CA3AF' },
+  albumFilterBtn: { fontSize: 13, color: '#007AFF', fontWeight: '600' },
   limitedHint: { fontSize: 12, color: '#B45309', backgroundColor: '#FEF3C7', margin: 8, padding: 10, borderRadius: 8, textAlign: 'center' },
   emptyText: { textAlign: 'center', color: '#9CA3AF', marginTop: 40 },
 });

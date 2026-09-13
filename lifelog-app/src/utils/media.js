@@ -6,6 +6,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { Image as RNImage } from 'react-native';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -115,7 +116,53 @@ export const isVideoEntry = (entry) => {
 // 豆瓣海报是竖版 2:3，用于没有宽高比信息时的封面显示
 export const DOUBAN_POSTER_RATIO = 2 / 3;
 
-// 把网络海报下载到本地持久目录，作为离线可用的封面；失败时返回原网络地址
+// 封面落盘的长边上限：显示端只有 46~64pt（3 倍屏 ≈ 192px），360px 有充足冗余，
+// 单张从 ~200KB 降到 ~25KB，备份体积同步受益
+const COVER_MAX_EDGE = 360;
+
+const ensureCoversDir = async () => {
+  const dir = `${FileSystem.documentDirectory}covers`;
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  return dir;
+};
+
+// 把封面文件缩到长边 360px 并存进 covers 目录，返回新路径。
+// 长边 ≤ 720px（2 倍目标）的视为已是小图，原样挪进 covers 目录；
+// 探测/缩放失败返回 null（调用方回退原路径）
+export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
+  try {
+    const stat = await FileSystem.getInfoAsync(uri);
+    if (!stat.exists) return null;
+    const dims = await new Promise((resolve) => {
+      RNImage.getSize(uri, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
+    });
+    let workUri = uri;
+    if (dims) {
+      const long = Math.max(dims.w, dims.h);
+      if (long > maxEdge * 2) {
+        const scale = maxEdge / long;
+        const rendered = await ImageManipulator.manipulate(uri)
+          .resize({ width: Math.round(dims.w * scale), height: Math.round(dims.h * scale) })
+          .renderAsync();
+        const saved = await rendered.saveAsync({ compress: 0.85, format: SaveFormat.JPEG });
+        workUri = saved.uri;
+      }
+    }
+    const dir = await ensureCoversDir();
+    const ext = (workUri.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
+    const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+    await FileSystem.copyAsync({ from: workUri, to: dest });
+    if (workUri !== uri) {
+      try { await FileSystem.deleteAsync(workUri, { idempotent: true }); } catch {}
+    }
+    return dest;
+  } catch {
+    return null;
+  }
+};
+
+// 把网络海报下载到本地持久目录，缩成小图后作为离线可用的封面；失败时返回原网络地址
 // 豆瓣图床有防盗链：必须带浏览器 UA + Referer，否则一律 418 拒绝
 const DOWNLOAD_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -125,13 +172,16 @@ const DOWNLOAD_HEADERS = {
 export const downloadRemoteCover = async (url) => {
   if (!url || !url.startsWith('http')) return url || null;
   try {
-    const dir = `${FileSystem.documentDirectory}covers`;
-    const dirInfo = await FileSystem.getInfoAsync(dir);
-    if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-    const ext = (url.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
-    const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-    const { uri } = await FileSystem.downloadAsync(url, dest, { headers: DOWNLOAD_HEADERS });
-    return uri;
+    const tmp = `${FileSystem.cacheDirectory}cover_dl_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const { uri: downloaded } = await FileSystem.downloadAsync(url, tmp, { headers: DOWNLOAD_HEADERS });
+    const small = await downscaleCover(downloaded, COVER_MAX_EDGE);
+    if (small) {
+      try { await FileSystem.deleteAsync(downloaded, { idempotent: true }); } catch {}
+      return small;
+    }
+    // 缩图失败：原图挪进 covers 目录兜底
+    const moved = await downscaleCover(downloaded, 100000);
+    return moved || downloaded;
   } catch {
     return url;
   }
@@ -203,8 +253,9 @@ export const cleanupMediaCaches = async () => {
 
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损
 // - ImagePicker：旧版系统选择器留在缓存里的媒体拷贝（存储膨胀的历史遗留）
-// - VideoThumbnails：视频封面帧（每次启动会重新生成，不清会一直累积）
-// - expo-image 磁盘缓存（Glide）：相册缩略图等处理结果，浏览多了可达上百兆
+// - VideoThumbnails：expo-video-thumbnails 的临时输出（正式封面帧在 videoThumbs/，不受影响）
+// 注意：expo-image 的磁盘缓存【不在启动清理范围】——清掉会导致列表封面每次重启都重新加载，
+// 它有系统级自动淘汰，需要手动释放时走侧边栏「清理缓存」
 export const cleanTransientCaches = async () => {
   try {
     const dirs = [
@@ -215,7 +266,6 @@ export const cleanTransientCaches = async () => {
       const info = await FileSystem.getInfoAsync(dir);
       if (info.exists) await FileSystem.deleteAsync(dir, { idempotent: true });
     }
-    await Image.clearDiskCache();
   } catch {
     // 清理失败不影响使用
   }

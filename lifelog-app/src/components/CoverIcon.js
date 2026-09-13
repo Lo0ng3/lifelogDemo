@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { getIconConfig } from '../utils/icons';
-import { resolveMediaUri, remoteImageSource, DOUBAN_POSTER_RATIO } from '../utils/media';
+import { resolveMediaUri, remoteImageSource } from '../utils/media';
 
-// 封面图标：列表/详情共用的左侧封面显示
-// 固定方形槽位保证各行图片与图片、文字与文字对齐；图片按原始比例完整放入槽内（contain，不裁切）
-export default function CoverIcon({ item, height = 56, style }) {
+// 封面展示：固定方形槽位（透明、无底色），封面按原比例完整显示并居中（contain），
+// 不裁切不拉伸不强制铺满，槽位内空隙即卡片背景。
+// 槽位尺寸由调用方决定（列表 64 / 详情 80），文字起点因此对所有条目统一。
+// 无封面时回退类型图标（现状一致）。
+export default function CoverIcon({ item, height = 64, style }) {
   const { IconComponent, iconColor, iconBgColor } = getIconConfig(item);
   const entry = item?.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
   const [uri, setUri] = useState(null);
@@ -17,30 +19,26 @@ export default function CoverIcon({ item, height = 56, style }) {
   }, [entry]);
 
   const src = uri || item?.coverUrl;
-  if (src) {
-    // 比例优先级：相册图记录的比例 → 网络封面记录的比例 → 豆瓣海报 2:3 → 方形
-    const ratio = entry?.ratio
-      || item?.coverRatio
-      || (item?.coverUrl?.includes('doubanio.com') ? DOUBAN_POSTER_RATIO : 1);
-    const width = Math.min(Math.max(height * ratio, height * 0.55), height * 2.2);
-    return (
-      <Image
-        source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
-        style={[styles.cover, { width: height, height }, style]}
-        contentFit="contain"
-        transition={150}
-        cachePolicy="memory"
-      />
-    );
-  }
   return (
-    <View style={[styles.iconBox, { backgroundColor: iconBgColor, width: height, height }, style]}>
-      <IconComponent color={iconColor} size={Math.round(height * 0.5)} />
+    <View style={[styles.slot, { width: height, height }, style]}>
+      {src ? (
+        <Image
+          source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
+          style={StyleSheet.absoluteFill}
+          contentFit="contain"
+          transition={150}
+          cachePolicy="memory"
+        />
+      ) : (
+        <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
+          <IconComponent color={iconColor} size={Math.round(height * 0.5)} />
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  cover: { borderRadius: 8, marginRight: 12, backgroundColor: '#F3F4F6' },
-  iconBox: { borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 8 },
+  iconBox: { width: '100%', height: '100%', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 });

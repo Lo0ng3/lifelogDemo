@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>旅票短标题 + 地图 iOS 风格 · Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #F2F2F7; color: #1C1C1E; padding: 32px 24px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6B7280; margin-bottom: 28px; line-height: 1.6; }
+  h2 { font-size: 16px; margin: 30px 0 12px; }
+  h2 .tag { font-size: 11px; background: #E0F2FE; color: #007AFF; border-radius: 5px; padding: 2px 7px; vertical-align: 2px; margin-right: 8px; }
+  .cols { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .note { font-size: 12.5px; color: #6B7280; line-height: 1.75; }
+  .note b { color: #1C1C1E; }
+  .panel { background: #FFF; border-radius: 14px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+
+  /* 列表标题对比 */
+  .listCard { border: 1px solid #E5E7EB; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background: #FFF; }
+  .lc-head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .lc-title { font-size: 15px; font-weight: 600; }
+  .lc-title.old { font-size: 12px; color: #6B7280; }
+  .lc-date { font-size: 11px; color: #8E8E93; flex: none; margin-left: 8px; padding-top: 2px; }
+  .lc-sub { font-size: 12px; color: #8E8E93; margin-top: 4px; }
+  .optTag { display: inline-block; font-size: 11px; border-radius: 5px; padding: 2px 7px; margin-bottom: 10px; }
+  .optTag.old { background: #FEF3C7; color: #B45309; }
+  .optTag.new { background: #DCFCE7; color: #16A34A; }
+  .ruleBox { margin-top: 12px; background: #F9FAFB; border-radius: 10px; padding: 10px 12px; }
+
+  /* 手机 mock：iOS 风格地图 */
+  .phone { width: 320px; flex: none; border: 7px solid #1C1C1E; border-radius: 34px; overflow: hidden; background: #F6F4F0; position: relative; }
+  .phead { padding: 14px 16px 6px; background: transparent; position: relative; z-index: 5; }
+  .phead .big { font-size: 26px; font-weight: 700; letter-spacing: .2px; }
+  .phead .small { font-size: 12px; color: #8E8E93; margin-top: 2px; }
+  .pseg { position: absolute; right: 14px; top: 16px; display: flex; background: rgba(118,118,128,.12); border-radius: 9px; padding: 2px; }
+  .pseg span { font-size: 12px; padding: 4px 14px; border-radius: 7px; color: #6B7280; }
+  .pseg span.on { background: #FFF; color: #1C1C1E; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .map { position: relative; height: 470px; }
+  .map svg { display: block; }
+  .ctl { position: absolute; right: 12px; top: 46px; background: rgba(255,255,255,.88); border-radius: 20px; box-shadow: 0 4px 16px rgba(0,0,0,.14); overflow: hidden; width: 44px; }
+  .ctl div { height: 42px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #3C3C43; }
+  .ctl div + div { border-top: 0.5px solid rgba(60,60,67,.18); }
+  .trajCard { position: absolute; left: 12px; bottom: 14px; background: rgba(255,255,255,.9); border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 10px 14px; width: 172px; }
+  .trajCard .r1 { display: flex; justify-content: space-between; align-items: center; }
+  .trajCard .r1 b { font-size: 13px; font-weight: 600; }
+  .sw { width: 40px; height: 24px; border-radius: 12px; background: #34C759; position: relative; }
+  .sw::after { content: ""; position: absolute; top: 2px; width: 20px; height: 20px; border-radius: 10px; background: #FFF; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .sw.on::after { right: 2px; }
+  .sw.off { background: rgba(120,120,128,.32); }
+  .sw.off::after { left: 2px; }
+  .trajCard .r2 { font-size: 10.5px; color: #8E8E93; margin-top: 4px; line-height: 1.5; }
+  .pill { position: absolute; bottom: 16px; right: 12px; background: rgba(255,255,255,.9); border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 7px 14px; font-size: 11.5px; color: #3C3C43; }
+  .cap { text-align: center; font-size: 12px; color: #6B7280; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h1>旅票短标题 + 地图 iOS 风格</h1>
+  <p class="sub">两项改动的设计稿：① 旅票标题<b>显示时去掉结尾的「国际机场 / 机场」</b>（数据不变，别名优先）；② 地图页整体换成 iOS 风格（大标题、毛玻璃胶囊控件、iOS 开关管轨迹）。确认后和上一批已确认的修复一起实现。</p>
+
+  <h2><span class="tag">旅票标题</span>显示时去掉「机场 / 国际机场」后缀</h2>
+  <div class="cols">
+    <div class="panel" style="flex:1; min-width: 270px;">
+      <div class="optTag old">现在</div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title old">北京首都国际机场 → 上海虹桥国际机…</span><span class="lc-date">10-01</span></div>
+        <div class="lc-sub">MU5101</div>
+      </div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title old">上海虹桥 → 北京南</span><span class="lc-date">10-07</span></div>
+        <div class="lc-sub">G1</div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1; min-width: 270px;">
+      <div class="optTag new">改后（显示层去后缀）</div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title">北京首都 → 上海虹桥</span><span class="lc-date">10-01</span></div>
+        <div class="lc-sub">MU5101</div>
+      </div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title">上海虹桥 → 北京南</span><span class="lc-date">10-07</span></div>
+        <div class="lc-sub">G1</div>
+      </div>
+      <div class="ruleBox">
+        <p class="note"><b>规则：</b>仅显示层处理——结尾的「国际机场」「机场」去掉（"北京南站"这类火车站名不受影响）；你手动起的<b>别名优先</b>；存储数据、地图气泡、详情页同步用短名。<b>不适用时原样显示</b>（比如名字本身不含机场后缀）。</p>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="tag">地图页</span>iOS 风格重设计</h2>
+  <div class="cols">
+    <div>
+      <div class="phone">
+        <div class="phead">
+          <div class="big">地图</div>
+          <div class="small">3 段行程 · 5 个地点</div>
+          <div class="pseg"><span>列表</span><span class="on">地图</span></div>
+        </div>
+        <div class="map">
+          <svg viewBox="0 0 306 470" width="306" height="470">
+            <rect width="306" height="470" fill="#F6F4EF"/>
+            <ellipse cx="60" cy="120" rx="70" ry="46" fill="#DCE9D5"/>
+            <ellipse cx="260" cy="410" rx="70" ry="42" fill="#DCE9D5"/>
+            <path d="M -10 300 C 90 270, 200 320, 316 290" fill="none" stroke="#C7DDF2" stroke-width="22" stroke-linecap="round"/>
+            <path d="M -10 150 C 100 140, 220 180, 316 150" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+            <path d="M 80 -10 C 90 120, 60 300, 100 480" fill="none" stroke="#FFFFFF" stroke-width="9"/>
+            <path d="M -10 150 C 100 140, 220 180, 316 150" fill="none" stroke="#F3D27A" stroke-width="1.6" stroke-dasharray="10 8"/>
+            <!-- 轨迹弧线：✈️蓝 / 🚄绿 -->
+            <path d="M 70 385 Q 150 330 195 260" fill="none" stroke="#10B981" stroke-width="4.5" stroke-linecap="round" opacity=".85"/>
+            <path d="M 195 260 Q 240 170 258 96" fill="none" stroke="#2F7BF6" stroke-width="4.5" stroke-linecap="round" opacity=".85"/>
+            <circle cx="70" cy="385" r="7" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+            <circle cx="195" cy="260" r="6" fill="#10B981" stroke="#FFF" stroke-width="2"/>
+            <circle cx="258" cy="96" r="6" fill="#2F7BF6" stroke="#FFF" stroke-width="2"/>
+            <circle cx="120" cy="200" r="6" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+            <circle cx="225" cy="360" r="6" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+          </svg>
+          <div class="ctl"><div>＋</div><div>－</div><div>⌖</div></div>
+          <div class="trajCard">
+            <div class="r1"><b>出行轨迹</b><span class="sw on"></span></div>
+            <div class="r2">关闭时同时隐藏旅票的出发/到达标点</div>
+          </div>
+          <div class="pill">3 段行程 · 5 个地点</div>
+        </div>
+      </div>
+      <p class="cap">轨迹开（默认）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="phead">
+          <div class="big">地图</div>
+          <div class="small">3 段行程 · 5 个地点</div>
+          <div class="pseg"><span>列表</span><span class="on">地图</span></div>
+        </div>
+        <div class="map">
+          <svg viewBox="0 0 306 470" width="306" height="470">
+            <rect width="306" height="470" fill="#F6F4EF"/>
+            <ellipse cx="60" cy="120" rx="70" ry="46" fill="#DCE9D5"/>
+            <ellipse cx="260" cy="410" rx="70" ry="42" fill="#DCE9D5"/>
+            <path d="M -10 300 C 90 270, 200 320, 316 290" fill="none" stroke="#C7DDF2" stroke-width="22" stroke-linecap="round"/>
+            <path d="M -10 150 C 100 140, 220 180, 316 150" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+            <path d="M 80 -10 C 90 120, 60 300, 100 480" fill="none" stroke="#FFFFFF" stroke-width="9"/>
+            <circle cx="70" cy="385" r="7" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+            <circle cx="120" cy="200" r="6" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+            <circle cx="225" cy="360" r="6" fill="#EE4D3D" stroke="#FFF" stroke-width="2"/>
+          </svg>
+          <div class="ctl"><div>＋</div><div>－</div><div>⌖</div></div>
+          <div class="trajCard">
+            <div class="r1"><b>出行轨迹</b><span class="sw off"></span></div>
+            <div class="r2">仅显示地点标点，旅票起终点与线路已隐藏</div>
+          </div>
+          <div class="pill">3 段行程 · 5 个地点</div>
+        </div>
+      </div>
+      <p class="cap">轨迹关（起终点标点一并隐藏，只留地点）</p>
+    </div>
+    <div class="panel" style="flex:1; min-width: 250px;">
+      <p class="note">
+        <b>iOS 风格要点：</b><br>
+        1. 大标题「地图」+ 灰色摘要行（N 段行程 · N 个地点），右上角保留 列表/地图 切换；<br>
+        2. 右侧毛玻璃胶囊控件：放大 / 缩小 / 回到全部（⌖），半透明白 + 大圆角 + 柔和阴影；<br>
+        3. 左下角浮动卡片：出行轨迹用 <b>iOS 绿色开关</b>，关闭时旅票起终点一起隐藏，只留地点；<br>
+        4. 右下角摘要胶囊；<br>
+        5. 底图配色向 Apple Maps 靠拢（米白底、白色道路、淡绿公园、淡蓝水系）。<br><br>
+        点标记的弹窗、交通配色（✈️蓝 🚄绿 🚌橙 🚢紫）保持不变。
+      </p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>添加印记 · 二级类型选择 Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(160deg, #E8EAF0 0%, #DDE2EA 100%);
+    min-height: 100vh;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 24px;
+  }
+  .stage { display: flex; gap: 48px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+
+  /* ---------- 手机外壳 ---------- */
+  .phone {
+    width: 392px; height: 820px;
+    background: #F2F2F7;
+    border-radius: 44px;
+    border: 10px solid #1C1C1E;
+    box-shadow: 0 30px 60px rgba(0,0,0,.28);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .statusbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 26px 4px; font-size: 14px; font-weight: 600; color: #1C1C1E;
+    background: #FFF;
+  }
+  .batt { display: inline-block; width: 22px; height: 11px; border: 1.5px solid #1C1C1E; border-radius: 3px; position: relative; margin-left: 6px; vertical-align: -1px; }
+  .batt::before { content: ""; position: absolute; inset: 1.5px; right: 5px; background: #1C1C1E; border-radius: 1px; }
+  .batt::after { content: ""; position: absolute; right: -4px; top: 2.5px; width: 2px; height: 5px; background: #1C1C1E; border-radius: 1px; }
+  .appbar {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #FFF; padding: 12px 16px 14px;
+  }
+  .appbar .cancel { font-size: 16px; color: #6B7280; cursor: pointer; }
+  .appbar .title { font-size: 17px; font-weight: 600; color: #1C1C1E; }
+  .appbar .save { font-size: 16px; font-weight: 600; color: #007AFF; cursor: pointer; }
+  .appbar .save:active { opacity: .6; }
+
+  .content { flex: 1; overflow-y: auto; padding: 16px; }
+  .content::-webkit-scrollbar { width: 0; }
+
+  .card { background: #FFF; border-radius: 14px; padding: 16px; }
+
+  label { display: block; font-size: 13px; font-weight: 500; color: #9CA3AF; margin-bottom: 8px; }
+  label.mt { margin-top: 16px; }
+  .input {
+    display: flex; align-items: center; gap: 8px;
+    background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 10px;
+    padding: 0 12px; height: 44px; margin-bottom: 4px;
+  }
+  .input input { flex: 1; border: none; outline: none; background: transparent; font-size: 15px; color: #1C1C1E; font-family: inherit; }
+  .hint { font-size: 12px; color: #9CA3AF; margin-top: 8px; }
+
+  /* ---------- 类型字段（点开二级选择） ---------- */
+  .typeRow {
+    display: flex; align-items: center; gap: 8px;
+    background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 10px;
+    padding: 0 12px; height: 46px; margin-bottom: 16px; cursor: pointer;
+  }
+  .typeRow:active { background: #F3F4F6; }
+  .typeLabel { font-size: 15px; color: #9CA3AF; }
+  .typeValue { flex: 1; font-size: 15px; font-weight: 600; color: #1C1C1E; }
+
+  /* ---------- 底部弹层：二级选择 ---------- */
+  .overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,.4);
+    z-index: 10; opacity: 0; pointer-events: none; transition: opacity .22s;
+  }
+  .overlay.open { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 11;
+    background: #FFF; border-radius: 22px 22px 0 0;
+    padding: 18px 16px 30px;
+    transform: translateY(105%); transition: transform .26s cubic-bezier(.32,.72,.35,1);
+  }
+  .sheet.open { transform: translateY(0); }
+  .sheetHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .sheetHeader .t { font-size: 17px; font-weight: 600; color: #1C1C1E; }
+  .sheetHeader .x { font-size: 15px; color: #9CA3AF; cursor: pointer; padding: 4px 8px; }
+  .lv1 { display: flex; gap: 10px; margin-bottom: 18px; }
+  .catCard {
+    flex: 1; border: 1.5px solid #E5E7EB; border-radius: 12px;
+    padding: 13px 0 11px; text-align: center; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .catCard span { font-size: 14px; font-weight: 500; color: #6B7280; }
+  .catCard.active { border-color: #007AFF; background: #F0F8FF; }
+  .catCard.active span { color: #007AFF; font-weight: 600; }
+  .lv2 { display: flex; flex-wrap: wrap; gap: 10px; min-height: 40px; }
+  .chip {
+    padding: 9px 18px; background: #F9FAFB; border: 1px solid #F3F4F6;
+    border-radius: 19px; font-size: 14px; color: #4B5563; cursor: pointer; font-family: inherit;
+  }
+  .chip:hover { background: #F3F4F6; }
+  .lv2Empty { font-size: 13px; color: #9CA3AF; padding: 10px 2px; }
+
+  /* 娱乐检索联想 */
+  .acbox {
+    margin-top: 8px; background: #FFF; border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.14); overflow: hidden;
+    border: 1px solid #F3F4F6;
+  }
+  .acitem { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; }
+  .acitem:last-child { border-bottom: none; }
+  .acitem:hover { background: #F9FAFB; }
+  .acitem .t { font-size: 15px; color: #1C1C1E; }
+  .acitem .m { font-size: 12px; color: #8E8E93; margin-top: 1px; }
+  .acitem.empty { color: #9CA3AF; font-size: 13px; cursor: default; }
+  .tag { flex: none; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; }
+  .tag-影视 { color: #007AFF; background: #E0F2FE; }
+  .tag-书籍 { color: #A855F7; background: #F3E8FF; }
+  .tag-游戏 { color: #F97316; background: #FFEDD5; }
+
+  .divider { height: 1px; background: #F3F4F6; margin: 16px 0; }
+
+  .dateRow { display: flex; align-items: center; }
+  .dateBox {
+    width: 48px; height: 42px; text-align: center;
+    background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px;
+    font-size: 16px; font-weight: 600; color: #1C1C1E; font-family: inherit; outline: none;
+  }
+  .dateBox.wide { width: 64px; }
+  .unit { font-size: 14px; color: #6B7280; font-weight: 500; margin: 0 6px; }
+
+  .starRow { display: flex; align-items: center; }
+  .star { font-size: 30px; color: #E5E7EB; cursor: pointer; margin-right: 8px; user-select: none; line-height: 1; }
+  .star.on { color: #FACC15; }
+  .score { font-size: 17px; font-weight: 700; color: #FACC15; margin-left: 6px; }
+
+  .comment {
+    width: 100%; height: 100px; resize: none;
+    background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 10px;
+    padding: 12px; font-size: 15px; color: #1C1C1E; font-family: inherit; outline: none;
+  }
+
+  .imgGrid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .imgTile {
+    width: calc((100% - 16px) / 3); aspect-ratio: 1; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; position: relative;
+  }
+  .imgTile.add {
+    background: #F9FAFB; border: 1.5px dashed #E5E7EB; color: #9CA3AF;
+    font-size: 26px; cursor: pointer; font-weight: 300;
+  }
+  .imgTile.photo { background: linear-gradient(135deg, #E8EDF5, #DDE4EE); cursor: pointer; }
+  .imgTile.photo::after {
+    content: "×"; position: absolute; top: 2px; right: 6px;
+    color: #FFF; font-size: 13px; background: rgba(0,0,0,.55);
+    width: 18px; height: 18px; border-radius: 9px; line-height: 18px; text-align: center;
+  }
+
+  .homebar { height: 22px; background: #FFF; display: flex; justify-content: center; align-items: center; }
+  .homebar::after { content: ""; width: 120px; height: 5px; border-radius: 3px; background: #1C1C1E; opacity: .85; }
+
+  .toast {
+    position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: rgba(28,28,30,.92); color: #FFF; font-size: 14px;
+    padding: 10px 20px; border-radius: 20px; pointer-events: none;
+    opacity: 0; transition: opacity .25s; z-index: 20;
+  }
+  .toast.show { opacity: 1; }
+
+  .tip { text-align: center; font-size: 13px; color: #6B7280; margin-top: 14px; max-width: 380px; }
+
+  /* ---------- 右侧说明面板 ---------- */
+  .panel { width: 330px; color: #1C1C1E; }
+  .panel h1 { font-size: 20px; margin-bottom: 6px; }
+  .panel .sub { font-size: 13px; color: #6B7280; line-height: 1.6; margin-bottom: 16px; }
+  .panel ul { list-style: none; margin-bottom: 20px; }
+  .panel li {
+    font-size: 13.5px; line-height: 1.65; color: #374151;
+    padding: 9px 12px; background: #FFF; border-radius: 10px; margin-bottom: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .panel li b { color: #1C1C1E; }
+  .panel h2 { font-size: 15px; margin-bottom: 8px; }
+  .panel pre {
+    background: #1C1C1E; color: #A5F3FC; border-radius: 12px;
+    padding: 14px; font-size: 11.5px; line-height: 1.55;
+    overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-all;
+    font-family: Consolas, "Courier New", monospace;
+  }
+  @media (max-width: 900px) { .panel { width: 392px; } }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="phone-wrap">
+    <div class="phone">
+      <div class="statusbar"><span>9:41</span><span>5G<i class="batt"></i></span></div>
+      <div class="appbar">
+        <span class="cancel">取消</span>
+        <span class="title" id="pageTitle">新印记 · 旅票</span>
+        <span class="save" id="saveBtn">保存</span>
+      </div>
+
+      <div class="content">
+        <div class="card">
+          <!-- 类型字段：点开二级选择（弹层），替代原来的分段控件 + chips -->
+          <div class="typeRow" id="typeRow">
+            <span class="typeLabel">类型</span>
+            <span class="typeValue" id="typeValue">旅票 · 机票</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7CAD1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </div>
+
+          <!-- 旅票 -->
+          <div id="fields-ticket">
+            <label>出发地</label>
+            <div class="input"><input id="ticketOrigin" placeholder="如 北京"></div>
+            <label class="mt">目的地</label>
+            <div class="input"><input id="ticketDest" placeholder="如 上海"></div>
+            <label class="mt" id="ticketNoLabel">航班号</label>
+            <div class="input"><input id="ticketNo" placeholder="如 MU5101"></div>
+          </div>
+
+          <!-- 地点 -->
+          <div id="fields-location" hidden>
+            <label>地点名称</label>
+            <div class="input">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              <input id="locationName" placeholder="如 外滩">
+            </div>
+            <div class="hint">提示：demo 中地点联想为静态示意</div>
+          </div>
+
+          <!-- 娱乐 -->
+          <div id="fields-media" hidden>
+            <label>记录作品</label>
+            <div class="input">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="mediaName" placeholder="输入后联想检索" autocomplete="off">
+            </div>
+            <div class="acbox" id="acbox" hidden></div>
+          </div>
+
+          <div class="divider"></div>
+
+          <label>发生日期</label>
+          <div class="dateRow">
+            <input class="dateBox wide" id="y" maxlength="4" inputmode="numeric" value="2026">
+            <span class="unit">年</span>
+            <input class="dateBox" id="m" maxlength="2" inputmode="numeric" value="9">
+            <span class="unit">月</span>
+            <input class="dateBox" id="d" maxlength="2" inputmode="numeric" value="12">
+            <span class="unit">日</span>
+          </div>
+
+          <label class="mt">具体时间（选填）</label>
+          <div class="dateRow">
+            <input class="dateBox" id="hh" maxlength="2" inputmode="numeric" placeholder="08">
+            <span class="unit">时</span>
+            <input class="dateBox" id="mm" maxlength="2" inputmode="numeric" placeholder="30">
+            <span class="unit">分</span>
+          </div>
+
+          <div class="divider"></div>
+
+          <label>评分</label>
+          <div class="starRow" id="starRow"><span class="score" id="score"></span></div>
+
+          <div class="divider"></div>
+
+          <label>评论</label>
+          <textarea class="comment" id="comment" placeholder="写点什么…"></textarea>
+
+          <div class="divider"></div>
+
+          <label id="imgLabel">票根 / 留影（0）</label>
+          <div class="imgGrid" id="imgGrid">
+            <div class="imgTile add" id="addImg">+</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="homebar"></div>
+      <div class="toast" id="toast">已保存（demo）</div>
+
+      <!-- 二级选择弹层 -->
+      <div class="overlay" id="overlay"></div>
+      <div class="sheet" id="sheet">
+        <div class="sheetHeader">
+          <span class="t">选择类型</span>
+          <span class="x" id="sheetClose">✕</span>
+        </div>
+        <!-- 第一级：大类 -->
+        <div class="lv1" id="lv1">
+          <div class="catCard" data-base="ticket">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg>
+            <span>旅票</span>
+          </div>
+          <div class="catCard" data-base="location">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span>地点</span>
+          </div>
+          <div class="catCard" data-base="media">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#A855F7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg>
+            <span>娱乐</span>
+          </div>
+        </div>
+        <!-- 第二级：子类 -->
+        <div class="lv2" id="lv2"></div>
+      </div>
+    </div>
+    <p class="tip">试试：点「类型」字段 → 弹层里先选大类、再选子类 · 切到「娱乐 · 电影」输入“三体” · 保存看数据</p>
+  </div>
+
+  <div class="panel">
+    <h1>添加印记 · 二级类型选择</h1>
+    <p class="sub">顶部三个大类的分段按钮也去掉了，类型收进表单里的一个字段，点开做二级选择。</p>
+    <ul>
+      <li><b>类型收进一个字段</b>：表单顶部一行「类型：旅票 · 机票 ›」，点开底部弹层。</li>
+      <li><b>二级选择</b>：第一级选大类（旅票 / 地点 / 娱乐），第二级选具体类型（机票 / 火车票 / 电影 / 书籍…）。</li>
+      <li><b>地点没有子类</b>：弹层里点「地点」直接选中并关闭，不进第二级。</li>
+      <li><b>表单随类型联动</b>：票号标签恢复按子类显示（航班号 / 车次 / 班次）；娱乐检索按所选子类走对应数据源。</li>
+      <li><b>表单其余部分保持统一</b>：评分、具体时间（选填）、评论、影像对三类都开放（如需按类型差异化可以说）。</li>
+      <li><b>数据完全兼容</b>：baseType + subType 与现有结构一致，列表图标、筛选面板不受影响。</li>
+    </ul>
+    <h2>保存的记录（数据预览）</h2>
+    <pre id="out">点击手机右上角「保存」
+查看将写入的记录 JSON</pre>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+
+  const LABEL = { ticket: '旅票', location: '地点', media: '娱乐' };
+  const SUBS = {
+    ticket: [
+      { id: 'flight', label: '机票' }, { id: 'train', label: '火车票' },
+      { id: 'bus', label: '汽车票' }, { id: 'ship', label: '轮船' },
+    ],
+    location: [],
+    media: [
+      { id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' }, { id: 'anime', label: '动漫' },
+      { id: 'game', label: '游戏' }, { id: 'book', label: '书籍' },
+    ],
+  };
+  const SUB_LABEL = { flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船', movie: '电影', tv: '剧集', anime: '动漫', game: '游戏', book: '书籍' };
+  const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '班次' };
+
+  const sel = { base: 'ticket', sub: 'flight' };   // 当前选中的类型
+  const sheetBase = { base: 'ticket' };            // 弹层里正在浏览的大类
+  let rating = 0;
+  let imgCount = 0;
+
+  // ---------- 弹层开关 ----------
+  function openSheet() {
+    sheetBase.base = sel.base;
+    paintSheet();
+    $('overlay').classList.add('open');
+    $('sheet').classList.add('open');
+  }
+  function closeSheet() {
+    $('overlay').classList.remove('open');
+    $('sheet').classList.remove('open');
+  }
+  $('typeRow').addEventListener('click', openSheet);
+  $('overlay').addEventListener('click', closeSheet);
+  $('sheetClose').addEventListener('click', closeSheet);
+
+  // ---------- 弹层：第一级大类 ----------
+  document.querySelectorAll('.catCard').forEach(card => {
+    card.addEventListener('click', () => {
+      const base = card.dataset.base;
+      if (base === 'location') {
+        // 地点没有子类：直接选中并关闭
+        applyType(base, 'location');
+        closeSheet();
+        return;
+      }
+      sheetBase.base = base;
+      paintSheet();
+    });
+  });
+
+  // ---------- 弹层：第二级子类 ----------
+  function paintSheet() {
+    document.querySelectorAll('.catCard').forEach(c => c.classList.toggle('active', c.dataset.base === sheetBase.base));
+    const lv2 = $('lv2');
+    lv2.innerHTML = '';
+    const subs = SUBS[sheetBase.base];
+    if (!subs.length) {
+      lv2.innerHTML = '<div class="lv2Empty">该大类不分子类</div>';
+      return;
+    }
+    subs.forEach(s => {
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.textContent = s.label;
+      chip.addEventListener('click', () => { applyType(sheetBase.base, s.id); closeSheet(); });
+      lv2.appendChild(chip);
+    });
+  }
+
+  // ---------- 应用所选类型 ----------
+  function applyType(base, sub) {
+    sel.base = base; sel.sub = sub;
+    $('typeValue').textContent = base === 'location' ? LABEL[base] : `${LABEL[base]} · ${SUB_LABEL[sub]}`;
+    $('pageTitle').textContent = '新印记 · ' + LABEL[base];
+    ['ticket', 'location', 'media'].forEach(t => { $('fields-' + t).hidden = (t !== base); });
+    $('ticketNoLabel').textContent = TICKET_NO_LABEL[sub] || '票号';
+    $('imgLabel').textContent = (base === 'ticket' ? '票根 / 留影' : '现场影像 / 截图') + `（${imgCount}）`;
+    $('acbox').hidden = true;
+  }
+
+  // ---------- 评分 ----------
+  const starRow = $('starRow');
+  for (let s = 1; s <= 5; s++) {
+    const st = document.createElement('span');
+    st.className = 'star'; st.textContent = '★'; st.dataset.s = s;
+    st.addEventListener('click', () => { rating = (rating === s ? 0 : s); paintStars(); });
+    starRow.insertBefore(st, $('score'));
+  }
+  function paintStars() {
+    starRow.querySelectorAll('.star').forEach(el => el.classList.toggle('on', +el.dataset.s <= rating));
+    $('score').textContent = rating > 0 ? rating + ' 分' : '';
+  }
+
+  // ---------- 娱乐：按所选子类走对应数据源（静态示意） ----------
+  const CANNED = [
+    { t: '三体', m: '电视剧 · 2023', tag: '影视' },
+    { t: '三体', m: '刘慈欣 · 2008', tag: '书籍' },
+    { t: '三体', m: 'Steam · 太阳系防御工程', tag: '游戏' },
+    { t: '流浪地球2', m: '电影 · 2023', tag: '影视' },
+    { t: '沙丘', m: '弗兰克·赫伯特 · 1965', tag: '书籍' },
+    { t: '沙丘2', m: '电影 · 2024', tag: '影视' },
+  ];
+  const SOURCE_BY_SUB = { movie: '影视', tv: '影视', anime: '影视', book: '书籍', game: '游戏' };
+  let acTimer = null;
+  $('mediaName').addEventListener('input', e => {
+    clearTimeout(acTimer);
+    const q = e.target.value.trim();
+    if (!q) { $('acbox').hidden = true; return; }
+    acTimer = setTimeout(() => {
+      const box = $('acbox');
+      box.innerHTML = '';
+      const source = SOURCE_BY_SUB[sel.sub];
+      const hits = CANNED.filter(c => c.tag === source && c.t.toLowerCase().includes(q.toLowerCase()));
+      hits.forEach(c => {
+        const row = document.createElement('div');
+        row.className = 'acitem';
+        row.innerHTML = `<span class="tag tag-${c.tag}">${c.tag}</span><div><div class="t">${c.t}</div><div class="m">${c.m}</div></div>`;
+        row.addEventListener('click', () => { $('mediaName').value = c.t; box.hidden = true; });
+        box.appendChild(row);
+      });
+      if (!hits.length) {
+        box.innerHTML = `<div class="acitem empty">「${LABEL[sel.base]} · ${SUB_LABEL[sel.sub] || ''}」源里没匹配到，demo 静态数据试试「三体」</div>`;
+      }
+      box.hidden = false;
+    }, 250);
+  });
+
+  // ---------- 影像 ----------
+  $('addImg').addEventListener('click', () => {
+    if (imgCount >= 8) return;
+    const tile = document.createElement('div');
+    tile.className = 'imgTile photo';
+    tile.textContent = '🏞';
+    tile.title = '点击移除';
+    tile.addEventListener('click', () => { tile.remove(); imgCount--; updateImgLabel(); });
+    $('imgGrid').insertBefore(tile, $('addImg'));
+    imgCount++; updateImgLabel();
+  });
+  function updateImgLabel() {
+    $('imgLabel').textContent = (sel.base === 'ticket' ? '票根 / 留影' : '现场影像 / 截图') + `（${imgCount}）`;
+  }
+
+  // ---------- 保存：展示将写入的记录 ----------
+  const pad = (v, l = 2) => String(v || '').padStart(l, '0');
+  $('saveBtn').addEventListener('click', () => {
+    const y = $('y').value || '2026', m = $('m').value || '1', d = $('d').value || '1';
+    const hh = $('hh').value, mm = $('mm').value;
+    const date = `${y}-${pad(m)}-${pad(d)}` + ((hh || mm) ? ` ${pad(hh)}:${pad(mm)}` : '');
+    const comment = $('comment').value.trim();
+
+    let title, subtitle;
+    if (sel.base === 'ticket') {
+      title = (($('ticketOrigin').value || '出发地') + ' → ' + ($('ticketDest').value || '目的地'));
+      subtitle = $('ticketNo').value;
+    } else if (sel.base === 'location') {
+      title = $('locationName').value || '未命名地点';
+      subtitle = comment;
+    } else {
+      title = $('mediaName').value || '未命名作品';
+      subtitle = comment;
+    }
+
+    const rec = {
+      id: Date.now(),
+      baseType: sel.base,
+      subType: sel.sub,
+      title,
+      subtitle: sel.base === 'ticket' ? subtitle : comment,
+      comment: sel.base === 'ticket' && comment ? comment : null,  // 旅票评论独立字段
+      date,
+      rating: rating > 0 ? rating : null,
+      localImages: Array.from({ length: imgCount }, (_, i) => `asset://demo-${i + 1}`),
+      coverUrl: null, coverRatio: null, coordinates: null,
+    };
+    $('out').textContent = JSON.stringify(rec, null, 2);
+
+    const t = $('toast');
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1500);
+  });
+
+  applyType('ticket', 'flight');  // 初始默认：旅票 · 机票
+</script>
+</body>
+</html>

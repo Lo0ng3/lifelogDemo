@@ -2,18 +2,31 @@ import React, { createContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
-import { fetchSuggestions } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps } from '../utils/media';
+import { fetchSuggestions, withTimeout } from '../utils/search';
+import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps, downscaleCover } from '../utils/media';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
 export const LogContext = createContext();
 
 export const LogProvider = ({ children }) => {
   const [logData, setLogData] = useState([]);
+  const [tdtKey, setTdtKeyState] = useState('');
 
   useEffect(() => {
     loadLogs();
+    // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
+    AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
   }, []);
+
+  const setTdtKey = async (key) => {
+    const next = (key || '').trim();
+    setTdtKeyState(next);
+    try {
+      await AsyncStorage.setItem('@tdt_key', next);
+    } catch (e) {
+      console.error('保存天地图Key失败', e);
+    }
+  };
 
   const loadLogs = async () => {
     try {
@@ -39,7 +52,29 @@ export const LogProvider = ({ children }) => {
         if (hasChange) {
           await AsyncStorage.setItem('@lifelogs', JSON.stringify(pruned));
         }
-        backfillCovers(pruned);
+        // 延后 2 秒错峰启动：① 存量大封面一次性迁移（>720px 重缩成小图）② 封面回填
+        setTimeout(async () => {
+          try {
+            let migrated = null;
+            for (let i = 0; i < pruned.length; i++) {
+              const url = pruned[i]?.coverUrl;
+              if (typeof url !== 'string' || !url.startsWith('file://')) continue;
+              const small = await downscaleCover(url);
+              if (small && small !== url) {
+                migrated = migrated || [...pruned];
+                migrated[i] = { ...migrated[i], coverUrl: small };
+                try { await FileSystem.deleteAsync(url, { idempotent: true }); } catch {}
+              }
+            }
+            let current = pruned;
+            if (migrated) {
+              current = migrated;
+              setLogData(migrated);
+              try { await AsyncStorage.setItem('@lifelogs', JSON.stringify(migrated)); } catch {}
+            }
+            backfillCovers(current);
+          } catch {}
+        }, 2000);
       } else {
         setLogData(initialLogData);
         await AsyncStorage.setItem('@lifelogs', JSON.stringify(initialLogData));
@@ -55,7 +90,9 @@ export const LogProvider = ({ children }) => {
     }
   };
 
-  // 旧数据回填：没有本地图也没有封面的娱乐记录，按标题查一次联想接口补一张网络海报
+  // 旧数据回填：没有本地图也没有封面的影视/地点记录，按标题查一次联想接口补一张网络海报。
+  // 触发时机：启动、每次"同步相册影像"后、备份导入后。
+  // 失败（网络/超时）的记录撤销标记，下次触发自动重试；只有"确实搜不到海报"才不再空搜
   const backfillAttempted = new Set();
   const backfillCovers = async (logs) => {
     const pending = logs.filter(log =>
@@ -67,18 +104,20 @@ export const LogProvider = ({ children }) => {
 
     let updated = null;
     for (const log of pending) {
-      backfillAttempted.add(log.id);
       try {
-        const results = await fetchSuggestions(log.title, log.subType);
+        const results = await withTimeout(fetchSuggestions(log.title, log.subType));
         const artwork = results[0]?.artwork;
         if (artwork) {
-          const coverUrl = await downloadRemoteCover(artwork);
+          const coverUrl = await withTimeout(downloadRemoteCover(artwork));
           updated = (updated || [...logs]).map(l =>
             l.id === log.id ? { ...l, coverUrl } : l
           );
+        } else {
+          backfillAttempted.add(log.id);
         }
       } catch {
-        // 网络不可用就跳过，下次启动再试
+        // 请求失败：撤销标记，下次同步/启动重试
+        backfillAttempted.delete(log.id);
       }
     }
     if (updated) {
@@ -170,7 +209,7 @@ export const LogProvider = ({ children }) => {
 
   return (
     // 记得把新方法暴露出去
-    <LogContext.Provider value={{ logData, addLog, deleteLog, updateLog, syncMedia, importLogs }}>
+    <LogContext.Provider value={{ logData, addLog, deleteLog, updateLog, syncMedia, importLogs, tdtKey, setTdtKey }}>
       {children}
     </LogContext.Provider>
   );

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>选图器改进 + 旅票标题方案 · Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #F2F2F7; color: #1C1C1E; padding: 32px 24px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6B7280; margin-bottom: 26px; line-height: 1.6; }
+  h2 { font-size: 16px; margin: 30px 0 10px; }
+  h2 .tag { font-size: 11px; background: #E0F2FE; color: #007AFF; border-radius: 5px; padding: 2px 7px; vertical-align: 2px; margin-right: 8px; }
+  h2 .tag.fix { background: #DCFCE7; color: #16A34A; }
+  .panel { background: #FFF; border-radius: 14px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.07); margin-bottom: 10px; }
+  .cols { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+  .note { font-size: 12.5px; color: #6B7280; line-height: 1.7; }
+  .note b { color: #1C1C1E; }
+
+  /* 手机 mock */
+  .phone { width: 300px; flex: none; border: 6px solid #1C1C1E; border-radius: 28px; overflow: hidden; background: #FFF; }
+  .pnav { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid #F2F2F7; }
+  .pnav .c { font-size: 13px; color: #6B7280; }
+  .pnav .t { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+  .pnav .ok { font-size: 13px; color: #007AFF; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+  .tile { aspect-ratio: 1; border-radius: 3px; position: relative; overflow: hidden; }
+  .tile span { position: absolute; right: 3px; top: 3px; width: 15px; height: 15px; border-radius: 8px; border: 1.5px solid #FFF; background: rgba(0,0,0,.25); }
+  .tile.on span { background: #007AFF; }
+  .tile .live { position: absolute; left: 3px; top: 3px; font-size: 9px; background: rgba(0,0,0,.55); color: #FFF; border-radius: 3px; padding: 1px 4px; }
+  .g1 { background: linear-gradient(135deg,#fbc2eb,#a6c1ee); } .g2 { background: linear-gradient(135deg,#84fab0,#8fd3f4); }
+  .g3 { background: linear-gradient(135deg,#f6d365,#fda085); } .g4 { background: linear-gradient(135deg,#a1c4fd,#c2e9fb); }
+  .g5 { background: linear-gradient(135deg,#d4fc79,#96e6a1); } .g6 { background: linear-gradient(135deg,#fddb92,#d1fdff); }
+  .g7 { background: linear-gradient(135deg,#cfd9df,#e2ebf0); } .g8 { background: linear-gradient(135deg,#accbee,#e7f0fd); }
+  .g9 { background: linear-gradient(135deg,#e0c3fc,#8ec5fc); }
+  .albumPanel { border: 1px solid #E5E7EB; border-radius: 10px; margin: 10px 12px; overflow: hidden; font-size: 13px; }
+  .arow { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid #F2F2F7; }
+  .arow:last-child { border-bottom: none; }
+  .arow .n { color: #1C1C1E; }
+  .arow .cnt { color: #8E8E93; font-size: 12px; }
+  .arow.act .n { color: #007AFF; font-weight: 600; }
+  .arow.more .n { color: #007AFF; }
+  .arow.junk .n { color: #C7CAD1; }
+  .filterRow { display: flex; justify-content: space-between; padding: 8px 12px; background: #F9FAFB; font-size: 11.5px; color: #9CA3AF; }
+  .filterRow b { color: #007AFF; font-weight: 600; cursor: pointer; }
+
+  /* 列表卡片 mock */
+  .listCard { border: 1px solid #E5E7EB; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .lc-head { display: flex; justify-content: space-between; }
+  .lc-title { font-size: 15px; font-weight: 600; }
+  .lc-title.full { font-size: 12.5px; font-weight: 600; line-height: 1.5; }
+  .lc-date { font-size: 11px; color: #8E8E93; flex: none; margin-left: 8px; }
+  .lc-sub { font-size: 12px; color: #8E8E93; margin-top: 4px; }
+  .optTag { display: inline-block; font-size: 11px; background: #FEF3C7; color: #B45309; border-radius: 5px; padding: 2px 7px; margin-bottom: 8px; }
+
+  ul.fixlist { list-style: none; }
+  ul.fixlist li { font-size: 13px; line-height: 1.7; padding: 7px 0 7px 20px; position: relative; border-bottom: 1px dashed #F3F4F6; }
+  ul.fixlist li::before { content: "✓"; position: absolute; left: 2px; color: #16A34A; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>选图器改进 + 旅票标题方案</h1>
+  <p class="sub">这一版先确认两件事的设计：① 选图器相册列表与网格问题的处理方式；② 旅票标题过长在列表里的展示方案。其余几项（同步回填封面、实况播完回封面帧、轨迹开关隐藏起终点、去掉"导出轨迹"、编辑不自动弹联想、豆瓣超时加固）没有歧义，确认后我直接改代码，不单独出 demo。</p>
+
+  <h2><span class="tag">选图器</span>相册列表：默认只给「相机 / 视频」，其余收进"更多相册"</h2>
+  <div class="cols">
+    <div class="phone">
+      <div class="pnav"><span class="c">取消</span><span class="t">相机 ▾</span><span class="ok">完成(2)</span></div>
+      <div class="grid">
+        <div class="tile g1 on"><span></span></div><div class="tile g2"><span></span></div><div class="tile g3"><span></span></div>
+        <div class="tile g4"><span></span><i class="live">实况</i></div><div class="tile g5 on"><span></span></div><div class="tile g6"><span></span></div>
+        <div class="tile g7"><span></span></div><div class="tile g8"><span></span></div><div class="tile g9"><span></span></div>
+      </div>
+      <div class="albumPanel">
+        <div class="filterRow"><span>更多相册里隐藏了 5 个缓存相册</span><b>显示</b></div>
+        <div class="arow"><span class="n">全部照片</span><span class="cnt">126</span></div>
+        <div class="arow act"><span class="n">📷 相机</span><span class="cnt">42</span></div>
+        <div class="arow"><span class="n">🎬 视频</span><span class="cnt">18</span></div>
+        <div class="arow"><span class="n">📸 截图</span><span class="cnt">9</span></div>
+        <div class="arow more"><span class="n">更多相册（12）▾</span><span class="cnt">含缓存 5</span></div>
+        <div class="arow junk"><span class="n">　└ MicroMsg</span><span class="cnt">214</span></div>
+        <div class="arow junk"><span class="n">　└ WeiXin</span><span class="cnt">96</span></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1; min-width: 260px;">
+      <p class="note">
+        <b>改动点：</b><br>
+        1. 相册下拉默认只显示<b>常用四个：全部照片 / 相机 / 视频 / 截图</b>（照你说的，默认就是相机和视频）；<br>
+        2. 其余真实相册收进<b>「更多相册」</b>，点开才展开；<br>
+        3. 缓存相册（MicroMsg / WeiXin / cache 等）即使展开也<b>沉底并置灰</b>，顶部提示隐藏数量，可"显示"；<br>
+        4. 网格里的<b>实况徽标</b>修复：选图器里用文件路径检测实况（之前用 content:// 读不到头，徽标从不显示）。
+      </p>
+    </div>
+  </div>
+
+  <h2><span class="tag">选图器</span>网格三连问题：大图不显示 / 图片串位重复 / 滑动掉帧</h2>
+  <div class="panel">
+    <p class="note">
+      <b>根因是同一个：</b>网格现在用 expo-image 直接解码 <b>content:// 全尺寸原图</b>（1200 万像素的照片整张解码到 100px 格子里），大图直接解码失败 → "大一点的图片不出现"；解码慢导致格子被复用时<b>上一张的图还挂着</b> → 下滑时"上方出现下面的图"的串位；整页解码压力大 → 掉帧闪烁。<br><br>
+      <b>修复方案：</b><br>
+      1. 网格缩略图改用 RN 原生 Image（Fresco 解码器）——它对 content:// 会<b>按视图尺寸降采样解码</b>，大图小图都稳，原生缓存也更快；<br>
+      2. 关掉交叉淡入过渡（串位的直接来源）+ 固定格子尺寸加 getItemLayout（消除滑动跳动）；<br>
+      3. 分页参数调优（降低每批渲染数量），点开放大预览仍用原图。
+    </p>
+  </div>
+
+  <h2><span class="tag">需要你选</span>旅票标题过长，列表显示不全 —— 两个方案</h2>
+  <div class="cols">
+    <div class="panel" style="flex:1; min-width: 260px;">
+      <div class="optTag">方案一（推荐）· 保存时自动生成短标题</div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title">北京 → 上海</span><span class="lc-date">10-01 08:30</span></div>
+        <div class="lc-sub">MU5101 · 北京首都国际机场 ✈ 上海虹桥国际机场</div>
+      </div>
+      <p class="note">保存时从场站名自动提取城市级短名（"北京首都国际机场"→"北京"，提取不了就用全名），<b>列表标题只显示短名</b>；完整场站名在副标题小字和地图气泡里。别名可覆盖短名。</p>
+    </div>
+    <div class="panel" style="flex:1; min-width: 260px;">
+      <div class="optTag">方案二 · 列表允许两行换行</div>
+      <div class="listCard">
+        <div class="lc-head"><span class="lc-title full">北京首都国际机场 → 上海虹桥国际机场</span><span class="lc-date">10-01 08:30</span></div>
+        <div class="lc-sub">MU5101 · 评论内容…</div>
+      </div>
+      <p class="note">标题最多两行换行，信息全但卡片变高、列表变得不整齐。实现最简单。</p>
+    </div>
+  </div>
+
+  <h2><span class="tag fix">直接修</span>无需确认的修复清单</h2>
+  <div class="panel">
+    <ul class="fixlist">
+      <li><b>同步时回填封面：</b>"同步相册影像"完成后，对没有封面的影视/地点记录直接按标题重新搜索并下载封面（现在只在启动时做一次且容易漏，改为同步后立即补齐）。</li>
+      <li><b>豆瓣搜索加固：</b>加 8 秒超时（昨晚的"不返回"就是请求挂死），失败/超时安静降级，不阻塞界面。</li>
+      <li><b>实况播放完回封面帧：</b>详情页实况视频播完自动回到静帧封面（现在是停在最后一帧/黑屏）。</li>
+      <li><b>轨迹开关连动起终点：</b>轨迹关掉时，旅票的出发/到达标点一并隐藏，只留地点标点。</li>
+      <li><b>去掉"导出轨迹"按钮：</b>地图页只留 缩放/显示全部/轨迹开关。</li>
+      <li><b>编辑页不自动弹联想：</b>联想只在输入框获得焦点（你点进去）后才检索，进入编辑页/改名过程不弹。</li>
+    </ul>
+  </div>
+</body>
+</html>

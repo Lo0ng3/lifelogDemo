@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform
+  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, Star, StarHalf, ListFilter, Check, Share2, Search, X, Edit3, Trash2, RefreshCw, Upload, Download, Eraser
+  User, Star, StarHalf, ListFilter, Check, Search, X, Edit3, Trash2, RefreshCw, Upload, Download, Eraser, Settings
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -25,6 +25,7 @@ import CoverIcon from '../components/CoverIcon';
 import PressableScale from '../components/PressableScale';
 import { exportBackup, importBackup } from '../utils/backup';
 import { cleanupMediaCaches } from '../utils/media';
+import { shortTicketTitle, shortPlaceName } from '../utils/format';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -54,11 +55,66 @@ function SwipeRightActions({ drag, onEdit, onDelete }) {
   );
 }
 
+// 列表行组件（memo 化）：搜索输入、侧边栏开合等父级重渲染不会重刷整列表。
+// 删除确认放在行内，依赖的 deleteLog 从 context 读取
+const ListRow = React.memo(function ListRow({ item, isLast, navigation }) {
+  const { deleteLog } = useContext(LogContext);
+  const renderRightActions = (_progress, drag, swipeable) => (
+    <SwipeRightActions
+      drag={drag}
+      onEdit={() => { swipeable.close(); navigation.navigate('Edit', { editItem: item }); }}
+      onDelete={() => {
+        swipeable.close();
+        Alert.alert('删除印记', `确定要删除「${item.title}」吗？删除后无法恢复。`, [
+          { text: '取消', style: 'cancel' },
+          { text: '删除', style: 'destructive', onPress: () => deleteLog(item.id) },
+        ]);
+      }}
+    />
+  );
+  return (
+    <ReanimatedSwipeable renderRightActions={renderRightActions} overshootRight={false} friction={2}>
+      <PressableScale style={styles.cardRow} onPress={() => navigation.navigate('Detail', { item })}>
+        <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
+          <CoverIcon item={item} height={64} />
+          <View style={styles.itemContent}>
+            <View style={styles.itemHeader}>
+              <Text style={styles.itemTitle} numberOfLines={1}>{shortTicketTitle(item.title)}</Text>
+              <Text style={styles.itemDate}>{item.date.replace(/^\d{4}-/, '')}</Text>
+            </View>
+            <View style={styles.starContainer}>
+              {[1, 2, 3, 4, 5].map((i) => {
+                const isFull = i <= item.rating;
+                const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
+                if (!item.rating) return null;
+                if (isHalf) return <StarHalf key={i} size={12} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
+                return <Star key={i} size={12} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
+              })}
+            </View>
+            {!!item.subtitle && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.subtitle}</Text>}
+            {!!item.comment && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.comment}</Text>}
+          </View>
+        </View>
+      </PressableScale>
+    </ReanimatedSwipeable>
+  );
+});
+
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData, deleteLog, syncMedia, importLogs } = useContext(LogContext);
+  const { logData, syncMedia, importLogs, tdtKey, setTdtKey } = useContext(LogContext);
 
   const [syncing, setSyncing] = useState(false);
+
+  // 地图服务 Key 设置弹窗
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keyDraft, setKeyDraft] = useState('');
+  const openSettings = () => { setKeyDraft(tdtKey); setSettingsOpen(true); };
+  const saveKey = async () => {
+    await setTdtKey(keyDraft);
+    setSettingsOpen(false);
+    if (Platform.OS === 'android') ToastAndroid.show(keyDraft.trim() ? '天地图 Key 已保存' : '已清除天地图 Key', ToastAndroid.SHORT);
+  };
 
   // 相册同步：把断链的影像重新关联到相册原片（升级/换机/重装后的修复入口）
   const handleSync = async () => {
@@ -111,20 +167,24 @@ export default function HomeScreen({ navigation }) {
     const result = await exportBackup(logData);
     if (result.canceled) return;
     if (result.ok) {
-      Alert.alert('导出成功', `已备份 ${result.count} 条记录：\n${result.name}\n\n备份文件可在换机后通过"导入备份"恢复。`);
+      Alert.alert(
+        '导出成功',
+        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}：\n${result.name}\n\n备份文件可在换机后通过"导入备份"恢复。`
+      );
     } else {
       Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
     }
   };
 
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
-  const doImport = async (logs, mode) => {
+  const doImport = async (logs, mode, coversRestored) => {
     const report = await importLogs(logs, mode);
     Alert.alert(
       '导入完成',
-      mode === 'replace'
+      (mode === 'replace'
         ? `已覆盖恢复，当前共 ${report.total} 条记录。`
-        : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`,
+        : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`)
+        + (coversRestored ? `\n已恢复 ${coversRestored} 张封面文件。` : ''),
       [
         { text: '稍后', style: 'cancel' },
         { text: '立即同步', onPress: handleSync },
@@ -149,8 +209,8 @@ export default function HomeScreen({ navigation }) {
       `备份文件：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace') },
-        { text: '合并去重', onPress: () => doImport(result.logs, 'merge') },
+        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored) },
+        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored) },
       ]
     );
   };
@@ -184,20 +244,6 @@ export default function HomeScreen({ navigation }) {
       }
     ).start();
     Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 200, useNativeDriver: true }).start();
-  };
-
-  const [exportState, setExportState] = useState('idle'); 
-  const exportFadeAnim = useRef(new Animated.Value(0)).current;
-
-  const handleExport = () => {
-    setExportState('exporting');
-    Animated.timing(exportFadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-    setTimeout(() => {
-      setExportState('success');
-      setTimeout(() => {
-        Animated.timing(exportFadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setExportState('idle'));
-      }, 1500);
-    }, 2000);
   };
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -252,7 +298,7 @@ export default function HomeScreen({ navigation }) {
     let result = [...logData];
     if (searchQuery.trim().length > 0) {
       const lowerQuery = searchQuery.toLowerCase();
-      result = result.filter(item => (item.title && item.title.toLowerCase().includes(lowerQuery)) || (item.subtitle && item.subtitle.toLowerCase().includes(lowerQuery)));
+      result = result.filter(item => (item.title && item.title.toLowerCase().includes(lowerQuery)) || (item.subtitle && item.subtitle.toLowerCase().includes(lowerQuery)) || (item.comment && item.comment.toLowerCase().includes(lowerQuery)));
     }
     if (activeFilters.length > 0) {
       result = result.filter(item => activeFilters.includes(item.subType) || activeFilters.includes(item.baseType));
@@ -268,89 +314,131 @@ export default function HomeScreen({ navigation }) {
   }, [logData, activeFilters, yearFilters, monthFilters, searchQuery]);
 
   const mapHtml = useMemo(() => {
-    const markersData = filteredAndSortedData.filter(item => item.coordinates);
+    // 打点：地点用 coordinates；旅票用 start/end（坐标缺失的记录跳过）
+    const points = [];
+    filteredAndSortedData.forEach(item => {
+      const note = item.comment || item.subtitle || '';
+      if (item.coordinates && item.coordinates.latitude != null) {
+        points.push({ kind: 'location', title: item.title, date: item.date, note, lat: item.coordinates.latitude, lng: item.coordinates.longitude });
+      }
+      [item.start, item.end].forEach(p => {
+        if (p && p.latitude != null && p.longitude != null) {
+          points.push({ kind: 'ticket', subType: item.subType, title: shortPlaceName(p.name || item.title), date: item.date, note, lat: p.latitude, lng: p.longitude });
+        }
+      });
+    });
+    // 轨迹段：按 出发地→目的地 聚合（单向），往返分居弧线两侧，粗细 = 次数。
+    // 分段键用坐标而不是名称：同一段被改成不同别名后仍算同一条线
+    const segMap = new Map();
+    filteredAndSortedData
+      .filter(item => item.baseType === 'ticket' && item.start && item.end && item.start.latitude != null && item.end.latitude != null)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .forEach(t => {
+        const key = [t.start, t.end].map(p => p.longitude.toFixed(4) + ',' + p.latitude.toFixed(4)).join('→');
+        if (!segMap.has(key)) segMap.set(key, { from: t.start, to: t.end, count: 0, subType: t.subType });
+        const seg = segMap.get(key);
+        seg.count++;
+        seg.from = t.start; seg.to = t.end;   // 显示名称取最近一次的别名
+      });
+    const segs = [...segMap.values()];
+    // 嵌入 WebView 的 JSON 要转义 "<"，防止用户内容提前闭合 script 标签
+    const safeJson = v => JSON.stringify(v).replace(/</g, '\\u003c');
     return `
       <!DOCTYPE html>
       <html>
       <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-          <style>body { padding: 0; margin: 0; background-color: #F2F2F7; } html, body, #map { height: 100%; width: 100%; } .leaflet-control-attribution { display: none; }</style>
+          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+          <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+          <style>
+              body { padding: 0; margin: 0; background-color: #F2F2F7; } html, body, #map { height: 100%; width: 100%; }
+              .leaflet-control-attribution { display: none; }
+              .pin { width: 18px; height: 18px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 2px solid #FFF; box-shadow: 0 2px 5px rgba(0,0,0,.3); }
+              .pin::after { content: ""; position: absolute; inset: 4px; background: #FFF; border-radius: 50%; }
+              .cntBadge { width: 22px; height: 22px; border-radius: 11px; background: #FFF; border: 2px solid #007AFF; color: #007AFF; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
+              .zoomCtl { position: absolute; right: 12px; top: 12px; z-index: 900; display: flex; flex-direction: column; background: #FFF; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.15); overflow: hidden; }
+              .zoomCtl button { width: 36px; height: 36px; border: none; background: transparent; font-size: 16px; color: #374151; cursor: pointer; font-family: sans-serif; }
+              .zoomCtl button + button { border-top: 1px solid #F3F4F6; }
+              .trajCtl { position: absolute; right: 12px; top: 126px; z-index: 900; background: #FFF; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+              .trajCtl button { display: block; width: 36px; height: 36px; border: none; background: transparent; font-size: 12px; color: #374151; cursor: pointer; font-family: sans-serif; }
+              .banner { position: absolute; top: 0; left: 0; right: 0; z-index: 950; background: #FFF7E6; color: #8a6d3b; font: 12px/1.6 sans-serif; padding: 6px 10px; }
+          </style>
       </head>
       <body>
           <div id="map"></div>
+          ${tdtKey ? '' : '<div class="banner">未配置天地图 Key，可在侧边栏「地图服务 Key」中填写</div>'}
+          <div class="zoomCtl">
+              <button id="zin">＋</button><button id="zout">－</button><button id="zfit">⌂</button>
+          </div>
+          <div class="trajCtl"><button id="trajBtn">轨迹</button></div>
           <script>
-              const map = L.map('map', { zoomControl: false }).setView([34.0, 108.0], 4);
-              L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
-              const rawData = ${JSON.stringify(markersData)};
-              const latlngs = [];
-              rawData.forEach(item => {
-                  const latlng = [item.coordinates.latitude, item.coordinates.longitude];
-                  latlngs.push(latlng);
-                  L.marker(latlng).addTo(map).bindPopup('<b>' + item.title + '</b><br>' + (item.subtitle || ''));
-              });
-              if (latlngs.length > 1) {
-                  const polyline = L.polyline(latlngs, { color: '#007AFF', weight: 3, dashArray: '5, 8' }).addTo(map);
-                  map.fitBounds(polyline.getBounds(), { padding: [50, 50] });
-              } else if (latlngs.length === 1) {
-                  map.setView(latlngs[0], 10);
+              var POINTS = ${safeJson(points)};
+              var SEGS = ${safeJson(segs)};
+              var TK = ${safeJson(tdtKey)};
+              var COLORS = { flight: '#2F7BF6', train: '#10B981', bus: '#F97316', ship: '#8B5CF6' };
+              function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+              var map = L.map('map', { zoomControl: false }).setView([34.0, 108.0], 4);
+              map.attributionControl.setPrefix('');
+              if (TK) {
+                  L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
+                  L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
               }
+              var trajLayer = L.layerGroup().addTo(map);
+              var trajOn = true;
+              function pinIcon(color) { return L.divIcon({ className: '', html: '<div class="pin" style="margin:4px;background:' + color + '"></div>', iconSize: [26, 26], iconAnchor: [13, 23] }); }
+              function addMarker(p) {
+                  var color = p.kind === 'location' ? '#EE4D3D' : (COLORS[p.subType] || '#2F7BF6');
+                  return L.marker([p.lat, p.lng], { icon: pinIcon(color) })
+                      .bindPopup('<b>' + esc(p.title) + '</b><br><span style="color:#8E8E93;font-size:12px">' + esc(p.date) + '</span>' + (p.note ? '<br>' + esc(p.note) : ''), { closeButton: false, offset: [0, -12] });
+              }
+              // 地点标点常驻；旅票的出发/到达标点跟随轨迹开关
+              POINTS.forEach(function (p) { if (p.kind === 'location') addMarker(p).addTo(map); });
+              function drawTraj() {
+                  trajLayer.clearLayers();
+                  POINTS.forEach(function (p) { if (p.kind === 'ticket') addMarker(p).addTo(trajLayer); });
+                  SEGS.forEach(function (seg) {
+                      var color = COLORS[seg.subType] || '#007AFF';
+                      var A = [seg.from.longitude, seg.from.latitude], B = [seg.to.longitude, seg.to.latitude];
+                      var dx = B[0] - A[0], dy = B[1] - A[1], len = Math.sqrt(dx * dx + dy * dy) || 1;
+                      var bend = Math.min(1.6, Math.max(0.12, len * 0.14));
+                      var C = [(A[0] + B[0]) / 2 + dy / len * bend, (A[1] + B[1]) / 2 - dx / len * bend];
+                      var path = [];
+                      for (var i = 0; i <= 28; i++) {
+                          var t = i / 28, u = 1 - t;
+                          path.push([u * u * A[1] + 2 * u * t * C[1] + t * t * B[1], u * u * A[0] + 2 * u * t * C[0] + t * t * B[0]]);
+                      }
+                      L.polyline(path, { color: color, weight: Math.min(9, 3 + (seg.count - 1) * 1.8), opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(trajLayer);
+                      if (seg.count > 1) {
+                          L.marker(path[14], { icon: L.divIcon({ className: '', html: '<div class="cntBadge" style="border-color:' + color + ';color:' + color + '">×' + seg.count + '</div>', iconSize: [22, 22], iconAnchor: [11, 11] }), interactive: false }).addTo(trajLayer);
+                      }
+                  });
+              }
+              var trajBtn = document.getElementById('trajBtn');
+              function renderTraj() { if (trajOn) drawTraj(); else trajLayer.clearLayers(); trajBtn.textContent = trajOn ? '轨迹·开' : '轨迹·关'; }
+              renderTraj();
+              trajBtn.onclick = function () { trajOn = !trajOn; renderTraj(); };
+              document.getElementById('zin').onclick = function () { map.zoomIn(); };
+              document.getElementById('zout').onclick = function () { map.zoomOut(); };
+              document.getElementById('zfit').onclick = function () {
+                  var lls = POINTS.map(function (p) { return [p.lat, p.lng]; });
+                  SEGS.forEach(function (s) { lls.push([s.from.latitude, s.from.longitude], [s.to.latitude, s.to.longitude]); });
+                  if (lls.length) map.fitBounds(lls, { padding: [30, 30] });
+              };
+              if (POINTS.length || SEGS.length) setTimeout(function () { document.getElementById('zfit').onclick(); }, 400);
+              window.onresize = function () { map.invalidateSize(); };
           </script>
       </body>
       </html>
     `;
-  }, [filteredAndSortedData]);
+  }, [filteredAndSortedData, tdtKey]);
 
-  const confirmDelete = (item) => {
-    Alert.alert('删除印记', `确定要删除「${item.title}」吗？删除后无法恢复。`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => deleteLog(item.id) },
-    ]);
-  };
-
-  const renderItem = ({ item, index }) => {
-    const isLast = index === filteredAndSortedData.length - 1;
-
-    // 右滑露出操作按钮；点击后先收起滑动，再执行
-    const renderRightActions = (_progress, drag, swipeable) => (
-      <SwipeRightActions
-        drag={drag}
-        onEdit={() => { swipeable.close(); navigation.navigate('Edit', { editItem: item }); }}
-        onDelete={() => { swipeable.close(); confirmDelete(item); }}
-      />
-    );
-
-    return (
-      <ReanimatedSwipeable
-        renderRightActions={renderRightActions}
-        overshootRight={false}
-        friction={2}
-      >
-        <PressableScale style={styles.cardRow} onPress={() => navigation.navigate('Detail', { item })}>
-          <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
-            <CoverIcon item={item} />
-            <View style={styles.itemContent}>
-              <View style={styles.itemHeader}>
-                <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
-                <Text style={styles.itemDate}>{item.date.replace(/^\d{4}-/, '')}</Text>
-              </View>
-              <View style={styles.starContainer}>
-                {[1, 2, 3, 4, 5].map((i) => {
-                  const isFull = i <= item.rating;
-                  const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                  if (!item.rating) return null;
-                  if (isHalf) return <StarHalf key={i} size={12} color="#FACC15" fill="#FACC15" style={{ marginRight: 2 }} />;
-                  return <Star key={i} size={12} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 2 }} />;
-                })}
-              </View>
-              {!!item.subtitle && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.subtitle}</Text>}
-            </View>
-          </View>
-        </PressableScale>
-      </ReanimatedSwipeable>
-    );
-  };
+  const renderItem = useCallback(({ item, index }) => (
+    <ListRow
+      item={item}
+      isLast={index === filteredAndSortedData.length - 1}
+      navigation={navigation}
+    />
+  ), [filteredAndSortedData.length, navigation]);
 
   return (
     <View style={styles.container}>
@@ -367,6 +455,13 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.statItem}><Text style={styles.statNum}>{logData.length}</Text><Text style={styles.statLabel}>总印记</Text></View>
           </View>
           <View style={styles.sidebarMenu}>
+            <TouchableOpacity style={styles.menuItem} onPress={openSettings}>
+              <Settings size={18} color="#4B5563" style={{ marginRight: 10 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.menuItemText}>地图服务 Key</Text>
+                <Text style={styles.menuItemSub}>{tdtKey ? '天地图服务已配置' : '未配置，地图与联想不可用'}</Text>
+              </View>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
               <RefreshCw size={18} color="#4B5563" style={{ marginRight: 10 }} />
               <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册影像'}</Text>
@@ -413,24 +508,21 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
-        {viewMode === 'list' ? (
-          <View style={styles.listWrapper}>
-            {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
-            <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
-              <FlatList
-                data={filteredAndSortedData}
-                keyExtractor={(item) => item.id.toString()}
-                renderItem={renderItem}
-                showsVerticalScrollIndicator={false}
-              />
-            </Reanimated.View>
-          </View>
-        ) : (
-          <View style={styles.mapWrapper}>
-            <WebView originWhitelist={['*']} source={{ html: mapHtml }} style={styles.map} scrollEnabled={false} />
-            <TouchableOpacity style={[styles.exportBtn, { bottom: 20 }]} onPress={handleExport}><Share2 color="#FFF" size={20} /><Text style={styles.exportBtnText}>导出轨迹</Text></TouchableOpacity>
-          </View>
-        )}
+        {/* 列表与地图都保持挂载，仅切换显示：地图瓦片不因切页而重新下载 */}
+        <View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView]}>
+          {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
+          <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
+            <FlatList
+              data={filteredAndSortedData}
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={renderItem}
+              showsVerticalScrollIndicator={false}
+            />
+          </Reanimated.View>
+        </View>
+        <View style={[styles.mapWrapper, viewMode !== 'map' && styles.hiddenView]}>
+          <WebView originWhitelist={['*']} source={{ html: mapHtml }} style={styles.map} scrollEnabled={false} />
+        </View>
       </View>
 
       <BottomSheetModal
@@ -478,6 +570,33 @@ export default function HomeScreen({ navigation }) {
           </View>
         </BottomSheetScrollView>
       </BottomSheetModal>
+
+      <Modal visible={settingsOpen} transparent animationType="fade" onRequestClose={() => setSettingsOpen(false)}>
+        <TouchableOpacity style={styles.settingsOverlay} activeOpacity={1} onPress={() => setSettingsOpen(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.settingsCard} onPress={() => {}}>
+            <Text style={styles.settingsTitle}>设置</Text>
+            <Text style={styles.settingsLabel}>天地图 Key</Text>
+            <TextInput
+              style={styles.settingsInput}
+              value={keyDraft}
+              onChangeText={setKeyDraft}
+              placeholder="在 lbs.tianditu.gov.cn 免费申请"
+              placeholderTextColor="#9CA3AF"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.settingsHint}>用于地图底图、地点与出发/到达的地名联想。Key 只保存在本机，换机后需重新填写。</Text>
+            <View style={styles.settingsBtnRow}>
+              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setSettingsOpen(false)}>
+                <Text style={styles.settingsBtnCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnSave]} onPress={saveKey}>
+                <Text style={styles.settingsBtnSaveText}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -500,7 +619,7 @@ const styles = StyleSheet.create({
   filterBtnActive: { backgroundColor: '#E0F2FE' },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
   listWrapper: { flex: 1, backgroundColor: '#FFF', marginHorizontal: 16, marginTop: 4, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  hiddenView: { display: 'none' },
   emptyText: { fontSize: 14, color: '#9CA3AF' },
   cardItem: { flexDirection: 'row', padding: 16 },
   cardItemBorder: { borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
@@ -535,6 +654,19 @@ const styles = StyleSheet.create({
   sidebarMenu: { borderTopWidth: 1, borderTopColor: '#F2F2F7', paddingTop: 10 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F2F2F7' },
   menuItemText: { fontSize: 16, color: '#1C1C1E' },
+  menuItemSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  settingsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 32 },
+  settingsCard: { width: '100%', backgroundColor: '#FFF', borderRadius: 14, padding: 18 },
+  settingsTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E', marginBottom: 14 },
+  settingsLabel: { fontSize: 13, fontWeight: '500', color: '#9CA3AF', marginBottom: 8 },
+  settingsInput: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, backgroundColor: '#F9FAFB', paddingHorizontal: 12, height: 44, fontSize: 14, color: '#1C1C1E' },
+  settingsHint: { fontSize: 12, color: '#9CA3AF', lineHeight: 18, marginTop: 8 },
+  settingsBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
+  settingsBtn: { paddingVertical: 9, paddingHorizontal: 18, borderRadius: 8, marginLeft: 10 },
+  settingsBtnCancel: { backgroundColor: '#F3F4F6' },
+  settingsBtnCancelText: { fontSize: 14, color: '#6B7280' },
+  settingsBtnSave: { backgroundColor: '#007AFF' },
+  settingsBtnSaveText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', backgroundColor: '#FFFFFF', zIndex: 10 },
   headerHitSlop: { padding: 10, margin: -10 },
   sheetTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
