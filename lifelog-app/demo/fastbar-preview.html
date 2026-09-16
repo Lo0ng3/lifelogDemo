@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>选图器快速定位 · 最新交互 Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #F2F2F7; color: #1C1C1E; padding: 32px 24px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #6B7280; margin-bottom: 24px; line-height: 1.7; max-width: 860px; }
+  .cols { display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 320px; flex: none; border: 7px solid #1C1C1E; border-radius: 34px; overflow: hidden; background: #FFF; position: relative; height: 600px; }
+  .pnav { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #F2F2F7; }
+  .pnav .c { font-size: 13px; color: #6B7280; }
+  .pnav .t { font-size: 14px; font-weight: 600; }
+  .pnav .ok { font-size: 13px; color: #007AFF; font-weight: 600; }
+  .scroller { position: absolute; top: 41px; bottom: 0; left: 0; right: 0; overflow-y: auto; scrollbar-width: none; }
+  .scroller::-webkit-scrollbar { display: none; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+  .tile { aspect-ratio: 1; position: relative; }
+  .tile .d { position: absolute; left: 4px; bottom: 3px; font-size: 8.5px; color: rgba(255,255,255,.85); text-shadow: 0 1px 2px rgba(0,0,0,.4); }
+
+  /* 滑块：中空白边胶囊，默认隐藏，滚动/拖动时出现，停止后淡出 */
+  .track { position: absolute; right: 0; top: 51px; bottom: 10px; width: 36px; z-index: 30; touch-action: none; }
+  .thumb { position: absolute; left: 13px; width: 9px; height: 42px; border-radius: 4.5px; border: 2.5px solid #FFF; background: transparent; box-shadow: 0 1px 5px rgba(0,0,0,.4); opacity: 0; transition: opacity .25s; }
+  .bubble { position: absolute; right: 44px; background: #FFF; border-radius: 9px; padding: 6px 10px; pointer-events: none; box-shadow: 0 2px 10px rgba(0,0,0,.2); opacity: 0; transition: opacity .25s; display: flex; justify-content: center; }
+  .bubble b { color: #1C1C1E; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .cap { text-align: center; font-size: 12px; color: #6B7280; margin-top: 12px; line-height: 1.7; }
+  .cap b { color: #007AFF; }
+  .panel { background: #FFF; border-radius: 14px; padding: 18px; max-width: 420px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+  .note { font-size: 12.5px; color: #6B7280; line-height: 1.75; }
+  .note b { color: #1C1C1E; }
+</style>
+</head>
+<body>
+  <h1>选图器 · 快速定位（最新交互）</h1>
+  <p class="sub">滑块平时隐藏；<b>连续滚动网格时滑块和时间气泡出现</b>，停止约 0.7 秒后淡出；<b>按住滑块拖动</b>可快速定位，气泡实时显示当前顶部照片的日期，松手后消失。</p>
+  <div class="cols">
+    <div>
+      <div class="phone">
+        <div class="pnav"><span class="c">取消</span><span class="t">相机 ▾</span><span class="ok">完成(0)</span></div>
+        <div class="scroller" id="scroller">
+          <div class="grid" id="grid"></div>
+        </div>
+        <div class="track" id="track"><div class="thumb" id="thumb"></div></div>
+        <div class="bubble" id="bubble"><b id="bubbleText"></b></div>
+      </div>
+      <p class="cap">用滚轮或手指<b>滚动网格</b> → 滑块和时间出现；<b>按住白色滑块拖动</b> → 快速定位</p>
+    </div>
+    <div class="panel">
+      <p class="note">
+        <b>交互与样式（与真机代码一致）：</b><br>
+        1. 滑块：<b>中空胶囊</b>（9×42、2.5px 白描边、中间透明），滚动/拖动时出现，停止 0.7s 后淡出；<br>
+        2. 时间气泡：<b>白底黑字、文字居中</b>，紧贴滑块左侧，只在拖动滑块时显示，松手消失；<br>
+        3. 拖到接近底部自动续载下一批；<br>
+        4. 格子图 = 系统微缩略图（原生模块），流畅滑动的基础。
+      </p>
+    </div>
+  </div>
+</body>
+<script>
+  const $ = id => document.getElementById(id);
+
+  // ============ 示意数据：2026-09-01 往前约 3 年 ============
+  const GRADS = [
+    'linear-gradient(135deg,#84fab0,#3B9E8F)', 'linear-gradient(135deg,#fbc2eb,#a6c1ee)',
+    'linear-gradient(135deg,#f6d365,#e08a3c)', 'linear-gradient(135deg,#2b2b3c,#565676)',
+    'linear-gradient(135deg,#a1c4fd,#c2e9fb)', 'linear-gradient(135deg,#fddb92,#d1fdff)',
+    'linear-gradient(135deg,#e0c3fc,#8ec5fc)', 'linear-gradient(135deg,#fda085,#f5576c)',
+    'linear-gradient(135deg,#cfd9df,#8fa8c8)'
+  ];
+  const DAY = 86400000;
+  const items = [];
+  let t = new Date(2026, 8, 12).getTime();
+  for (let i = 0; i < 240; i++) {
+    items.push({ t, grad: GRADS[i % GRADS.length] });
+    t -= DAY * (0.5 + Math.random() * 1.6);
+  }
+
+  const fmt = (ms) => {
+    const d = new Date(ms), now = new Date();
+    return d.getFullYear() === now.getFullYear()
+      ? `${d.getMonth() + 1}月${d.getDate()}日`
+      : `${d.getFullYear()}年${d.getMonth() + 1}月`;
+  };
+
+  // ============ 网格 ============
+  const grid = $('grid');
+  grid.innerHTML = items.map((it) =>
+    `<div class="tile" style="background:${it.grad}"><span class="d">${fmt(it.t)}</span></div>`
+  ).join('');
+
+  const scroller = $('scroller'), track = $('track'), thumb = $('thumb');
+  const bubble = $('bubble'), bubbleText = $('bubbleText');
+
+  const CELL = Math.floor(300 / 3) + 2;
+  let dragging = false;
+  let hideTimer = null;
+
+  function showBar() {
+    thumb.style.opacity = 1;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      if (!dragging) {
+        thumb.style.opacity = 0;
+        bubble.style.opacity = 0;
+      }
+    }, 700);
+  }
+
+  function updateFromScroll() {
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const frac = maxScroll ? scroller.scrollTop / maxScroll : 0;
+    thumb.style.top = (frac * (track.getBoundingClientRect().height - 42)) + 'px';
+    const row = Math.floor(scroller.scrollTop / CELL);
+    const it = items[Math.min(items.length - 1, row * 3)];
+    if (it) {
+      bubbleText.textContent = fmt(it.t);
+      const thumbTop = parseFloat(thumb.style.top || '0');
+      bubble.style.top = (51 + thumbTop + 7) + 'px';   // 气泡垂直居中对齐滑块中心
+    }
+  }
+
+  // 连续滚动：滑块 + 时间出现，停止后淡出
+  scroller.addEventListener('scroll', () => {
+    updateFromScroll();
+    showBar();
+  });
+
+  // 按住滑块拖动：快速定位，气泡实时显示
+  thumb.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    thumb.setPointerCapture(e.pointerId);
+    showBar();
+    applyDrag(e.pageY);
+  });
+  thumb.addEventListener('pointermove', (e) => { if (dragging) applyDrag(e.pageY); });
+  thumb.addEventListener('pointerup', () => {
+    dragging = false;
+    bubble.style.opacity = 0;
+    showBar();
+  });
+  thumb.addEventListener('pointercancel', () => { dragging = false; bubble.style.opacity = 0; });
+
+  function applyDrag(pageY) {
+    const rect = track.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (pageY - rect.top) / rect.height));
+    thumb.style.top = (frac * (rect.height - 42)) + 'px';
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    scroller.scrollTop = frac * maxScroll;
+    const row = Math.floor(scroller.scrollTop / CELL);
+    const it = items[Math.min(items.length - 1, row * 3)];
+    if (it) {
+      bubbleText.textContent = fmt(it.t);
+      const thumbTop = parseFloat(thumb.style.top || '0');
+      bubble.style.top = (51 + thumbTop + 7) + 'px';   // 气泡垂直居中对齐滑块中心
+      bubble.style.opacity = 1;
+    }
+  }
+</script>
+</body>
+</html>

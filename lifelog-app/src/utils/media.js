@@ -132,6 +132,9 @@ const ensureCoversDir = async () => {
 // 探测/缩放失败返回 null（调用方回退原路径）
 export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
   try {
+    // 已经在 covers 目录里的小图：直接原样返回，避免每次启动迁移都复制出重复文件
+    const dir = await ensureCoversDir();
+    if (uri.startsWith(dir + '/')) return uri;
     const stat = await FileSystem.getInfoAsync(uri);
     if (!stat.exists) return null;
     const dims = await new Promise((resolve) => {
@@ -149,7 +152,6 @@ export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
         workUri = saved.uri;
       }
     }
-    const dir = await ensureCoversDir();
     const ext = (workUri.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
     const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
     await FileSystem.copyAsync({ from: workUri, to: dest });

@@ -15,9 +15,11 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
 import { getIconConfig } from '../utils/icons';
-import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource } from '../utils/media';
+import { isEssay, labelOf } from '../utils/recordMeta';
+import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
+import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -35,6 +37,7 @@ function VideoThumb({ entry, style, contentFit = 'cover' }) {
 
 // 实况徽标：异步检测动态照片，是实况才显示；详情内用全量模式（结果持久缓存，只算一次）
 function LiveGridBadge({ entry }) {
+  const styles = useThemedStyles(makeStyles);
   const [live, setLive] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -48,6 +51,7 @@ function LiveGridBadge({ entry }) {
 // 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放。
 // 静帧始终垫底：视频出首帧才盖上来（消除开始时的闪黑），播完自动回到静帧、可再次点按重播
 function LivePhotoPage({ entry }) {
+  const styles = useThemedStyles(makeStyles);
   const [info, setInfo] = useState(null);
   const [playingUri, setPlayingUri] = useState(null);
   const [videoReady, setVideoReady] = useState(false);
@@ -117,6 +121,8 @@ function LivePhotoPage({ entry }) {
 
 export default function DetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
+  const { colors, isDark } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { logData, updateLog } = useContext(LogContext);
 
   // 通过 id 从全局数据里取，编辑/删除后页面能自动同步
@@ -160,38 +166,51 @@ export default function DetailScreen({ route, navigation }) {
     ? { uri: coverUri }
     : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null);
 
-  // 封面：长按九宫格里任意一张设为/取消封面，记录在 coverIndex 上
+  // 封面：长按九宫格里任意一张设为/取消封面，记录在 coverIndex 上。
+  // 设为封面时同步生成小图文件（covers/ 目录），列表/详情直接显示，重启无需重新解析相册
   const handleGridLongPress = (idx) => {
     const isCurrentCover = item.coverIndex === idx;
     Alert.alert('封面设置', '将这张影像设为该记录的封面吗？', [
       { text: '取消', style: 'cancel' },
       ...(item.coverIndex != null
-        ? [{ text: '取消封面', style: 'destructive', onPress: () => updateLog({ ...item, coverIndex: null }) }]
+        ? [{ text: '取消封面', style: 'destructive', onPress: () => updateLog({ ...item, coverIndex: null, coverThumbUrl: null }) }]
         : []),
-      { text: isCurrentCover ? '重新设为封面' : '设为封面', onPress: () => updateLog({ ...item, coverIndex: idx }) },
+      {
+        text: isCurrentCover ? '重新设为封面' : '设为封面',
+        onPress: async () => {
+          let coverThumbUrl = null;
+          try {
+            const entry = normalizeMediaEntry(item.localImages?.[idx]);
+            const resolved = await resolveMediaUri(entry);
+            coverThumbUrl = await downscaleCover(resolved || entry?.uri);
+          } catch {}
+          updateLog({ ...item, coverIndex: idx, coverThumbUrl: coverThumbUrl || null });
+        },
+      },
     ]);
   };
 
   if (!item) {
     return (
       <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
-        <StatusBar style="dark" />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
         <Text style={styles.emptyText}>这条印记已不存在</Text>
       </View>
     );
   }
 
-  const iconConfig = getIconConfig(item);
+  const iconConfig = getIconConfig(item, colors);
   const displayTitle = item.baseType === 'ticket' ? shortTicketTitle(item.title) : item.title;
+  const essay = isEssay(item);
 
   return (
     <View style={styles.container}>
-      <StatusBar style={viewerIndex >= 0 ? 'light' : 'dark'} />
+      <StatusBar style={viewerIndex >= 0 ? 'light' : (isDark ? 'light' : 'dark')} />
 
       {/* 顶部导航栏 */}
       <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
-          <ChevronLeft size={24} color="#1C1C1E" />
+          <ChevronLeft size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.navTitle} numberOfLines={1}>{displayTitle}</Text>
         <View style={styles.navBtn} />
@@ -203,28 +222,39 @@ export default function DetailScreen({ route, navigation }) {
             <CoverIcon item={item} height={80} style={{ marginRight: 0 }} />
           ) : (
             <View style={[styles.iconBox, { backgroundColor: iconConfig.iconBgColor }]}>
-              {React.createElement(iconConfig.IconComponent, { color: iconConfig.iconColor, size: 28 })}
+              <Text style={styles.iconEmoji}>{iconConfig.emoji}</Text>
             </View>
           )}
           <View style={{ flex: 1 }}>
-            <Text style={styles.detailTitle}>{displayTitle}</Text>
+            <View style={styles.detailTitleRow}>
+              <Text style={styles.detailTitle} numberOfLines={2}>{displayTitle}</Text>
+              <Text style={[styles.typeTag, { color: iconConfig.iconColor, backgroundColor: iconConfig.iconBgColor }]}>
+                {labelOf(item)}
+              </Text>
+            </View>
             <Text style={styles.detailDate}>{item.date}</Text>
           </View>
         </Animated.View>
 
-        {(item.rating || item.subtitle || item.comment) && (
+        {(item.rating || item.mood || item.subtitle || item.comment) && (
           <Animated.View entering={FadeInDown.duration(300).delay(60)} style={styles.reviewBox}>
-            {!!item.rating && (
+            {/* 随笔用心情 emoji + 天气顶替星级，其它类型保持原来的五星 */}
+            {essay ? (
+              <View style={styles.reviewRatingRow}>
+                <Text style={styles.moodEmoji}>{item.mood}</Text>
+                {!!item.weather && <Text style={styles.moodWeather}>天气 {item.weather}</Text>}
+              </View>
+            ) : (!!item.rating && (
               <View style={styles.reviewRatingRow}>
                 {[1, 2, 3, 4, 5].map((i) => {
                   const isFull = i <= item.rating;
                   const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                  if (isHalf) return <StarHalf key={i} size={22} color="#FACC15" fill="#FACC15" style={{ marginRight: 3 }} />;
-                  return <Star key={i} size={22} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 3 }} />;
+                  if (isHalf) return <StarHalf key={i} size={22} color={colors.star} fill={colors.star} style={{ marginRight: 3 }} />;
+                  return <Star key={i} size={22} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : "transparent"} style={{ marginRight: 3 }} />;
                 })}
                 <Text style={styles.reviewScore}>{item.rating} 分</Text>
               </View>
-            )}
+            ))}
             {!!item.subtitle && <Text style={styles.reviewText}>{item.subtitle}</Text>}
             {/* 旅票的 subtitle 是车次/航班号，评论存在独立字段里 */}
             {!!item.comment && <Text style={styles.reviewText}>{item.comment}</Text>}
@@ -316,34 +346,39 @@ export default function DetailScreen({ route, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7' },
-  emptyText: { textAlign: 'center', color: '#9CA3AF', fontSize: 15 },
+const makeStyles = (c) => ({
+  container: { flex: 1, backgroundColor: c.bg },
+  emptyText: { textAlign: 'center', color: c.textMuted, fontSize: 15 },
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#F2F2F7', paddingHorizontal: 12, paddingBottom: 8
+    backgroundColor: c.bg, paddingHorizontal: 12, paddingBottom: 8
   },
   navBtn: { width: 36, alignItems: 'center' },
-  navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: '#1C1C1E', marginHorizontal: 4 },
-  detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 14, padding: 14, gap: 12 },
+  navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: c.text, marginHorizontal: 4 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgElevated, borderRadius: 14, padding: 14, gap: 12 },
   iconBox: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  detailTitle: { fontSize: 19, fontWeight: '700', color: '#1C1C1E' },
-  detailDate: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  reviewBox: { backgroundColor: '#FFF', borderRadius: 12, padding: 16, marginTop: 12 },
+  iconEmoji: { fontSize: 26, lineHeight: 32 },
+  detailTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  detailTitle: { fontSize: 19, fontWeight: '700', color: c.text },
+  typeTag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden', flexShrink: 0 },
+  detailDate: { fontSize: 13, color: c.textMuted, marginTop: 2 },
+  reviewBox: { backgroundColor: c.bgElevated, borderRadius: 12, padding: 16, marginTop: 12 },
   reviewRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: '#FACC15' },
-  reviewText: { fontSize: 16, color: '#374151', lineHeight: 24 },
+  reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: c.star },
+  moodEmoji: { fontSize: 26, lineHeight: 32, marginRight: 8 },
+  moodWeather: { fontSize: 14, color: c.textSecondary },
+  reviewText: { fontSize: 16, color: c.text, lineHeight: 24 },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
   liveBadge: { position: 'absolute', left: 8, top: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
   liveBadgeText: { color: '#FFF', fontSize: 10 },
   livePlayBadge: { position: 'absolute', right: 16, bottom: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 },
   livePlayText: { color: '#FFF', fontSize: 12, marginRight: 5 },
-  sectionTitle: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
+  sectionTitle: { fontSize: 15, fontWeight: '600', color: c.text },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 8 },
   gridItem: { width: '33.33%', padding: 4 },
-  gridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#E5E5EA' },
-  videoThumbnailBox: { width: '100%', aspectRatio: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', backgroundColor: '#E5E5EA' },
+  gridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.mediaPlaceholder },
+  videoThumbnailBox: { width: '100%', aspectRatio: 1, borderRadius: 10, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', backgroundColor: c.mediaPlaceholder },
   playOverlay: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   viewerCloseBtn: { position: 'absolute', zIndex: 10, right: 16 },

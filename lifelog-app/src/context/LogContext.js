@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions, withTimeout } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps, downscaleCover } from '../utils/media';
+import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps, downscaleCover, resolveMediaUri } from '../utils/media';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
 export const LogContext = createContext();
@@ -71,6 +71,26 @@ export const LogProvider = ({ children }) => {
               current = migrated;
               setLogData(migrated);
               try { await AsyncStorage.setItem('@lifelogs', JSON.stringify(migrated)); } catch {}
+            }
+            // 自选封面小图补齐：老记录选了相册封面但没有小图文件的，生成一份（一次性，之后走设置时的即时生成）
+            let thumbsAdded = false;
+            for (let i = 0; i < current.length; i++) {
+              const log = current[i];
+              if (log?.coverIndex == null || log.coverThumbUrl) continue;
+              const entry = (log.localImages || [])[log.coverIndex];
+              if (!entry) continue;
+              try {
+                const resolved = await resolveMediaUri(entry);
+                const small = await downscaleCover(resolved || entry.uri || '');
+                if (small) {
+                  current = current.map((l, j) => (j === i ? { ...l, coverThumbUrl: small } : l));
+                  thumbsAdded = true;
+                }
+              } catch {}
+            }
+            if (thumbsAdded) {
+              setLogData(current);
+              try { await AsyncStorage.setItem('@lifelogs', JSON.stringify(current)); } catch {}
             }
             backfillCovers(current);
           } catch {}
@@ -154,7 +174,12 @@ export const LogProvider = ({ children }) => {
   // ✨ 新增：更新记录
   const updateLog = async (updatedLog) => {
     try {
-      const updatedLogs = logData.map(log => log.id === updatedLog.id ? updatedLog : log);
+      // 合并而不是整对象替换：保存表单里没有涉及的字段（比如详情页里长按设的
+      // coverThumbUrl / coverIndex）不会被这次编辑抹掉；显式传 null 仍然会覆盖
+      const patch = Object.fromEntries(
+        Object.entries(updatedLog).filter(([, v]) => v !== undefined)
+      );
+      const updatedLogs = logData.map(log => (log.id === updatedLog.id ? { ...log, ...patch } : log));
       setLogData(updatedLogs);
       await AsyncStorage.setItem('@lifelogs', JSON.stringify(updatedLogs));
     } catch (e) {

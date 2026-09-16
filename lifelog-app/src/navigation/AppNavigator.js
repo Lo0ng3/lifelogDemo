@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { Compass, PlusCircle } from 'lucide-react-native';
 
 // 引入我们刚才写的两个页面
@@ -9,17 +10,27 @@ import HomeScreen from '../screens/HomeScreen';
 import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
+import { useTheme } from '../theme/ThemeProvider';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
 function Tabs() {
+  const { colors } = useTheme();
   return (
     <Tab.Navigator
       screenOptions={{
-        // 配置底部导航栏的样式
-        tabBarActiveTintColor: '#007AFF', // 选中时的颜色
-        tabBarInactiveTintColor: 'gray',  // 未选中时的颜色
+        // Tab 之间用轻微的位移过渡，比硬切更顺；键盘弹出时收起 TabBar
+        animation: 'shift',
+        tabBarHideOnKeyboard: true,
+        // 配置底部导航栏的样式（跟随主题）
+        tabBarActiveTintColor: colors.accent, // 选中时的颜色
+        tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
+        tabBarStyle: {
+          backgroundColor: colors.bgElevated,
+          borderTopColor: colors.border,
+          borderTopWidth: StyleSheet.hairlineWidth,
+        },
         headerShown: false, // 隐藏默认的顶部标题栏，我们后续自己画
       }}
     >
@@ -48,14 +59,37 @@ function Tabs() {
 }
 
 export default function AppNavigator() {
+  const { colors, isDark } = useTheme();
+
+  // 让导航容器本身也换上主题色：页面切换时露出的底色、返回手势的阴影都跟着变
+  const navTheme = useMemo(() => {
+    const base = isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      dark: isDark,
+      colors: {
+        ...base.colors,
+        primary: colors.accent,
+        background: colors.bg,
+        card: colors.bgElevated,
+        text: colors.text,
+        border: colors.border,
+        notification: colors.danger,
+      },
+    };
+  }, [colors, isDark]);
+
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navTheme}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
-          // 统一的页面切换动画：二级页面从右侧滑入，时长收敛到 260ms，不拖沓
+          // 统一的页面切换动画：二级页面从右侧滑入；背景色跟随主题，转场时不会闪白
           animation: 'slide_from_right',
-          animationDuration: 260,
+          animationDuration: 300,
+          gestureEnabled: true,
+          fullScreenGestureEnabled: true,
+          contentStyle: { backgroundColor: colors.bg },
         }}
       >
         {/* 底部 Tab 作为根；详情/编辑/选图为二级页面，进出配对，返回栈不会越叠越深 */}

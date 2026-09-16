@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>印记 · 外观（浅色 / 深色）预览</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 24px 56px; background: #EEF0F3; color: #1C1C1E;
+         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  h1 { font-size: 21px; margin: 0 0 6px; }
+  .sub { font-size: 13px; color: #5B6472; line-height: 1.75; max-width: 900px; margin-bottom: 26px; }
+  h2 { font-size: 16px; margin: 34px 0 14px; }
+  .cols { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 300px; flex: none; border: 7px solid #14161A; border-radius: 32px; overflow: hidden; background: #14161A; }
+  .screen { height: 470px; display: flex; flex-direction: column; }
+  .splash { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; }
+  .splash img { width: 120px; height: 120px; }
+  .splashTag { font-size: 11px; color: #8E8E93; letter-spacing: .04em; }
+  .ui { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .card { border: 1px solid; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 32px; height: 32px; border-radius: 8px; flex: none; }
+  .title { font-size: 14px; font-weight: 600; }
+  .sub { font-size: 11.5px; margin-top: 2px; }
+  .search { border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+  .cap { text-align: center; color: #C9CDD4; font-size: 12px; padding: 10px 0 12px; }
+  .panel { display: flex; gap: 28px; flex-wrap: wrap; }
+  .swatches { background: #FFF; border-radius: 14px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.06); min-width: 300px; }
+  .swatches h3 { font-size: 14px; margin: 0 0 12px; }
+  .sw { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 12.5px; }
+  .chip { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.12); flex: none; }
+  .name { width: 92px; color: #3C4149; }
+  .sw code { color: #6B7280; font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <h1>印记 · 外观预览</h1>
+  <p class="sub">
+    开屏与界面都跟随系统深/浅色（<b>白天浅色、夜间深色</b>），也可以在侧边栏「外观」里手动固定成浅色或深色。
+    开屏底色与页面底色一致（浅色 #F2F2F7 / 深色 #0F1115），启动过程不会先闪一下再跳色。
+  </p>
+
+  <h2>开屏 + 列表界面</h2>
+  <div class="cols">
+
+    <div class="phone light">
+      <div class="screen" style="background:#F2F2F7">
+        <div class="splash" style="background:#F2F2F7">
+          <img src="../assets/images/splash-icon-light.png" alt="开屏图标" />
+          <div class="splashTag">开屏 · 白天</div>
+        </div>
+        <div class="ui">
+          <div class="card" style="background:#FFFFFF;border-color:#E5E7EB">
+            <div class="row">
+              <div class="dot" style="background:#E0F2FE"></div>
+              <div style="flex:1">
+                <div class="title" style="color:#1C1C1E">外滩 &amp; 南京东路</div>
+                <div class="sub" style="color:#6B7280">10-02 · 风很大，夜景绝美</div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="dot" style="background:#FEE2E2"></div>
+              <div style="flex:1">
+                <div class="title" style="color:#1C1C1E">北京 → 上海</div>
+                <div class="sub" style="color:#6B7280">MU5101 · 2023-10-01</div>
+              </div>
+            </div>
+          </div>
+          <div class="search" style="background:#E5E5EA;color:#9CA3AF">搜索标题、关键字…</div>
+        </div>
+      </div>
+      <div class="cap">浅色（白天 / 跟随系统）</div>
+    </div>
+
+    <div class="phone dark">
+      <div class="screen" style="background:#0F1115">
+        <div class="splash" style="background:#0F1115">
+          <img src="../assets/images/splash-icon-dark.png" alt="开屏图标" />
+          <div class="splashTag">开屏 · 夜间</div>
+        </div>
+        <div class="ui">
+          <div class="card" style="background:#1B1D22;border-color:#2E323A">
+            <div class="row">
+              <div class="dot" style="background:rgba(10,132,255,0.18)"></div>
+              <div style="flex:1">
+                <div class="title" style="color:#F2F3F5">外滩 &amp; 南京东路</div>
+                <div class="sub" style="color:#A6ACB8">10-02 · 风很大，夜景绝美</div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="dot" style="background:rgba(255,107,107,0.16)"></div>
+              <div style="flex:1">
+                <div class="title" style="color:#F2F3F5">北京 → 上海</div>
+                <div class="sub" style="color:#A6ACB8">MU5101 · 2023-10-01</div>
+              </div>
+            </div>
+          </div>
+          <div class="search" style="background:#2C2F36;color:#8B919C">搜索标题、关键字…</div>
+        </div>
+      </div>
+      <div class="cap">深色（夜间 / 手动固定）</div>
+    </div>
+  </div>
+
+  <h2>色板对照</h2>
+  <div class="panel">
+    <div class="swatches"><h3>浅色</h3>
+        <div class="sw">
+          <span class="chip" style="background:#F2F2F7"></span>
+          <span class="name">页面底色</span>
+          <code>#F2F2F7</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#FFFFFF"></span>
+          <span class="name">卡片 / 列表</span>
+          <code>#FFFFFF</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#F9FAFB"></span>
+          <span class="name">输入框 / 次级填充</span>
+          <code>#F9FAFB</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#E5E5EA"></span>
+          <span class="name">搜索框 / 分段控件</span>
+          <code>#E5E5EA</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#1C1C1E"></span>
+          <span class="name">正文文字</span>
+          <code>#1C1C1E</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#6B7280"></span>
+          <span class="name">次要文字</span>
+          <code>#6B7280</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#E5E7EB"></span>
+          <span class="name">描边</span>
+          <code>#E5E7EB</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#007AFF"></span>
+          <span class="name">强调色</span>
+          <code>#007AFF</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#E0F2FE"></span>
+          <span class="name">强调色浅底</span>
+          <code>#E0F2FE</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#EF4444"></span>
+          <span class="name">地点 / 危险</span>
+          <code>#EF4444</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#A855F7"></span>
+          <span class="name">娱乐 / 阅读</span>
+          <code>#A855F7</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#FACC15"></span>
+          <span class="name">评分</span>
+          <code>#FACC15</code>
+        </div></div>
+    <div class="swatches"><h3>深色</h3>
+        <div class="sw">
+          <span class="chip" style="background:#0F1115"></span>
+          <span class="name">页面底色</span>
+          <code>#0F1115</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#1B1D22"></span>
+          <span class="name">卡片 / 列表</span>
+          <code>#1B1D22</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#23262C"></span>
+          <span class="name">输入框 / 次级填充</span>
+          <code>#23262C</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#2C2F36"></span>
+          <span class="name">搜索框 / 分段控件</span>
+          <code>#2C2F36</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#F2F3F5"></span>
+          <span class="name">正文文字</span>
+          <code>#F2F3F5</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#A6ACB8"></span>
+          <span class="name">次要文字</span>
+          <code>#A6ACB8</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#2E323A"></span>
+          <span class="name">描边</span>
+          <code>#2E323A</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#0A84FF"></span>
+          <span class="name">强调色</span>
+          <code>#0A84FF</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:rgba(10,132,255,0.18)"></span>
+          <span class="name">强调色浅底</span>
+          <code>rgba(10,132,255,0.18)</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#FF6B6B"></span>
+          <span class="name">地点 / 危险</span>
+          <code>#FF6B6B</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#C084FC"></span>
+          <span class="name">娱乐 / 阅读</span>
+          <code>#C084FC</code>
+        </div>
+        <div class="sw">
+          <span class="chip" style="background:#FACC15"></span>
+          <span class="name">评分</span>
+          <code>#FACC15</code>
+        </div></div>
+  </div>
+</body>
+</html>

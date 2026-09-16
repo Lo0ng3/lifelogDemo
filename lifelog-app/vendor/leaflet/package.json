@@ -1,0 +1,7 @@
+{
+  "name": "leaflet",
+  "version": "1.9.4",
+  "license": "BSD-2-Clause",
+  "description": "Leaflet 地图库的本地副本（dist/leaflet.min.js、dist/leaflet.css），由 scripts/embed-leaflet.mjs 内联进 App",
+  "source": "https://unpkg.com/leaflet@1.9.4/dist/"
+}

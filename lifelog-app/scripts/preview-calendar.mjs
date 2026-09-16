@@ -1,0 +1,732 @@
+// 月示图 + 随笔（一级：日记 / 事迹）的交互设计稿。
+// 颜色取自 src/theme/palette.js；一个一级类型一个颜色。
+// 用法：node scripts/preview-calendar.mjs  →  demo/month-note-preview.html
+//   可选参数：?theme=dark ?sel=2025-10-06 ?type=diary|memo|ticket（打开类型弹层）
+//            ?sheet=1（只开弹层）?detail=6&which=list|cal|both（打开详情）
+import { writeFileSync, mkdirSync, mkdtempSync, copyFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const scratch = mkdtempSync(join(tmpdir(), 'rc-cal-'));
+const target = join(scratch, 'palette.mjs');
+copyFileSync(join(root, 'src/theme/palette.js'), target);
+const { palettes } = await import(pathToFileURL(target).href);
+
+const vars = (c) => `
+  --bg:${c.bg}; --card:${c.bgElevated}; --sunken:${c.bgSunken}; --fill:${c.fill}; --fillStrong:${c.fillStrong};
+  --text:${c.text}; --textStrong:${c.textStrong}; --textSub:${c.textSecondary}; --textMuted:${c.textMuted}; --textFaint:${c.textFaint};
+  --border:${c.border}; --borderSoft:${c.borderSoft}; --divider:${c.divider};
+  --accent:${c.accent}; --accentSoft:${c.accentSoft}; --accentSoftBorder:${c.accentSoftBorder};
+  --star:${c.star}; --scrim:${c.scrim}; --sheetHandle:${c.sheetHandle};
+  --iconTicket:${c.iconTicket}; --iconPlace:${c.iconPlace}; --iconMedia:${c.iconMedia};`;
+
+const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>印记 · 月示图 + 随笔（设计稿 v3）</title>
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body.light {${vars(palettes.light)}
+    --page:#EEF0F3; --pageText:#1C1C1E; --pageSub:#5B6472; --frame:#14161A;
+    --cTicket:#2F7BF6; --cPlace:#EE4D3D; --cMedia:#A855F7; --cNote:#10B981;
+    --sTicket:var(--iconTicket); --sPlace:var(--iconPlace); --sMedia:var(--iconMedia); --sNote:#D1FAE5; }
+  body.dark {${vars(palettes.dark)}
+    --page:#0A0B0D; --pageText:#F2F3F5; --pageSub:#9BA1AC; --frame:#2A2D33;
+    --cTicket:#4C93FF; --cPlace:#FF6B6B; --cMedia:#C084FC; --cNote:#34D399;
+    --sTicket:var(--iconTicket); --sPlace:var(--iconPlace); --sMedia:var(--iconMedia); --sNote:rgba(52,211,153,.16); }
+  body { margin:0; padding:28px 22px 60px; background:var(--page); color:var(--pageText);
+         font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lead { font-size:13px; color:var(--pageSub); line-height:1.75; max-width:1120px; margin:0 0 16px; }
+  .lead b { color:var(--pageText); }
+  .controls { display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:20px; }
+  .ctl { display:flex; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:3px; gap:2px; }
+  .ctl button { border:none; background:transparent; color:var(--textSub); font:inherit; font-size:12.5px; padding:6px 12px; border-radius:8px; cursor:pointer; }
+  .ctl button.on { background:var(--accentSoft); color:var(--accent); font-weight:600; }
+  .ctlLabel { font-size:12px; color:var(--pageSub); }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; }
+  .legend span { font-size:12px; color:var(--textSub); display:flex; align-items:center; gap:5px; }
+  .legend i { width:9px; height:9px; border-radius:5px; display:inline-block; }
+  .cols { display:flex; gap:22px; flex-wrap:wrap; align-items:flex-start; }
+
+  /* ---------- 手机壳 ---------- */
+  .phone { width:330px; flex:none; border:7px solid var(--frame); border-radius:34px; overflow:hidden;
+           background:var(--bg); position:relative; height:664px; display:flex; flex-direction:column; }
+  .phone.dark-shell { border-color:#3A3E46; }
+  .colwrap { display:flex; flex-direction:column; align-items:center; }
+  .cap { text-align:center; font-size:12px; color:var(--pageSub); margin:10px 0 0; max-width:330px; line-height:1.6; }
+
+  .phead { padding:10px 14px 4px; }
+  .row1 { display:flex; align-items:center; justify-content:space-between; height:34px; }
+  .avatar { width:30px; height:30px; border-radius:15px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }
+  .seg { display:flex; background:var(--fill); border-radius:9px; padding:2px; }
+  .seg span { font-size:11.5px; padding:4px 11px; border-radius:7px; color:var(--textSub); white-space:nowrap; }
+  .seg span.on { background:var(--card); color:var(--textStrong); font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  .bigtitle { font-size:26px; font-weight:700; margin:6px 0 8px; color:var(--textStrong); }
+  .searchbar { margin:0 14px 8px; height:34px; border-radius:10px; background:var(--fill);
+               display:flex; align-items:center; padding:0 10px; font-size:12.5px; color:var(--textMuted); }
+  .navrow { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:var(--card); }
+  .navrow .t { font-size:15px; font-weight:600; color:var(--text); }
+  .navrow .a { font-size:14px; color:var(--textSub); }
+  .navrow .b { font-size:14px; font-weight:600; color:var(--accent); }
+  .navrow .b.off { color:var(--textFaint); }
+  .scroll { flex:1; overflow-y:auto; padding:0 12px 14px; scrollbar-width:none; }
+  .scroll::-webkit-scrollbar { display:none; }
+
+  /* ---------- 列表 / 时间线：与原列表同版式，只多一个统一标签 ---------- */
+  .listwrap { background:var(--card); border-radius:14px; overflow:hidden; margin:0 14px; }
+  .daygroup { font-size:11.5px; color:var(--textMuted); padding:10px 2px 6px; }
+  .entry { background:var(--card); padding:11px 12px; display:flex; gap:12px; align-items:center; cursor:pointer; }
+  .entry + .entry { border-top:1px solid var(--divider); }
+  .entry:active { background:var(--sunken); }
+  .shot { width:56px; height:56px; border-radius:9px; flex:none; display:flex; align-items:center; justify-content:center; font-size:24px; }
+  .entry .body { flex:1; min-width:0; }
+  .entry .h { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .entry .t1 { font-size:15px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .entry .date { font-size:11.5px; color:var(--textMuted); flex:none; }
+  .entry .meta { display:flex; align-items:center; gap:6px; margin-top:5px; }
+  .entry .t2 { font-size:12.5px; color:var(--textSub); margin-top:4px; line-height:1.5;
+               display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .stars { font-size:11px; color:var(--star); letter-spacing:1px; }
+  .stars i { color:var(--fillStrong); font-style:normal; }
+  .moodline { font-size:12px; color:var(--textMuted); }
+  .tag { font-size:10.5px; padding:2px 7px; border-radius:6px; flex:none; }
+  .empty { text-align:center; color:var(--textMuted); font-size:12.5px; padding:26px 0; }
+  /* 样例封面：渐变代替真实海报 */
+  .g1 { background:linear-gradient(135deg,#fbc2eb,#a6c1ee); }
+  .g2 { background:linear-gradient(135deg,#84fab0,#8fd3f4); }
+  .g3 { background:linear-gradient(135deg,#f6d365,#fda085); }
+  .g4 { background:linear-gradient(135deg,#a1c4fd,#c2e9fb); }
+  .g5 { background:linear-gradient(135deg,#d4fc79,#96e6a1); }
+  .g6 { background:linear-gradient(135deg,#fddb92,#d1fdff); }
+  .g7 { background:linear-gradient(135deg,#cfd9df,#e2ebf0); }
+  .g8 { background:linear-gradient(135deg,#accbee,#e7f0fd); }
+  .g9 { background:linear-gradient(135deg,#e0c3fc,#8ec5fc); }
+
+  /* ---------- 月历 ---------- */
+  .monthbar { display:flex; align-items:center; justify-content:space-between; padding:0 14px 6px; }
+  .monthbar .m { font-size:15px; font-weight:600; color:var(--text); }
+  .monthbar .nav { display:flex; align-items:center; gap:4px; }
+  .monthbar button { width:28px; height:28px; border:none; border-radius:9px; background:var(--fill); color:var(--textSub); font:inherit; font-size:14px; cursor:pointer; }
+  .monthbar .today { width:auto; padding:0 10px; font-size:12px; color:var(--accent); background:var(--accentSoft); }
+  .week { display:grid; grid-template-columns:repeat(7,1fr); padding:0 8px; margin-bottom:2px; }
+  .week span { text-align:center; font-size:10.5px; color:var(--textMuted); }
+  .grid { display:grid; grid-template-columns:repeat(7,1fr); padding:0 8px; }
+  .day { height:46px; border-radius:10px; position:relative; display:flex; flex-direction:column;
+         align-items:center; padding-top:4px; cursor:pointer; }
+  .day .d { font-size:12.5px; color:var(--text); line-height:1.1; }
+  .day.out .d { color:var(--textFaint); }
+  .day.today .d { color:var(--accent); font-weight:700; }
+  .day.sel { background:var(--accentSoft); }
+  .day.today .ring { position:absolute; inset:2px; border:1px solid var(--accentSoftBorder); border-radius:10px; }
+  .dots { display:flex; gap:2.5px; margin-top:4px; align-items:center; }
+  .dot { width:5px; height:5px; border-radius:3px; }
+  .more { font-size:8.5px; color:var(--textMuted); }
+  .tlhead { display:flex; align-items:center; justify-content:space-between; padding:10px 20px 6px; }
+  .tlhead .t { font-size:13px; font-weight:600; color:var(--text); }
+  .tlhead .c { font-size:11.5px; color:var(--textMuted); }
+
+  /* ---------- 添加页 ---------- */
+  .form { flex:1; overflow-y:auto; padding:12px; scrollbar-width:none; }
+  .form::-webkit-scrollbar { display:none; }
+  .fcard { background:var(--card); border-radius:14px; padding:14px; }
+  .typerow { display:flex; align-items:center; gap:8px; height:46px; padding:0 12px; border-radius:10px;
+             background:var(--sunken); border:1px solid var(--border); cursor:pointer; margin-bottom:6px; }
+  .typerow .k { font-size:13px; color:var(--textMuted); }
+  .typerow .v { flex:1; font-size:14px; font-weight:600; color:var(--text); }
+  .typerow .chev { color:var(--textFaint); }
+  .divider { height:1px; background:var(--borderSoft); margin:16px 0; }
+  .flabel { font-size:12px; color:var(--textMuted); margin-bottom:7px; }
+  .flabel b { color:var(--danger, #EF4444); }
+  .finput { height:42px; border-radius:10px; border:1px solid var(--border); background:var(--sunken);
+            display:flex; align-items:center; padding:0 12px; font-size:13.5px; color:var(--text); }
+  .finput.ph { color:var(--textFaint); }
+  .ftextarea { min-height:72px; border-radius:10px; border:1px solid var(--border); background:var(--sunken);
+               padding:10px 12px; font-size:13.5px; color:var(--textFaint); line-height:1.6; }
+  .daterow { display:flex; align-items:center; gap:6px; }
+  .datebox { width:46px; height:40px; border-radius:9px; border:1px solid var(--border); background:var(--sunken);
+             display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; color:var(--text); }
+  .datebox.wide { width:62px; }
+  .starline { display:flex; align-items:center; gap:3px; font-size:20px; color:var(--star); }
+  .starline i { color:var(--fillStrong); font-style:normal; }
+  .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+  .cell { aspect-ratio:1; border-radius:9px; position:relative; }
+  .cell.add { background:var(--sunken); border:1px dashed var(--border); display:flex; align-items:center; justify-content:center; color:var(--textMuted); font-size:17px; }
+  .moodrow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .moodchip { width:40px; height:38px; border-radius:11px; background:var(--sunken); border:1px solid var(--border);
+              display:flex; align-items:center; justify-content:center; font-size:19px; cursor:pointer; }
+  .moodchip.on { background:var(--accentSoft); border-color:var(--accentSoftBorder); }
+  .moodinput { width:86px; height:38px; border-radius:11px; border:1px dashed var(--border); background:var(--sunken);
+               text-align:center; font-size:16px; color:var(--text); font-family:inherit; }
+  .moodinput::placeholder { font-size:10.5px; color:var(--textFaint); }
+  .moodinput.on { background:var(--accentSoft); border-style:solid; border-color:var(--accentSoftBorder); }
+  .warnline { font-size:11.5px; color:var(--danger, #EF4444); margin-top:8px; }
+  .subrow { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .subrow span { font-size:12.5px; padding:6px 14px; border-radius:16px; background:var(--sunken);
+                 border:1px solid var(--border); color:var(--textSub); cursor:pointer; }
+  .subrow span.on { background:var(--accentSoft); border-color:var(--accentSoftBorder); color:var(--accent); font-weight:600; }
+  .hintline { font-size:12px; color:var(--textMuted); margin-top:14px; }
+
+  /* 类型弹层 */
+  .sheet { position:absolute; inset:0; background:var(--scrim); display:none; align-items:flex-end; z-index:40; }
+  .sheet.open { display:flex; }
+  .sheetCard { width:100%; background:var(--card); border-radius:18px 18px 0 0; padding:12px 14px 20px; }
+  .handle { width:36px; height:4px; border-radius:2px; background:var(--sheetHandle); margin:0 auto 12px; }
+  .sheetTitle { display:flex; justify-content:space-between; align-items:center; font-size:15px; font-weight:600; color:var(--text); margin-bottom:12px; }
+  .sheetTitle button { border:none; background:none; color:var(--accent); font:inherit; font-size:13.5px; cursor:pointer; }
+  .typerow4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .typeitem { border:1.5px solid var(--border); border-radius:12px; padding:10px 2px 8px; text-align:center; cursor:pointer; }
+  .typeitem.on { border-color:var(--accent); background:var(--accentSoft); }
+  .typeitem .e { font-size:20px; line-height:1.1; }
+  .typeitem .l { font-size:11px; color:var(--textSub); margin-top:4px; }
+  .typeitem.on .l { color:var(--accent); font-weight:600; }
+
+  /* ---------- 详情（版式对齐现有 DetailScreen） ---------- */
+  .detailOv { position:absolute; inset:0; background:var(--bg); display:none; flex-direction:column; z-index:60; }
+  .detailOv.open { display:flex; }
+  .dnav { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; }
+  .dnav .b { font-size:15px; color:var(--accent); cursor:pointer; width:40px; }
+  .dnav .t { font-size:15px; font-weight:600; color:var(--text); flex:1; text-align:center;
+             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dbody { flex:1; overflow-y:auto; padding:4px 14px 20px; scrollbar-width:none; }
+  .dbody::-webkit-scrollbar { display:none; }
+  .dhead { background:var(--card); border-radius:14px; padding:14px; display:flex; gap:12px; align-items:center; }
+  .dshot { width:80px; height:80px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; font-size:34px; }
+  .dtitle { font-size:18px; font-weight:700; color:var(--text); }
+  .ddate { font-size:12.5px; color:var(--textMuted); margin-top:3px; }
+  .dreview { background:var(--card); border-radius:12px; padding:14px; margin-top:12px; }
+  .drating { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:20px; color:var(--star); }
+  .drating i { color:var(--fillStrong); font-style:normal; }
+  .dscore { font-size:15px; font-weight:700; color:var(--star); }
+  .dtext { font-size:14.5px; color:var(--text); line-height:1.7; }
+  .dsec { font-size:13.5px; font-weight:600; color:var(--text); margin:16px 2px 8px; }
+  .dgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .dcell { aspect-ratio:1; border-radius:10px; position:relative; cursor:pointer; }
+  .dcell .coverTag { position:absolute; left:5px; top:5px; background:rgba(0,0,0,.55); color:#fff;
+                     font-size:9.5px; padding:1px 5px; border-radius:5px; }
+  .dhint { font-size:11.5px; color:var(--textMuted); margin-top:8px; }
+
+  /* ---------- 说明面板 ---------- */
+  .panel { width:352px; flex:none; background:var(--card); border-radius:16px; padding:18px; box-shadow:0 1px 5px rgba(0,0,0,.07); }
+  .panel h2 { font-size:15px; margin:0 0 10px; color:var(--text); }
+  .panel h3 { font-size:13px; margin:16px 0 6px; color:var(--text); }
+  .panel p, .panel li { font-size:12.5px; color:var(--textSub); line-height:1.75; margin:0 0 6px; }
+  .panel ul { padding-left:18px; margin:0 0 8px; }
+  .panel b { color:var(--text); }
+  .q { background:var(--sunken); border-radius:10px; padding:10px 12px; margin-top:10px; }
+  .q div { font-size:12.5px; color:var(--textSub); line-height:1.7; }
+</style>
+</head>
+<body class="light">
+  <h1>月示图 + 随笔（日记 / 事迹）· 设计稿 v3</h1>
+  <p class="lead">
+    一级类型现在是四个：<b>旅票 / 地点 / 娱乐 / 随笔</b>；<b>随笔</b>下面分 <b>日记</b> 和 <b>事迹</b>。
+    列表和详情页的版式<b>沿用你现在的那套</b>（封面位 + 标题 + 日期 + 星级 + 摘要；详情页是头部卡 + 评分卡 + 「相关影像（长按可设为封面）」），
+    这版只做了两件事：给<b>所有类型</b>统一加上一个类型标签，以及把封面角标上的 emoji 去掉。
+  </p>
+
+  <div class="controls">
+    <span class="ctlLabel">主题</span>
+    <div class="ctl" id="ctlTheme"><button data-theme="light" class="on">浅色</button><button data-theme="dark">深色</button></div>
+    <span class="ctlLabel">一级类型配色</span>
+    <div class="legend">
+      <span><i style="background:var(--cTicket)"></i>旅票</span>
+      <span><i style="background:var(--cPlace)"></i>地点</span>
+      <span><i style="background:var(--cMedia)"></i>娱乐</span>
+      <span><i style="background:var(--cNote)"></i>随笔（日记 / 事迹）</span>
+    </div>
+  </div>
+
+  <div class="cols">
+    <!-- ① 列表 -->
+    <div class="colwrap">
+      <div class="phone" id="phoneList">
+        <div class="phead">
+          <div class="row1"><div class="avatar">旅</div>
+            <div class="seg"><span class="on">列表</span><span>月示</span><span>地图</span></div>
+            <div style="width:30px"></div>
+          </div>
+          <div class="bigtitle">印记</div>
+          <div class="searchbar">🔍 搜索标题、关键字…</div>
+        </div>
+        <div class="scroll"><div class="listwrap" id="list"></div></div>
+        <div class="detailOv" id="detailList"></div>
+      </div>
+      <div class="cap">① 列表：版式不变，只多了一个统一的类型标签；点条目进详情</div>
+    </div>
+
+    <!-- ② 月示 -->
+    <div class="colwrap">
+      <div class="phone" id="phoneCal">
+        <div class="phead">
+          <div class="row1"><div class="avatar">旅</div>
+            <div class="seg"><span>列表</span><span class="on">月示</span><span>地图</span></div>
+            <div style="width:30px"></div>
+          </div>
+          <div class="bigtitle">印记</div>
+        </div>
+        <div class="monthbar">
+          <div class="m" id="monthLabel">2025年10月</div>
+          <div class="nav"><button id="prevMonth">‹</button><button id="nextMonth">›</button><button class="today" id="todayBtn">今天</button></div>
+        </div>
+        <div class="week"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+        <div class="grid" id="calGrid"></div>
+        <div class="tlhead"><div class="t" id="tlTitle">10月 · 全部</div><div class="c" id="tlCount"></div></div>
+        <div class="scroll"><div class="listwrap" id="timeline"></div></div>
+        <div class="detailOv" id="detailCal"></div>
+      </div>
+      <div class="cap">② 月示：圆点按一级类型着色，点日期看当天，点条目 → 同一个详情页</div>
+    </div>
+
+    <!-- ③ 添加 -->
+    <div class="colwrap">
+      <div class="phone" id="phoneAdd">
+        <div class="navrow"><span class="a">取消</span><span class="t">新印记</span><span class="b" id="saveBtn">保存</span></div>
+        <div class="form" id="form"></div>
+        <div class="sheet" id="sheet">
+          <div class="sheetCard">
+            <div class="handle"></div>
+            <div class="sheetTitle"><span>选择类型</span><button id="sheetClose">关闭</button></div>
+            <div class="typerow4" id="typeRow"></div>
+            <div id="subArea"></div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">③ 添加：类型弹层是 旅票 / 地点 / 娱乐 / 随笔，随笔的二级是 日记 / 事迹</div>
+    </div>
+
+    <aside class="panel">
+      <h2>这版按你说的改了什么</h2>
+      <ul>
+        <li><b>随笔是一级，下面分日记和事迹</b>：类型弹层 4 张卡，选「随笔」后下面出现 日记 / 事迹 两个二级标签（和旅票选机票/火车票一样）。</li>
+        <li><b>列表、详情页版式没动</b>：还是你现在的样子（列表：封面 + 标题 + 日期 + 星级 + 摘要；详情：头部卡 + 评分卡 + 「相关影像（长按可设为封面）」）。</li>
+        <li><b>所有类型统一显示标签</b>：机票 / 火车票 / 地点 / 电影 / 剧集 / 书籍 / 日记 / 事迹……都带一个同款标签，不再只有随笔类才有。</li>
+        <li><b>emoji 不在角标上了</b>：封面角标整块去掉；随笔类没照片时，封面位显示该类型的 emoji 图标（📔 / 📝），和其他类型的图标位一致。</li>
+        <li><b>各类型能力一致，包括换封面</b>：详情里的影像九宫格，长按任意一张就能设为封面（当前封面带「封面」角标），这一套对日记 / 事迹同样可用。</li>
+        <li><b>心情必填、固定 5 个</b>：😄 🙂 😌 😤 🥱，另外保留一个可自填的输入框；没选之前「保存」是灰的。</li>
+        <li>颜色仍是"一个一级类型一个颜色"：旅票蓝、地点红、娱乐紫、随笔绿（日记和事迹共用随笔的绿）。</li>
+      </ul>
+      <h3>字段（随笔）</h3>
+      <ul>
+        <li><b>日记</b>：标题（选填）、发生日期、天气（选填）、心情（必填）、内容、照片。</li>
+        <li><b>事迹</b>：标题（选填）、发生日期、心情（必填）、内容、照片（没有天气）。</li>
+      </ul>
+      <h3>数据</h3>
+      <ul>
+        <li>按现有结构加一个一级类型：<code>baseType: 'note'</code>（随笔），<code>subType: 'diary' | 'memo'</code>（日记 / 事迹），复用 <code>date / localImages / coverIndex / rating</code> 的位置放 <code>mood</code>（emoji）、<code>weather</code>（仅日记）。</li>
+        <li>要连带改：类型图标配置、筛选面板"记录类型"加 日记/事迹、搜索覆盖随笔正文、月示图配色表。</li>
+      </ul>
+      <div class="q">
+        <b>还想确认两点：</b>
+        <div>1. 一级类型叫「随笔」，二级叫「日记 / 事迹」，措辞可以吗？</div>
+        <div>2. 事迹要不要也留"天气"？（现在是只有日记有）</div>
+      </div>
+    </aside>
+  </div>
+
+<script>
+  /* ---------------- 类型 / 颜色 / emoji ---------------- */
+  var GROUP_COLOR = { ticket:'var(--cTicket)', location:'var(--cPlace)', media:'var(--cMedia)', note:'var(--cNote)' };
+  var GROUP_SOFT  = { ticket:'var(--sTicket)', location:'var(--sPlace)', media:'var(--sMedia)', note:'var(--sNote)' };
+  var GROUP_LABEL = { ticket:'旅票', location:'地点', media:'娱乐', note:'随笔' };
+  var SUB_LABEL = { flight:'机票', train:'火车票', bus:'汽车票', ship:'轮船',
+                    movie:'电影', tv:'剧集', anime:'动漫', game:'游戏', book:'书籍',
+                    diary:'日记', memo:'事迹' };
+  var TYPE_EMOJI = { flight:'✈️', train:'🚄', bus:'🚌', ship:'🚢', location:'📍',
+                     movie:'🎬', tv:'📺', anime:'👻', game:'🎮', book:'📖', diary:'📔', memo:'📝' };
+  var MOODS = ['😄','🙂','😌','😤','🥱'];
+  var WEATHERS = ['晴','多云','阴','雨','雪'];
+
+  /* ---------------- 样例数据（对齐 App 的记录结构） ---------------- */
+  var records = [
+    { id:1, kind:'ticket', subType:'flight', title:'北京 → 曼谷', sub:'CZ3081', date:'2025-10-01', rating:null, cover:'g4' },
+    { id:2, kind:'location', subType:'location', title:'大皇宫 & 湄南河', sub:'人多，但落日很值', date:'2025-10-02', rating:4.5, cover:'g2' },
+    { id:3, kind:'media', subType:'movie', title:'《曼谷之夜》', sub:'', date:'2025-10-03', rating:4, cover:'g1' },
+    { id:4, kind:'ticket', subType:'train', title:'曼谷 → 清迈', sub:'9 号车', date:'2025-10-05', rating:null, cover:'g5' },
+    { id:5, kind:'location', subType:'location', title:'清迈古城', sub:'租了自行车绕了一圈', date:'2025-10-06', rating:5, cover:'g8' },
+    { id:6, kind:'note', subType:'diary', title:'清迈的雨', body:'下午下了一场暴雨，躲在咖啡馆里写这篇。雨停后空气特别干净。',
+      date:'2025-10-06', mood:'😌', weather:'雨', photos:['g6','g2'], coverIndex:0 },
+    { id:7, kind:'note', subType:'memo', title:'买到防晒霜了', body:'SPF50，为明天去拜县准备好。',
+      date:'2025-10-08', mood:'🙂', photos:['g5'], coverIndex:0 },
+    { id:8, kind:'location', subType:'location', title:'拜县 云来观景台', sub:'早上 5 点起来看日出', date:'2025-10-12', rating:4.5, cover:'g9' },
+    { id:9, kind:'media', subType:'book', title:'《沿着季风的方向》', sub:'读完了', date:'2025-10-15', rating:5, cover:'g3' },
+    { id:10, kind:'media', subType:'game', title:'《Sable》', sub:'', date:'2025-10-18', rating:3.5, cover:'g7' },
+    { id:11, kind:'ticket', subType:'train', title:'清迈 → 曼谷', sub:'夜车', date:'2025-10-21', rating:null, cover:'g5' },
+    { id:12, kind:'ticket', subType:'flight', title:'曼谷 → 北京', sub:'CA980', date:'2025-10-22', rating:null, cover:'g4' },
+    { id:13, kind:'note', subType:'memo', title:'把护照换了', body:'排了两小时队，总算办完。', date:'2025-10-24', mood:'🥱' },
+    { id:14, kind:'media', subType:'tv', title:'《漫长的季节》', sub:'看到第 6 集', date:'2025-10-25', rating:4.5, cover:'g1' },
+    { id:15, kind:'note', subType:'diary', title:'回来第一周', body:'时差还没倒过来，但已经开始想念清迈的早晨。',
+      date:'2025-10-28', mood:'🙂', weather:'晴', photos:['g3'], coverIndex:0 },
+    { id:16, kind:'media', subType:'anime', title:'《夏日重现》', sub:'', date:'2025-10-30', rating:4, cover:'g2' },
+    { id:17, kind:'ticket', subType:'flight', title:'北京 → 广州', sub:'', date:'2025-09-28', rating:null, cover:'g4' }
+  ];
+  var today = '2025-10-16';
+  var state = { year:2025, month:10, selected:null, theme:'light', draftType:'note', subType:'diary', mood:null, weather:null, sheetOpen:false };
+
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var key = function (y, m, d) { return y + '-' + pad(m) + '-' + pad(d); };
+  var colorOf = function (r) { return GROUP_COLOR[r.kind] || GROUP_COLOR.location; };
+  var softOf = function (r) { return GROUP_SOFT[r.kind] || GROUP_SOFT.location; };
+  var emojiOf = function (r) { return TYPE_EMOJI[r.subType] || TYPE_EMOJI[r.kind] || '📍'; };
+  var typeLabel = function (r) { return SUB_LABEL[r.subType] || GROUP_LABEL[r.kind] || '记录'; };
+  var isEssay = function (r) { return r.kind === 'note'; };
+  var coverPhotoOf = function (r) {
+    if (r.photos && r.photos.length) return r.photos[r.coverIndex || 0] || r.photos[0];
+    return r.cover || null;
+  };
+  var recordsOn = function (d) { return records.filter(function (r) { return r.date === d; }); };
+
+  /* ---------------- 列表 / 时间线：同版式 + 统一标签 ---------------- */
+  function entryCard(r) {
+    var photo = coverPhotoOf(r);
+    var shot = photo
+      ? '<div class="shot ' + photo + '"></div>'
+      : '<div class="shot" style="background:' + softOf(r) + '">' + emojiOf(r) + '</div>';
+    var meta = '<div class="meta"><span class="tag" style="background:' + softOf(r) + ';color:' + colorOf(r) + '">' + typeLabel(r) + '</span>' +
+      (isEssay(r)
+        ? '<span class="moodline">' + (r.mood || '') + (r.weather ? ' · ' + r.weather : '') + '</span>'
+        : (r.rating ? '<span class="stars">' + '★'.repeat(Math.floor(r.rating)) + (r.rating % 1 ? '<i>★</i>' : '') + '</span>' : '')) +
+      '</div>';
+    var text = r.sub || r.body || '';
+    return '<div class="entry" data-id="' + r.id + '">' + shot +
+      '<div class="body">' +
+        '<div class="h"><span class="t1">' + r.title + '</span><span class="date">' + r.date.slice(5) + '</span></div>' +
+        meta + (text ? '<div class="t2">' + text + '</div>' : '') +
+      '</div></div>';
+  }
+  function bindEntries(root, which) {
+    Array.prototype.forEach.call(root.querySelectorAll('.entry'), function (el) {
+      el.onclick = function () { openDetail(el.getAttribute('data-id'), which); };
+    });
+  }
+
+  /* ---------------- ① 列表 ---------------- */
+  function renderList() {
+    var list = records.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    document.getElementById('list').innerHTML = list.map(entryCard).join('');
+    bindEntries(document.getElementById('list'), 'list');
+  }
+
+  /* ---------------- ② 月示 ---------------- */
+  function renderCalendar() {
+    var y = state.year, m = state.month;
+    document.getElementById('monthLabel').textContent = y + '年' + m + '月';
+    var offset = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+    var daysInMonth = new Date(y, m, 0).getDate();
+    var prevDays = new Date(y, m - 1, 0).getDate();
+    var cells = [];
+    for (var i = 0; i < 42; i++) {
+      var dayNum, cy = y, cm = m, out = false;
+      if (i < offset) { dayNum = prevDays - offset + 1 + i; cm = m - 1; out = true; if (cm === 0) { cm = 12; cy = y - 1; } }
+      else if (i - offset + 1 > daysInMonth) { dayNum = i - offset + 1 - daysInMonth; cm = m + 1; out = true; if (cm === 13) { cm = 1; cy = y + 1; } }
+      else { dayNum = i - offset + 1; }
+      cells.push({ date:key(cy, cm, dayNum), day:dayNum, out:out });
+    }
+    while (cells.length > 35 && cells.slice(cells.length - 7).every(function (c) { return c.out; })) cells.length -= 7;
+
+    document.getElementById('calGrid').innerHTML = cells.map(function (c) {
+      var list = c.out ? [] : recordsOn(c.date);
+      var cls = 'day' + (c.out ? ' out' : '') + (c.date === today ? ' today' : '') + (c.date === state.selected ? ' sel' : '');
+      var mark = list.length
+        ? '<div class="dots">' + list.slice(0, 3).map(function (r) {
+            return '<span class="dot" style="background:' + colorOf(r) + '"></span>';
+          }).join('') + (list.length > 3 ? '<span class="more">+' + (list.length - 3) + '</span>' : '') + '</div>'
+        : '';
+      return '<div class="' + cls + '" data-date="' + c.date + '">' +
+        (c.date === today ? '<span class="ring"></span>' : '') + '<span class="d">' + c.day + '</span>' + mark + '</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(document.querySelectorAll('#calGrid .day'), function (el) {
+      el.onclick = function () {
+        var d = el.getAttribute('data-date');
+        if (recordsOn(d).length === 0) return;
+        state.selected = (state.selected === d) ? null : d;
+        renderCalendar(); renderTimeline();
+      };
+    });
+  }
+
+  function renderTimeline() {
+    var y = state.year, m = state.month;
+    var list = records.filter(function (r) {
+      if (state.selected) return r.date === state.selected;
+      var p = r.date.split('-');
+      return Number(p[0]) === y && Number(p[1]) === m;
+    }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+
+    document.getElementById('tlTitle').textContent = state.selected
+      ? (Number(state.selected.slice(5, 7)) + '月' + Number(state.selected.slice(8, 10)) + '日') : (m + '月 · 全部');
+    document.getElementById('tlCount').textContent = list.length ? list.length + ' 条' : '';
+
+    if (!list.length) { document.getElementById('timeline').innerHTML = '<div class="empty">这个月还没有记录</div>'; return; }
+    var byDate = {};
+    list.forEach(function (r) { (byDate[r.date] = byDate[r.date] || []).push(r); });
+    var html = Object.keys(byDate).map(function (d) {
+      var dt = new Date(d + 'T00:00:00');
+      var wk = ['周日','周一','周二','周三','周四','周五','周六'][dt.getDay()];
+      var head = state.selected ? '' : '<div class="daygroup" style="padding:10px 12px 6px">' + (dt.getMonth() + 1) + '月' + dt.getDate() + '日 ' + wk + '</div>';
+      return head + byDate[d].map(entryCard).join('');
+    }).join('');
+    document.getElementById('timeline').innerHTML = html;
+    bindEntries(document.getElementById('timeline'), 'cal');
+  }
+
+  /* ---------------- ③ 添加页 ---------------- */
+  function renderForm() {
+    var t = state.draftType, sub = state.subType;
+    var essay = t === 'note';
+    var typeLine = GROUP_LABEL[t] + (t === 'location' ? '' : ' · ' + (SUB_LABEL[sub] || ''));
+    var specific = '';
+    if (t === 'ticket') {
+      specific = '<div class="flabel">出发地</div><div class="finput ph">北京首都国际机场</div>' +
+        '<div class="flabel" style="margin-top:14px">目的地</div><div class="finput ph">素万那普国际机场</div>' +
+        '<div class="flabel" style="margin-top:14px">航班号</div><div class="finput ph">CZ3081</div>' +
+        '<div class="divider"></div>';
+    } else if (t === 'location') {
+      specific = '<div class="flabel">地点名称</div><div class="finput ph">📍 清迈古城</div><div class="divider"></div>';
+    } else if (t === 'media') {
+      specific = '<div class="flabel">记录作品</div><div class="finput ph">🔍 搜索片名 / 书名 / 游戏</div><div class="divider"></div>';
+    } else {
+      specific = '<div class="flabel">标题（选填）</div><div class="finput ph">' +
+        (sub === 'diary' ? '给今天起个名字' : '发生了一件什么事') + '</div><div class="divider"></div>';
+    }
+    var moodBlock = essay
+      ? '<div class="flabel">心情 <b>*</b>（必填，也可自填任意 emoji）</div>' +
+        '<div class="moodrow" id="moodRow">' +
+          MOODS.map(function (m2) {
+            return '<div class="moodchip' + (state.mood === m2 ? ' on' : '') + '" data-v="' + m2 + '">' + m2 + '</div>';
+          }).join('') +
+          '<input class="moodinput' + (state.mood && MOODS.indexOf(state.mood) < 0 ? ' on' : '') + '" id="moodCustom" maxlength="4" placeholder="自填"' +
+            ' value="' + (state.mood && MOODS.indexOf(state.mood) < 0 ? state.mood : '') + '" />' +
+        '</div>' +
+        (state.mood ? '' : '<div class="warnline">还没选心情，保存按钮是灰的</div>')
+      : '';
+    var weatherBlock = (t === 'note' && sub === 'diary')
+      ? '<div class="flabel">天气（选填）</div><div class="subrow" style="margin-top:0" id="weatherRow">' +
+        WEATHERS.map(function (w) { return '<span class="' + (state.weather === w ? 'on' : '') + '" data-v="' + w + '">' + w + '</span>'; }).join('') +
+        '</div><div class="divider"></div>'
+      : '';
+    var bodyLabel = essay ? '内容' : '评论';
+    var photoLabel = t === 'ticket' ? '票根 / 留影' : (essay ? '照片' : '现场影像 / 截图');
+    var samples = samplePhotos(t, sub);
+
+    document.getElementById('form').innerHTML =
+      '<div class="fcard">' +
+        '<div class="typerow" id="openSheet"><span class="k">类型</span><span class="v">' + typeLine + '</span><span class="chev">›</span></div>' +
+        specific +
+        '<div class="flabel">发生日期</div>' +
+        '<div class="daterow"><div class="datebox wide">2025</div><span style="color:var(--textMuted)">年</span>' +
+          '<div class="datebox">10</div><span style="color:var(--textMuted)">月</span>' +
+          '<div class="datebox">01</div><span style="color:var(--textMuted)">日</span></div>' +
+        '<div class="divider"></div>' +
+        (essay ? '' : '<div class="flabel">评分</div><div class="starline">★ ★ ★ ★ <i>★</i></div><div class="divider"></div>') +
+        weatherBlock + moodBlock +
+        (essay ? '<div class="divider"></div>' : '') +
+        '<div class="flabel">' + bodyLabel + '</div>' +
+        '<div class="ftextarea">' + (essay ? '写点什么…' : '') + '</div>' +
+        '<div class="divider"></div>' +
+        '<div class="flabel">' + photoLabel + '</div>' +
+        '<div class="grid4"><div class="cell add">＋</div>' + samples + '</div>' +
+      '</div>';
+
+    document.getElementById('openSheet').onclick = function () { openSheet(); };
+    var moodRow = document.getElementById('moodRow');
+    if (moodRow) {
+      Array.prototype.forEach.call(moodRow.querySelectorAll('.moodchip'), function (chip) {
+        chip.onclick = function () {
+          state.mood = (state.mood === chip.getAttribute('data-v')) ? null : chip.getAttribute('data-v');
+          renderForm();
+        };
+      });
+      var custom = document.getElementById('moodCustom');
+      custom.oninput = function () {
+        state.mood = custom.value || null;
+        Array.prototype.forEach.call(moodRow.querySelectorAll('.moodchip'), function (c) { c.className = 'moodchip'; });
+        custom.className = 'moodinput' + (custom.value ? ' on' : '');
+        updateSaveState();
+      };
+    }
+    var weatherRow = document.getElementById('weatherRow');
+    if (weatherRow) {
+      Array.prototype.forEach.call(weatherRow.querySelectorAll('span'), function (sp) {
+        sp.onclick = function () {
+          state.weather = (state.weather === sp.getAttribute('data-v')) ? null : sp.getAttribute('data-v');
+          renderForm();
+        };
+      });
+    }
+    updateSaveState();
+  }
+  // 每个类型都给两张示例图，能直接看出"照片 + 换封面"的效果
+  function samplePhotos(t, sub) {
+    if (t === 'note') return sub === 'diary' ? '<div class="cell g6"></div><div class="cell g2"></div>' : '<div class="cell g5"></div>';
+    return '<div class="cell ' + (t === 'ticket' ? 'g4' : (t === 'location' ? 'g8' : 'g1')) + '"></div>';
+  }
+  function updateSaveState() {
+    var needMood = state.draftType === 'note' && !state.mood;
+    var btn = document.getElementById('saveBtn');
+    btn.className = 'b' + (needMood ? ' off' : '');
+  }
+
+  function openSheet() {
+    state.sheetOpen = true;
+    var list = ['ticket','location','media','note'];
+    document.getElementById('typeRow').innerHTML = list.map(function (k) {
+      return '<div class="typeitem' + (k === state.draftType ? ' on' : '') + '" data-type="' + k + '">' +
+        '<div class="e">' + (k === 'note' ? '📔' : (k === 'ticket' ? '✈️' : (k === 'location' ? '📍' : '🎬'))) + '</div>' +
+        '<div class="l">' + GROUP_LABEL[k] + '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(document.getElementById('typeRow').querySelectorAll('.typeitem'), function (el) {
+      el.onclick = function () {
+        state.draftType = el.getAttribute('data-type');
+        if (state.draftType === 'location') { state.subType = 'location'; closeSheet(); renderForm(); return; }
+        state.subType = state.draftType === 'ticket' ? 'flight' : (state.draftType === 'media' ? 'movie' : 'diary');
+        Array.prototype.forEach.call(document.getElementById('typeRow').querySelectorAll('.typeitem'), function (x) {
+          x.className = 'typeitem' + (x === el ? ' on' : '');
+        });
+        renderSub();
+      };
+    });
+    renderSub();
+    document.getElementById('sheet').classList.add('open');
+  }
+  function renderSub() {
+    var t = state.draftType, area = document.getElementById('subArea');
+    var subs = t === 'ticket' ? [['flight','机票'],['train','火车票'],['bus','汽车票'],['ship','轮船']]
+             : t === 'media' ? [['movie','电影'],['tv','剧集'],['anime','动漫'],['game','游戏'],['book','书籍']]
+             : t === 'note' ? [['diary','日记'],['memo','事迹']] : null;
+    if (!subs) { area.innerHTML = '<div class="hintline">地点不分子类，点上方卡片即可选中</div>'; return; }
+    area.innerHTML = '<div class="subrow">' + subs.map(function (s) {
+      return '<span class="' + (s[0] === state.subType ? 'on' : '') + '" data-sub="' + s[0] + '">' + s[1] + '</span>';
+    }).join('') + '</div>';
+    Array.prototype.forEach.call(area.querySelectorAll('span'), function (sp) {
+      sp.onclick = function () { state.subType = sp.getAttribute('data-sub'); closeSheet(); renderForm(); };
+    });
+  }
+  function closeSheet() { state.sheetOpen = false; document.getElementById('sheet').classList.remove('open'); }
+  document.getElementById('sheetClose').onclick = closeSheet;
+  document.getElementById('sheet').onclick = function (e) { if (e.target.id === 'sheet') closeSheet(); };
+
+  /* ---------------- 详情：版式对齐现有 DetailScreen，含"长按换封面" ---------------- */
+  function detailHtml(r) {
+    var photo = coverPhotoOf(r);
+    var cover = photo
+      ? '<div class="dshot ' + photo + '"></div>'
+      : '<div class="dshot" style="background:' + softOf(r) + '">' + emojiOf(r) + '</div>';
+    var photos = (r.photos && r.photos.length) ? r.photos.slice() : (r.cover ? [r.cover, r.cover] : []);
+    var current = r.photos && r.photos.length ? (r.coverIndex || 0) : 0;
+    var ratingLine = isEssay(r)
+      ? '<div class="drating" style="font-size:20px">' + (r.mood || '') +
+          (r.weather ? '<span class="moodline" style="font-size:12.5px">天气 ' + r.weather + '</span>' : '') + '</div>'
+      : (r.rating ? '<div class="drating">' + '★'.repeat(Math.floor(r.rating)) + (r.rating % 1 ? '<i>★</i>' : '') +
+          '<span class="dscore">' + r.rating + ' 分</span></div>' : '');
+    var text = r.sub || r.body || '';
+    return '<div class="dnav"><span class="b" data-close="1">‹ 返回</span><span class="t">' + r.title + '</span><span class="b" style="width:40px"></span></div>' +
+      '<div class="dbody">' +
+        '<div class="dhead">' + cover + '<div><div class="dtitle">' + r.title + '</div>' +
+          '<div class="ddate">' + r.date + ' · ' + typeLabel(r) + '</div></div></div>' +
+        ((ratingLine || text) ? '<div class="dreview">' + ratingLine + (text ? '<div class="dtext">' + text + '</div>' : '') + '</div>' : '') +
+        (photos.length ? '<div class="dsec">相关影像（长按可设为封面）</div><div class="dgrid">' +
+          photos.map(function (p, i) {
+            return '<div class="dcell ' + p + '" data-index="' + i + '">' +
+              (i === current ? '<span class="coverTag">封面</span>' : '') + '</div>';
+          }).join('') + '</div><div class="dhint">长按任意一张 → 设为封面</div>' : '') +
+      '</div>';
+  }
+  function openDetail(id, which) {
+    var r = records.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!r) return;
+    var hosts = which === 'both'
+      ? [document.getElementById('detailCal'), document.getElementById('detailList')]
+      : [document.getElementById(which === 'list' ? 'detailList' : 'detailCal')];
+    hosts.forEach(function (host) { paintDetail(host, r); });
+  }
+  function paintDetail(host, r) {
+    host.innerHTML = detailHtml(r);
+    host.classList.add('open');
+    host.querySelector('[data-close]').onclick = function () { host.classList.remove('open'); };
+    // 长按换封面（和现有 App 里"长按九宫格设为封面"一致）
+    Array.prototype.forEach.call(host.querySelectorAll('.dcell'), function (cell) {
+      var timer = null;
+      var start = function () {
+        timer = setTimeout(function () {
+          var i = Number(cell.getAttribute('data-index'));
+          if (r.photos && r.photos.length) r.coverIndex = i;
+          else r.cover = r.cover;   // 非随笔类型：demo 里只演示随笔的换封面
+          paintDetail(host, r);
+        }, 420);
+      };
+      var cancel = function () { clearTimeout(timer); };
+      cell.addEventListener('pointerdown', start);
+      cell.addEventListener('pointerup', cancel);
+      cell.addEventListener('pointerleave', cancel);
+      cell.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    });
+  }
+
+  /* ---------------- 开关 / 参数 ---------------- */
+  document.getElementById('prevMonth').onclick = function () { shiftMonth(-1); };
+  document.getElementById('nextMonth').onclick = function () { shiftMonth(1); };
+  document.getElementById('todayBtn').onclick = function () {
+    state.year = 2025; state.month = 10; state.selected = today; renderCalendar(); renderTimeline();
+  };
+  function shiftMonth(delta) {
+    var m = state.month + delta, y = state.year;
+    if (m === 0) { m = 12; y--; } if (m === 13) { m = 1; y++; }
+    state.year = y; state.month = m; state.selected = null;
+    renderCalendar(); renderTimeline();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#ctlTheme button'), function (b) {
+    b.onclick = function () {
+      state.theme = b.getAttribute('data-theme');
+      document.body.className = state.theme;
+      Array.prototype.forEach.call(document.querySelectorAll('#ctlTheme button'), function (x) { x.className = x === b ? 'on' : ''; });
+      Array.prototype.forEach.call(document.querySelectorAll('.phone'), function (p) { p.classList.toggle('dark-shell', state.theme === 'dark'); });
+    };
+  });
+
+  var qs = new URLSearchParams(location.search);
+  if (qs.get('theme') === 'dark') {
+    state.theme = 'dark'; document.body.className = 'dark';
+    Array.prototype.forEach.call(document.querySelectorAll('#ctlTheme button'), function (x) { x.className = x.getAttribute('data-theme') === 'dark' ? 'on' : ''; });
+    Array.prototype.forEach.call(document.querySelectorAll('.phone'), function (p) { p.classList.add('dark-shell'); });
+  }
+  if (qs.get('sel')) state.selected = qs.get('sel');
+  if (qs.get('type')) {
+    var t = qs.get('type');
+    state.draftType = (t === 'diary' || t === 'memo') ? 'note' : t;
+    state.subType = (t === 'diary' || t === 'memo') ? t : (t === 'media' ? 'movie' : (t === 'ticket' ? 'flight' : 'location'));
+  }
+
+  renderList(); renderCalendar(); renderTimeline(); renderForm();
+  if (qs.get('type') || qs.get('sheet') === '1') openSheet();
+  if (qs.get('detail')) openDetail(qs.get('detail'), qs.get('which') || null);
+
+  if (qs.get('report') === '1') {
+    setTimeout(function () {
+      var lines = [];
+      [['phoneList','#phoneList'],['phoneCal','#phoneCal'],['phoneAdd','#phoneAdd'],['calGrid','#calGrid'],['form','#form']].forEach(function (p) {
+        var el = document.querySelector(p[1]);
+        if (!el) return;
+        var r = el.getBoundingClientRect();
+        lines.push(p[0] + ':' + Math.round(r.width) + 'x' + Math.round(r.height) + '@' + Math.round(r.left) + ',' + Math.round(r.top));
+      });
+      var d = document.createElement('div');
+      d.id = 'report'; d.textContent = lines.join(' | ');
+      document.body.appendChild(d);
+      document.title = 'report-ready';
+    }, 80);
+  }
+</script>
+</body>
+</html>
+`;
+
+mkdirSync(join(root, 'demo'), { recursive: true });
+const out = join(root, 'demo/month-note-preview.html');
+writeFileSync(out, html, 'utf8');
+console.log(`已生成 ${out}`);

@@ -23,19 +23,21 @@ const nameFromUri = (uri) => {
   }
 };
 
-// 收集所有记录引用的本地封面文件（file:// 且存在），读成 base64 随备份导出
+// 收集所有记录引用的本地封面文件（豆瓣封面 + 自选封面小图），读成 base64 随备份导出
 const collectCovers = async (logData) => {
   const covers = {};
   for (const log of logData) {
-    const url = log?.coverUrl;
-    if (typeof url !== 'string' || !url.startsWith('file://')) continue;
-    const base = url.split('/').pop();
-    if (!base || covers[base]) continue;
-    try {
-      const info = await FileSystem.getInfoAsync(url);
-      if (!info.exists) continue;
-      covers[base] = await FileSystem.readAsStringAsync(url, { encoding: FileSystem.EncodingType.Base64 });
-    } catch {}
+    for (const field of ['coverUrl', 'coverThumbUrl']) {
+      const url = log?.[field];
+      if (typeof url !== 'string' || !url.startsWith('file://')) continue;
+      const base = url.split('/').pop();
+      if (!base || covers[base]) continue;
+      try {
+        const info = await FileSystem.getInfoAsync(url);
+        if (!info.exists) continue;
+        covers[base] = await FileSystem.readAsStringAsync(url, { encoding: FileSystem.EncodingType.Base64 });
+      } catch {}
+    }
   }
   return covers;
 };
@@ -91,32 +93,31 @@ export const importBackup = async () => {
       : null;
     if (!logs) return { ok: false, invalid: true };
 
-    // 封面文件还原：备份里的 base64 写回本地 covers 目录，并把记录的 coverUrl 指向新文件。
-    // 缺 covers 字段（老备份）或对应文件缺失的记录保持原样，交给回填机制兜底
+    // 封面文件还原：备份里的 base64 写回本地 covers 目录，并把记录的 coverUrl / coverThumbUrl
+    // 指向新文件。缺 covers 字段（老备份）或对应文件缺失的记录保持原样，交给回填机制兜底
     const covers = payload?.covers && typeof payload.covers === 'object' ? payload.covers : {};
     let coversRestored = 0;
     const restoredLogs = [];
     for (const log of logs) {
-      let restored = false;
-      const url = log?.coverUrl;
-      if (typeof url === 'string' && url.startsWith('file://')) {
+      const restoredLog = { ...log };
+      for (const field of ['coverUrl', 'coverThumbUrl']) {
+        const url = restoredLog[field];
+        if (typeof url !== 'string' || !url.startsWith('file://')) continue;
         const base = url.split('/').pop();
         const b64 = base ? covers[base] : null;
-        if (typeof b64 === 'string' && b64.length > 0) {
-          try {
-            if (!(await FileSystem.getInfoAsync(COVERS_DIR)).exists) {
-              await FileSystem.makeDirectoryAsync(COVERS_DIR, { intermediates: true });
-            }
-            const ext = (base.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
-            const dest = `${COVERS_DIR}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-            await FileSystem.writeAsStringAsync(dest, b64, { encoding: FileSystem.EncodingType.Base64 });
-            restoredLogs.push({ ...log, coverUrl: dest });
-            coversRestored++;
-            restored = true;
-          } catch {}
-        }
+        if (typeof b64 !== 'string' || b64.length === 0) continue;
+        try {
+          if (!(await FileSystem.getInfoAsync(COVERS_DIR)).exists) {
+            await FileSystem.makeDirectoryAsync(COVERS_DIR, { intermediates: true });
+          }
+          const ext = (base.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
+          const dest = `${COVERS_DIR}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+          await FileSystem.writeAsStringAsync(dest, b64, { encoding: FileSystem.EncodingType.Base64 });
+          restoredLog[field] = dest;
+          coversRestored++;
+        } catch {}
       }
-      if (!restored) restoredLogs.push(log);
+      restoredLogs.push(restoredLog);
     }
 
     return {

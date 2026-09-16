@@ -1,24 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { getIconConfig } from '../utils/icons';
 import { resolveMediaUri, remoteImageSource } from '../utils/media';
+import { useTheme } from '../theme/ThemeProvider';
 
 // 封面展示：固定方形槽位（透明、无底色），封面按原比例完整显示并居中（contain），
 // 不裁切不拉伸不强制铺满，槽位内空隙即卡片背景。
 // 槽位尺寸由调用方决定（列表 64 / 详情 80），文字起点因此对所有条目统一。
 // 无封面时回退类型图标（现状一致）。
 export default function CoverIcon({ item, height = 64, style }) {
-  const { IconComponent, iconColor, iconBgColor } = getIconConfig(item);
+  const { colors } = useTheme();
+  const { emoji, iconBgColor } = getIconConfig(item, colors);
   const entry = item?.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
   const [uri, setUri] = useState(null);
+  // 自选封面的小图文件（coverThumbUrl）直接显示，省去每次重启解析相册；
+  // 没有小图才实时解析 assetId
   useEffect(() => {
     let alive = true;
-    if (entry) resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
+    if (entry && !item?.coverThumbUrl) {
+      resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
+    }
     return () => { alive = false; };
-  }, [entry]);
+  }, [entry, item?.coverThumbUrl]);
 
-  const src = uri || item?.coverUrl;
+  const src = item?.coverThumbUrl || uri || item?.coverUrl;
   return (
     <View style={[styles.slot, { width: height, height }, style]}>
       {src ? (
@@ -31,7 +37,7 @@ export default function CoverIcon({ item, height = 64, style }) {
         />
       ) : (
         <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
-          <IconComponent color={iconColor} size={Math.round(height * 0.5)} />
+          <Text style={{ fontSize: Math.round(height * 0.46), lineHeight: Math.round(height * 0.58) }}>{emoji}</Text>
         </View>
       )}
     </View>

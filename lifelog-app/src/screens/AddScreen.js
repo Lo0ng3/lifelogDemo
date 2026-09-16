@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, MapPin, Film, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
+  MapPin, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
 } from 'lucide-react-native';
 import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
@@ -16,14 +16,21 @@ import { relinkNewEntries } from '../utils/mediaSync';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch } from '../utils/search';
+import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
 // 二级类型选择：第一级大类 → 第二级子类；地点无子类
-const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐' };
+const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐', note: '随笔' };
 const SUB_OPTIONS = {
-  ticket: [{ id: 'flight', label: '机票' }, { id: 'train', label: '火车票' }, { id: 'bus', label: '汽车票' }, { id: 'ship', label: '轮船' }],
-  media: [{ id: 'movie', label: '电影' }, { id: 'tv', label: '剧集' }, { id: 'anime', label: '动漫' }, { id: 'game', label: '游戏' }, { id: 'book', label: '书籍' }],
+  ticket: TICKET_SUB_OPTIONS,
+  media: MEDIA_SUB_OPTIONS,
+  note: NOTE_SUB_OPTIONS,
 };
-const SUB_LABEL = { flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船', movie: '电影', tv: '剧集', anime: '动漫', game: '游戏', book: '书籍' };
+const SUB_LABEL = {
+  flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船',
+  movie: '电影', tv: '剧集', anime: '动漫', game: '游戏', book: '书籍',
+  diary: '日记', memo: '事迹',
+};
 const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '班次' };
 
 // 联想词条：标题 + 作者/年份，自然换行展示
@@ -40,6 +47,7 @@ function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
 
 // 视频条目的表单预览：Image 放不了视频，用封面帧（落盘缓存）+ 播放角标
 function VideoPreview({ entry }) {
+  const styles = useThemedStyles(makeStyles);
   const [thumb, setThumb] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -56,6 +64,8 @@ function VideoPreview({ entry }) {
 
 export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { logData, addLog, updateLog, tdtKey } = useContext(LogContext);
   
   const [editId, setEditId] = useState(null); 
@@ -64,6 +74,13 @@ export default function AddScreen({ navigation, route }) {
   
   const [rating, setRating] = useState(0); 
   const [comment, setComment] = useState(''); 
+  // 随笔（一级）专用：标题选填、心情必填、日记多一个天气
+  const [noteTitle, setNoteTitle] = useState('');
+  const [mood, setMood] = useState(null);
+  const [weather, setWeather] = useState(null);
+  const [moodDraft, setMoodDraft] = useState('');
+  const [editCoverIndex, setEditCoverIndex] = useState(null);   // 编辑时原封带回顾有的封面选择
+  const [editPhotoCount, setEditPhotoCount] = useState(0);
   const [ticketOrigin, setTicketOrigin] = useState('');
   const [ticketDest, setTicketDest] = useState('');
   const [ticketNo, setTicketNo] = useState(''); 
@@ -110,6 +127,8 @@ export default function AddScreen({ navigation, route }) {
     setRating(0); setComment(''); setTicketOrigin(''); setTicketDest(''); setTicketNo('');
     setYear(''); setMonth(''); setDay(''); setHour(''); setMinute('');
     setSelectedImages([]); setSearchQuery(''); setShowSearchAuto(false);
+    setNoteTitle(''); setMood(null); setWeather(null); setMoodDraft('');
+    setEditCoverIndex(null); setEditPhotoCount(0);
     setSearchResults([]); setCoverUrl(null); setCoverRatio(null); setLocationCoords(null);
     setOriginResults([]); setShowOriginAuto(false); setOriginCoord(null);
     setDestResults([]); setShowDestAuto(false); setDestCoord(null);
@@ -131,6 +150,8 @@ export default function AddScreen({ navigation, route }) {
       setRating(item.rating || 0);
       setCoverUrl(item.coverUrl || null);
       setCoverRatio(item.coverRatio || null);
+      setEditCoverIndex(item.coverIndex != null ? item.coverIndex : null);
+      setEditPhotoCount((item.localImages || []).length);
       setComment(item.baseType !== 'ticket' ? item.subtitle || '' : item.comment || '');
       // 保存时缓存里的临时拷贝已被清理，编辑时重新从相册解析原始路径用于预览
       Promise.all((item.localImages || []).map(async (e) => {
@@ -154,6 +175,13 @@ export default function AddScreen({ navigation, route }) {
       }
       if (item.baseType === 'location' && item.coordinates) {
         setLocationCoords({ lng: item.coordinates.longitude, lat: item.coordinates.latitude });
+      }
+      if (item.baseType === 'note') {
+        // 随笔：标题选填，正文放在 subtitle，心情必填，日记还带天气
+        setNoteTitle(item.title || '');
+        setMood(item.mood || null);
+        setWeather(item.weather || null);
+        setMoodDraft(MOOD_OPTIONS.includes(item.mood) ? '' : (item.mood || ''));
       }
 
       const [datePart, timePart] = item.date.split(' ');
@@ -357,6 +385,12 @@ export default function AddScreen({ navigation, route }) {
       Alert.alert('提示', '请至少填写完整的年月日');
       return;
     }
+    // 随笔：心情必填（emoji 预设或自填任一）
+    const essayMood = MOOD_OPTIONS.includes(mood) ? mood : (mood || moodDraft.trim());
+    if (baseType === 'note' && !essayMood) {
+      Alert.alert('提示', '随笔需要选一个心情（也可以自己填一个 emoji）');
+      return;
+    }
 
     // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示
     const savedCoverUrl = baseType === 'media' && coverUrl ? await downloadRemoteCover(coverUrl) : null;
@@ -395,23 +429,40 @@ export default function AddScreen({ navigation, route }) {
       if (lng != null && lat != null) coordinates = { latitude: lat, longitude: lng };
     }
 
+    // 随笔：标题选填（空则取正文首行），正文存 subtitle；有照片时默认第一张当封面
+    const essayTitle = () => {
+      const typed = noteTitle.trim();
+      if (typed) return typed;
+      const firstLine = comment.trim().split('\n')[0].trim();
+      if (firstLine) return firstLine.length > 18 ? `${firstLine.slice(0, 18)}…` : firstLine;
+      return subType === 'diary' ? '未命名日记' : '未命名事迹';
+    };
+
     const logDataToSave = {
       id: editId || Date.now(),
       baseType,
       subType,
-      title: baseType === 'ticket' ? `${ticketOrigin} → ${ticketDest}` : searchQuery || '未命名记录',
+      title: baseType === 'ticket' ? `${ticketOrigin} → ${ticketDest}`
+        : baseType === 'note' ? essayTitle()
+        : searchQuery || '未命名记录',
       subtitle: baseType === 'ticket' ? ticketNo : comment,
       // 旅票的 subtitle 被车次/航班号占用，评论单独存字段，否则保存时会丢掉
       comment: baseType === 'ticket' && comment.trim() ? comment : null,
+      // 随笔：心情必填，天气只有日记有；评分不参与
+      mood: baseType === 'note' ? essayMood : null,
+      weather: baseType === 'note' && subType === 'diary' ? (weather || null) : null,
       // 时间选填：填了才拼进日期，不填只存日期（不再出现 00:00 凑数时间）
       date: `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`
         + ((hour || minute) ? ` ${(hour || '00').padStart(2,'0')}:${(minute || '00').padStart(2,'0')}` : ''),
-      rating: rating > 0 ? rating : null,
+      rating: baseType === 'note' ? null : (rating > 0 ? rating : null),
       start,
       end,
       localImages: relink.entries,
       coverUrl: savedCoverUrl,
       coverRatio: savedCoverUrl ? coverRatio : null,
+      // 随笔不自动指定封面（在详情里长按照片才会设）；编辑时照片没变就保留原来选的封面
+      coverIndex: baseType !== 'note' ? undefined
+        : (editId ? (editCoverIndex != null && editPhotoCount === relink.entries.length ? editCoverIndex : null) : undefined),
       coordinates,
     };
 
@@ -447,7 +498,7 @@ export default function AddScreen({ navigation, route }) {
             const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
             return (
               <TouchableOpacity key={s} onPress={() => handleStarPress(s)}>
-                {isHalf ? <StarHalf size={32} color="#FACC15" fill="#FACC15" style={{ marginRight: 8 }} /> : <Star size={32} color={isFull ? "#FACC15" : "#E5E7EB"} fill={isFull ? "#FACC15" : "transparent"} style={{ marginRight: 8 }} />}
+                {isHalf ? <StarHalf size={32} color={colors.star} fill={colors.star} style={{ marginRight: 8 }} /> : <Star size={32} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : "transparent"} style={{ marginRight: 8 }} />}
               </TouchableOpacity>
             );
           })}
@@ -473,8 +524,10 @@ export default function AddScreen({ navigation, route }) {
             onPress={() => { setSheetBase(baseType); typeSheetRef.current?.present(); }}
           >
             <Text style={styles.typeLabel}>类型</Text>
-            <Text style={styles.typeValue}>{baseType === 'location' ? '地点' : `${BASE_LABEL[baseType]} · ${SUB_LABEL[subType]}`}</Text>
-            <ChevronRight size={16} color="#C7CAD1" />
+            <Text style={styles.typeValue}>
+              {baseType === 'location' ? '地点' : `${BASE_LABEL[baseType] || ''} · ${SUB_LABEL[subType] || ''}`}
+            </Text>
+            <ChevronRight size={16} color={colors.textFaint} />
           </TouchableOpacity>
           {baseType === 'ticket' && (
             <View style={{ zIndex: 10 }}>
@@ -540,7 +593,7 @@ export default function AddScreen({ navigation, route }) {
             <View style={{ zIndex: 10 }}>
               <Text style={styles.inputLabel}>地点名称</Text>
               <View style={styles.inputWrapper}>
-                <MapPin size={18} color="#9CA3AF" style={{ marginRight: 8 }} />
+                <MapPin size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
                 <TextInput
                   style={styles.input}
                   value={searchQuery}
@@ -563,7 +616,7 @@ export default function AddScreen({ navigation, route }) {
                 <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color="#007AFF" />
+                      <ActivityIndicator size="small" color={colors.accent} />
                     </View>
                   ) : (
                     searchResults.map((result, idx) => (
@@ -601,7 +654,7 @@ export default function AddScreen({ navigation, route }) {
             <View style={{ zIndex: 10 }}>
               <Text style={styles.inputLabel}>记录作品</Text>
               <View style={[styles.inputWrapper, { marginBottom: 0 }]}>
-                <Search size={18} color="#9CA3AF" style={{ marginRight: 8 }} />
+                <Search size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
                 <TextInput 
                   style={styles.input} 
                   value={searchQuery} 
@@ -622,7 +675,7 @@ export default function AddScreen({ navigation, route }) {
 
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color="#007AFF" />
+                      <ActivityIndicator size="small" color={colors.accent} />
                     </View>
                   ) : (
                     searchResults.map((result, idx) => (
@@ -657,6 +710,21 @@ export default function AddScreen({ navigation, route }) {
             </View>
           )}
 
+          {baseType === 'note' && (
+            <View>
+              <Text style={styles.inputLabel}>标题（选填）</Text>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  value={noteTitle}
+                  onChangeText={setNoteTitle}
+                  placeholder={subType === 'diary' ? '给今天起个名字' : '发生了一件什么事'}
+                  placeholderTextColor={colors.textMuted}
+                />
+              </View>
+            </View>
+          )}
+
           <View style={styles.divider} />
 
           <View>
@@ -682,18 +750,73 @@ export default function AddScreen({ navigation, route }) {
           </View>
 
           <View style={styles.divider} />
-          {renderRating()}
+          {/* 随笔用心情 emoji 代替评分；心情必填 */}
+          {baseType === 'note' ? (
+            <View style={styles.ratingSection}>
+              <Text style={styles.inputLabel}>心情 <Text style={styles.requiredMark}>*</Text></Text>
+              <View style={styles.moodRow}>
+                {MOOD_OPTIONS.map((m) => {
+                  const on = mood === m;
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.moodChip, on && styles.moodChipOn]}
+                      onPress={() => { setMood(on ? null : m); setMoodDraft(''); }}
+                    >
+                      <Text style={styles.moodChipText}>{m}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                <TextInput
+                  style={[styles.moodInput, (moodDraft.trim() && !MOOD_OPTIONS.includes(mood)) && styles.moodChipOn]}
+                  value={moodDraft}
+                  onChangeText={(t) => { setMoodDraft(t); setMood(t ? t : null); }}
+                  placeholder="自填"
+                  placeholderTextColor={colors.textMuted}
+                  maxLength={4}
+                />
+              </View>
+              {!mood && <Text style={styles.moodHint}>选一个心情（也可以自己填一个 emoji）</Text>}
+            </View>
+          ) : renderRating()}
           <View style={[styles.divider, { marginVertical: 12 }]} />
 
           <View>
-            <Text style={styles.inputLabel}>评论</Text>
+            <Text style={styles.inputLabel}>{baseType === 'note' ? '内容' : '评论'}</Text>
             <TextInput style={styles.commentInput} multiline numberOfLines={4} textAlignVertical="top" value={comment} onChangeText={setComment} />
           </View>
+
+          {baseType === 'note' && subType === 'diary' && (
+            <>
+              <View style={styles.divider} />
+              <View>
+                <Text style={styles.inputLabel}>天气（选填）</Text>
+                <View style={styles.moodRow}>
+                  {WEATHER_OPTIONS.map((w) => {
+                    const on = weather === w;
+                    return (
+                      <TouchableOpacity
+                        key={w}
+                        style={[styles.weatherChip, on && styles.moodChipOn]}
+                        onPress={() => setWeather(on ? null : w)}
+                      >
+                        <Text style={[styles.weatherChipText, on && styles.weatherChipTextOn]}>{w}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </>
+          )}
 
           <View style={styles.divider} />
 
           <View>
-            <Text style={styles.inputLabel}>{baseType === 'ticket' ? '票根 / 留影' : '现场影像 / 截图'} ({selectedImages.length})</Text>
+            <Text style={styles.inputLabel}>{
+              baseType === 'ticket' ? '票根 / 留影'
+                : baseType === 'note' ? '照片'
+                : '现场影像 / 截图'
+            } ({selectedImages.length})</Text>
             <View style={styles.imageGrid}>
               {selectedImages.map((entry, idx) => (
                 <View key={idx} style={styles.imageGridItem}>
@@ -709,7 +832,7 @@ export default function AddScreen({ navigation, route }) {
               ))}
               <View style={styles.imageGridItem}>
                 <TouchableOpacity style={styles.addImageBtn} onPress={openMediaPicker}>
-                  <ImagePlus size={24} color="#9CA3AF" />
+                  <ImagePlus size={24} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -721,21 +844,23 @@ export default function AddScreen({ navigation, route }) {
       <BottomSheetModal
         ref={typeSheetRef}
         backdropComponent={renderTypeBackdrop}
-        handleIndicatorStyle={{ backgroundColor: '#D1D5DB' }}
+        backgroundStyle={{ backgroundColor: colors.bgElevated }}
+        handleIndicatorStyle={{ backgroundColor: colors.sheetHandle }}
       >
         <BottomSheetView style={styles.sheetContent}>
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>选择类型</Text>
             <TouchableOpacity onPress={() => typeSheetRef.current?.dismiss()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <X size={20} color="#9CA3AF" />
+              <X size={20} color={colors.textMuted} />
             </TouchableOpacity>
           </View>
 
           <View style={styles.catRow}>
             {[
-              { id: 'ticket', label: '旅票', Icon: Plane, color: '#007AFF', bg: '#E0F2FE' },
-              { id: 'location', label: '地点', Icon: MapPin, color: '#EF4444', bg: '#FEE2E2' },
-              { id: 'media', label: '娱乐', Icon: Film, color: '#A855F7', bg: '#F3E8FF' },
+              { id: 'ticket', label: '旅票', emoji: '✈️', color: colors.groupTicket, bg: colors.groupTicketSoft },
+              { id: 'location', label: '地点', emoji: '📍', color: colors.groupPlace, bg: colors.groupPlaceSoft },
+              { id: 'media', label: '娱乐', emoji: '🎬', color: colors.groupMedia, bg: colors.groupMediaSoft },
+              { id: 'note', label: '随笔', emoji: '📔', color: colors.groupNote, bg: colors.groupNoteSoft },
             ].map(cat => (
               <TouchableOpacity
                 key={cat.id}
@@ -749,7 +874,7 @@ export default function AddScreen({ navigation, route }) {
                   setSheetBase(cat.id);
                 }}
               >
-                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><cat.Icon size={20} color={cat.color} /></View>
+                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><Text style={styles.catEmoji}>{cat.emoji}</Text></View>
                 <Text style={[styles.catLabel, sheetBase === cat.id && styles.catLabelActive]}>{cat.label}</Text>
               </TouchableOpacity>
             ))}
@@ -780,54 +905,68 @@ export default function AddScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#FFF' },
-  cancelText: { fontSize: 16, color: '#6B7280' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
-  saveText: { fontSize: 16, fontWeight: '600', color: '#007AFF' },
+const makeStyles = (c) => ({
+  container: { flex: 1, backgroundColor: c.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
+  cancelText: { fontSize: 16, color: c.textSecondary },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
+  saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
   formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
-  typeLabel: { fontSize: 15, color: '#9CA3AF', marginRight: 8 },
-  typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
+  typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
+  typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
+  typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },
   sheetContent: { paddingHorizontal: 16, paddingBottom: 24 },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  sheetTitle: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
+  sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   catRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  catCard: { flex: 1, borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
-  catCardActive: { borderColor: '#007AFF', backgroundColor: '#F0F8FF' },
+  catCard: { flex: 1, borderWidth: 1.5, borderColor: c.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  catCardActive: { borderColor: c.accent, backgroundColor: c.accentTint },
   catIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  catLabel: { fontSize: 14, fontWeight: '500', color: '#6B7280' },
-  catLabelActive: { color: '#007AFF', fontWeight: '600' },
+  catEmoji: { fontSize: 19, lineHeight: 24 },
+  catLabel: { fontSize: 14, fontWeight: '500', color: c.textSecondary },
+  catLabelActive: { color: c.accent, fontWeight: '600' },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  chip: { paddingVertical: 9, paddingHorizontal: 18, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#F3F4F6', borderRadius: 19 },
-  chipActive: { backgroundColor: '#E0F2FE', borderColor: '#BAE6FD' },
-  chipText: { fontSize: 14, color: '#4B5563' },
-  chipTextActive: { color: '#007AFF', fontWeight: '500' },
-  lv2Hint: { fontSize: 13, color: '#9CA3AF', paddingVertical: 10 },
-  cardSection: { backgroundColor: '#FFF', borderRadius: 14, padding: 16, marginBottom: 40 },
-  inputLabel: { fontSize: 13, fontWeight: '500', color: '#9CA3AF', marginBottom: 8 },
-  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
-  input: { flex: 1, fontSize: 15, color: '#1C1C1E' },
-  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
-  autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  chip: { paddingVertical: 9, paddingHorizontal: 18, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.borderSoft, borderRadius: 19 },
+  chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  chipText: { fontSize: 14, color: c.textSecondary },
+  chipTextActive: { color: c.accent, fontWeight: '500' },
+  lv2Hint: { fontSize: 13, color: c.textMuted, paddingVertical: 10 },
+  cardSection: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 40 },
+  inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
+  input: { flex: 1, fontSize: 15, color: c.text },
+  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.bgElevated, borderRadius: 10, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
+  autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft },
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
-  autoCompleteText: { fontSize: 15, color: '#1C1C1E' },
-  autoCompleteMeta: { fontSize: 12, color: '#8E8E93', marginTop: 1 },
-  autoCompleteHint: { fontSize: 12, color: '#9CA3AF', marginTop: 8 },
-  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 16 },
+  autoCompleteText: { fontSize: 15, color: c.text },
+  autoCompleteMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
+  autoCompleteHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
+  divider: { height: 1, backgroundColor: c.borderSoft, marginVertical: 16 },
   dateRow: { flexDirection: 'row', alignItems: 'center' },
-  dateBox: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: '#1C1C1E' },
+  dateBox: { backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: c.text },
   dateBoxYear: { width: 64 }, 
-  dateLabelText: { fontSize: 14, color: '#6B7280', marginHorizontal: 6, fontWeight: '500' },
+  dateLabelText: { fontSize: 14, color: c.textSecondary, marginHorizontal: 6, fontWeight: '500' },
   ratingSection: { marginBottom: 8 },
   starRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  ratingScore: { fontSize: 18, fontWeight: 'bold', color: '#FACC15', marginLeft: 12 },
-  commentInput: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, fontSize: 15, height: 100, color: '#1C1C1E', borderWidth: 1, borderColor: '#E5E7EB' },
+  ratingScore: { fontSize: 18, fontWeight: 'bold', color: c.star, marginLeft: 12 },
+  requiredMark: { color: c.danger, fontWeight: '700' },
+  moodRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  moodChip: { width: 44, height: 42, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border,
+    alignItems: 'center', justifyContent: 'center' },
+  moodChipOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  moodChipText: { fontSize: 21, lineHeight: 26 },
+  moodInput: { width: 88, height: 42, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: c.border,
+    backgroundColor: c.bgSunken, textAlign: 'center', fontSize: 18, color: c.text, paddingVertical: 0 },
+  moodHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
+  weatherChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: c.bgSunken,
+    borderWidth: 1, borderColor: c.border },
+  weatherChipText: { fontSize: 13, color: c.textSecondary },
+  weatherChipTextOn: { color: c.accent, fontWeight: '600' },
+  commentInput: { backgroundColor: c.bgSunken, borderRadius: 10, padding: 12, fontSize: 15, height: 100, color: c.text, borderWidth: 1, borderColor: c.border },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
   imageGridItem: { width: '33.33%', padding: 4 },
-  imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#E5E5EA', overflow: 'hidden' },
+  imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.mediaPlaceholder, overflow: 'hidden' },
   playOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  addImageBtn: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
+  addImageBtn: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
   removeImageBtn: { position: 'absolute', top: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }
 });
