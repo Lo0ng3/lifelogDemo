@@ -1,22 +1,19 @@
 # 用 GitHub Actions 直接出 Android APK（不消耗 Expo/EAS 的构建额度）
 #
-# 用法：仓库 → Actions → 「构建 Android APK」→ Run workflow
+# 用法：仓库 → Actions → 「构建 Android APK」→ Run workflow（只手动触发，不自动跑）
 #   跑完在该次运行的 Artifacts 里下载 app-release-apk（zip 里就是 APK）。
 #
 # 说明：
 # - 这里走 expo prebuild + gradlew，和 EAS 无关，所以不受 EAS 每月免费额度限制。
+# - 下载 Gradle / Android SDK / NDK 都发生在 GitHub 的构建机器上（云端），不占你本机
+#   带宽和磁盘；下次运行有缓存，通常 5-10 分钟。你只需要下载最后的 APK 产物。
 # - 默认用 React Native 模板自带的 debug keystore 签名（自己装 / 发给朋友测试都够用）；
 #   要"覆盖安装手机上已装的包"需要同一把签名密钥，见文件末尾注释。
-# - 首次运行要下 Gradle / NDK，约 15-25 分钟；之后有缓存，一般 5-10 分钟。
 name: 构建 Android APK
 
 on:
+  # 只手动触发：Actions → 「构建 Android APK」→ Run workflow
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'lifelog-app/**'
-      - '.github/workflows/android-build.yml'
 
 defaults:
   run:
