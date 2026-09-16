@@ -1,9 +1,9 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity } from 'react-native';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
-  Extrapolation, runOnJS,
+  Extrapolation, runOnJS, useAnimatedScrollHandler,
 } from 'react-native-reanimated';
 
 import RecordRow from './RecordRow';
@@ -22,7 +22,7 @@ const todayKey = () => {
 };
 
 /* 单个日期格：选中底色 / 今天描边都用动画过渡，点按有轻微缩放 */
-function DayCell({ cell, records, selected, isToday, onPress, colors, styles }) {
+function DayCell({ cell, records, selected, isToday, onPress, colors, styles, compact }) {
   const on = useSharedValue(selected ? 1 : 0);
   useEffect(() => { on.value = withTiming(selected ? 1 : 0, { duration: 160 }); }, [selected, on]);
   const bg = useAnimatedStyle(() => ({
@@ -33,9 +33,9 @@ function DayCell({ cell, records, selected, isToday, onPress, colors, styles }) 
 
   return (
     <PressableScale containerStyle={styles.dayHit} style={styles.dayFill} activeScale={0.9} onPress={onPress}>
-      <Reanimated.View style={[styles.day, cell.out && styles.dayOut, bg]}>
-        {isToday && <View style={styles.todayRing} pointerEvents="none" />}
-        <Text style={[styles.dayNum, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
+      <Reanimated.View style={[styles.day, compact && styles.dayCompact, cell.out && styles.dayOut, bg]}>
+        {isToday && <View style={[styles.todayRing, compact && styles.todayRingCompact]} pointerEvents="none" />}
+        <Text style={[styles.dayNum, compact && styles.dayNumCompact, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
         {records.length > 0 && (
           <View style={styles.dots}>
             {dots.map((r, i) => (
@@ -63,6 +63,21 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(now.getFullYear());
   const shift = useSharedValue(0);
+  const listRef = useRef(null);
+  // 折叠日历：完整月历随列表上滑滚走，收起后顶部固定显示"本周 7 天"，随时还能点某天
+  const [collapsed, setCollapsed] = useState(false);
+  const headerHSV = useSharedValue(0);
+  const collapsedFlag = useSharedValue(0);
+  const onListScroll = useAnimatedScrollHandler({
+    onScroll: (e) => {
+      const y = e.contentOffset.y;
+      const should = y > Math.max(0, headerHSV.value - 76) ? 1 : 0;
+      if (should !== collapsedFlag.value) {
+        collapsedFlag.value = should;
+        runOnJS(setCollapsed)(should === 1);
+      }
+    },
+  });
 
   const byDate = useMemo(() => {
     const map = new Map();
@@ -71,6 +86,18 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(r);
     });
+    return map;
+  }, [records]);
+
+  // 按月预分组：切月时 O(1) 取当月记录，不用每次遍历全部记录（记录多时切月会明显卡顿）
+  const byMonth = useMemo(() => {
+    const map = new Map();
+    records.forEach((r) => {
+      const key = String(r.date).slice(0, 7);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(r);
+    });
+    map.forEach((list) => list.sort((a, b) => String(a.date).localeCompare(String(b.date))));
     return map;
   }, [records]);
 
@@ -100,14 +127,9 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
 
   // 当月（或选中日）的记录，按日期升序
   const timeline = useMemo(() => {
-    const { y, m } = cursor;
-    const list = records.filter((r) => {
-      const d = String(r.date).slice(0, 10);
-      if (selected) return d === selected;
-      const [ry, rm] = d.split('-');
-      return Number(ry) === y && Number(rm) === m;
-    });
-    list.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const list = selected
+      ? (byDate.get(selected) || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      : (byMonth.get(`${cursor.y}-${pad(cursor.m)}`) || []);
 
     // 拍平成 FlatList 的条目：日期分组标题 + 记录行
     const rows = [];
@@ -121,7 +143,7 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
       rows.push({ kind: 'item', id: `i-${item.id}`, item });
     });
     return rows;
-  }, [records, cursor, selected]);
+  }, [byDate, byMonth, cursor, selected]);
 
   const goMonth = useCallback((delta) => {
     setCursor((prev) => {
@@ -132,6 +154,7 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
       return { y, m };
     });
     setSelected(null);
+    // 先起动画再改 state：这样弹簧在 UI 线程先跑起来，后面的重排不会拖住它
     shift.value = delta * 26;
     shift.value = withSpring(0, { damping: 20, stiffness: 190, mass: 0.7 });
   }, [shift]);
@@ -150,6 +173,24 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
     return out;
   }, [cells]);
 
+  // 收起后显示的那一周：优先选中的日期，其次今天（若在当前月），否则本月 1 号
+  const anchorWeek = useMemo(() => {
+    const monthPrefix = `${cursor.y}-${pad(cursor.m)}`;
+    const anchor = selected || (todayKey().startsWith(monthPrefix) ? todayKey() : `${monthPrefix}-01`);
+    const d = new Date(`${anchor}T00:00:00`);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return Array.from({ length: 7 }, (_, i) => {
+      const x = new Date(monday);
+      x.setDate(monday.getDate() + i);
+      return {
+        date: dateKey(x.getFullYear(), x.getMonth() + 1, x.getDate()),
+        day: x.getDate(),
+        out: `${x.getFullYear()}-${pad(x.getMonth() + 1)}` !== monthPrefix,
+      };
+    });
+  }, [cursor.y, cursor.m, selected]);
+
   // 日历区左右滑动换月（纵向手势留给下面的列表滚动）
   const swipeMonth = useMemo(() => Gesture.Pan()
     .activeOffsetX([-14, 14])
@@ -164,7 +205,7 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
     opacity: interpolate(Math.abs(shift.value), [0, 26], [1, 0.45], Extrapolation.CLAMP),
   }));
 
-  const renderRow = ({ item: row, index }) => {
+  const renderRow = useCallback(({ item: row, index }) => {
     if (row.kind === 'day') {
       const [y, m, d] = row.date.split('-');
       const wd = WEEK[(new Date(Number(y), Number(m) - 1, Number(d)).getDay() + 6) % 7];
@@ -181,114 +222,144 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
         onEdit={onEditItem}
       />
     );
-  };
+  }, [onPressItem, onEditItem, timeline, styles]);
 
   return (
     <View style={styles.container}>
-      <GestureDetector gesture={swipeMonth}>
-        <Reanimated.View style={gridStyle}>
-          <View style={styles.monthBar}>
-            {/* 点年月可以跳到任意年月（不带日） */}
-            <TouchableOpacity
-              style={styles.monthLabelBtn}
-              onPress={() => { setPickerYear(cursor.y); setPickerOpen(v => !v); }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
-              <Text style={[styles.monthLabelChevron, pickerOpen && styles.monthLabelChevronUp]}>⌄</Text>
-            </TouchableOpacity>
-            <View style={styles.nav}>
-              <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(-1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Text style={styles.navBtnText}>‹</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-                <Text style={styles.navBtnText}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.todayBtn} onPress={goToday}>
-                <Text style={styles.todayBtnText}>今天</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {pickerOpen ? (
-            <View style={styles.picker}>
-              <View style={styles.pickerYearRow}>
-                <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(y => y - 1)}>
-                  <Text style={styles.navBtnText}>‹</Text>
-                </TouchableOpacity>
-                <Text style={styles.pickerYear}>{pickerYear}年</Text>
-                <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(y => y + 1)}>
-                  <Text style={styles.navBtnText}>›</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.pickerMonths}>
-                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
-                  const on = cursor.y === pickerYear && cursor.m === m;
-                  return (
-                    <TouchableOpacity
-                      key={m}
-                      style={[styles.monthChip, on && styles.monthChipOn]}
-                      onPress={() => {
-                        setCursor({ y: pickerYear, m });
-                        setSelected(null);
-                        setPickerOpen(false);
-                        shift.value = 0;
-                      }}
-                    >
-                      <Text style={[styles.monthChipText, on && styles.monthChipTextOn]}>{m}月</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          ) : (
-            <>
-              <View style={styles.weekRow}>
-                {WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)}
-              </View>
-              <View style={styles.grid}>
-                {weeks.map((week, wi) => (
-                  <View key={wi} style={styles.week}>
-                    {week.map((cell) => (
-                      <DayCell
-                        key={cell.date}
-                        cell={cell}
-                        records={cell.out ? [] : (byDate.get(cell.date) || [])}
-                        selected={selected === cell.date}
-                        isToday={cell.date === todayKey()}
-                        onPress={() => {
-                          if ((byDate.get(cell.date) || []).length === 0) return;
-                          setSelected((prev) => (prev === cell.date ? null : cell.date));
-                        }}
-                        colors={colors}
-                        styles={styles}
-                      />
-                    ))}
-                  </View>
-                ))}
-              </View>
-            </>
-          )}
-        </Reanimated.View>
-      </GestureDetector>
-
-      <View style={styles.tlHead}>
-        <Text style={styles.tlTitle}>
-          {selected
-            ? `${Number(selected.slice(5, 7))}月${Number(selected.slice(8, 10))}日`
-            : `${cursor.m}月 · 全部`}
-        </Text>
-        <Text style={styles.tlCount}>{timeline.length ? `${timeline.filter((r) => r.kind === 'item').length} 条` : ''}</Text>
+      {/* 年月条固定在顶部，永远看得到 */}
+      <View style={styles.monthBar}>
+        {/* 点年月可以跳到任意年月（不带日） */}
+        <TouchableOpacity
+          style={styles.monthLabelBtn}
+          onPress={() => { setPickerYear(cursor.y); setPickerOpen(v => !v); }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
+          <Text style={[styles.monthLabelChevron, pickerOpen && styles.monthLabelChevronUp]}>⌄</Text>
+        </TouchableOpacity>
+        <View style={styles.nav}>
+          <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(-1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+            <Text style={styles.navBtnText}>‹</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+            <Text style={styles.navBtnText}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.todayBtn} onPress={() => { goToday(); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }}>
+            <Text style={styles.todayBtnText}>今天</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
+      {/* 固定的"周条"：展开时是星期表头，日历收起来后变成本周 7 天（照样能点某天） */}
+      <View style={styles.weekStrip}>
+        {collapsed ? (
+          anchorWeek.map((cell) => (
+            <DayCell
+              key={cell.date}
+              cell={cell}
+              compact
+              records={byDate.get(cell.date) || []}
+              selected={selected === cell.date}
+              isToday={cell.date === todayKey()}
+              onPress={() => {
+                if ((byDate.get(cell.date) || []).length === 0) return;
+                setSelected((prev) => (prev === cell.date ? null : cell.date));
+              }}
+              colors={colors}
+              styles={styles}
+            />
+          ))
+        ) : (
+          WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)
+        )}
+      </View>
+
+      {/* 日历跟列表在同一个滚动容器里：上滑就把日历顶上去，记录多时列表能占满整屏 */}
       <View style={styles.tlWrap}>
-        <FlatList
+        <Reanimated.FlatList
+          ref={listRef}
           data={timeline}
           keyExtractor={(row) => row.id}
           renderItem={renderRow}
+          onScroll={onListScroll}
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
           contentContainerStyle={styles.tlContent}
+          ListHeaderComponent={(
+            <GestureDetector gesture={swipeMonth}>
+              <Reanimated.View
+                style={gridStyle}
+                onLayout={(e) => { headerHSV.value = e.nativeEvent.layout.height; }}
+              >
+                {pickerOpen ? (
+                  <View style={styles.picker}>
+                    <View style={styles.pickerYearRow}>
+                      <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(v => v - 1)}>
+                        <Text style={styles.navBtnText}>‹</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.pickerYear}>{pickerYear}年</Text>
+                      <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(v => v + 1)}>
+                        <Text style={styles.navBtnText}>›</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.pickerMonths}>
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
+                        const on = cursor.y === pickerYear && cursor.m === m;
+                        return (
+                          <TouchableOpacity
+                            key={m}
+                            style={[styles.monthChip, on && styles.monthChipOn]}
+                            onPress={() => {
+                              setCursor({ y: pickerYear, m });
+                              setSelected(null);
+                              setPickerOpen(false);
+                              shift.value = 0;
+                            }}
+                          >
+                            <Text style={[styles.monthChipText, on && styles.monthChipTextOn]}>{m}月</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.grid}>
+                      {weeks.map((week, wi) => (
+                        <View key={wi} style={styles.week}>
+                          {week.map((cell) => (
+                            <DayCell
+                              key={cell.date}
+                              cell={cell}
+                              records={cell.out ? [] : (byDate.get(cell.date) || [])}
+                              selected={selected === cell.date}
+                              isToday={cell.date === todayKey()}
+                              onPress={() => {
+                                if ((byDate.get(cell.date) || []).length === 0) return;
+                                setSelected((prev) => (prev === cell.date ? null : cell.date));
+                                listRef.current?.scrollToOffset({ offset: 0, animated: true });
+                              }}
+                              colors={colors}
+                              styles={styles}
+                            />
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
+                <View style={styles.tlHead}>
+                  <Text style={styles.tlTitle}>
+                    {selected
+                      ? `${Number(selected.slice(5, 7))}月${Number(selected.slice(8, 10))}日`
+                      : `${cursor.m}月 · 全部`}
+                  </Text>
+                  <Text style={styles.tlCount}>{timeline.length ? `${timeline.filter((r) => r.kind === 'item').length} 条` : ''}</Text>
+                </View>
+              </Reanimated.View>
+            </GestureDetector>
+          )}
         />
       </View>
     </View>
@@ -307,16 +378,20 @@ const makeStyles = (c) => ({
   navBtnText: { fontSize: 16, color: c.textSecondary, marginTop: -2 },
   todayBtn: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.accentSoft, alignItems: 'center', justifyContent: 'center' },
   todayBtnText: { fontSize: 12.5, color: c.accent, fontWeight: '600' },
-  weekRow: { flexDirection: 'row', paddingHorizontal: 10, marginTop: 4 },
+  // 收起时固定显示的那条"本周"
+  weekStrip: { flexDirection: 'row', alignItems: 'center', height: 38, paddingHorizontal: 10, marginBottom: 4 },
   weekText: { flex: 1, textAlign: 'center', fontSize: 11, color: c.textMuted },
   grid: { paddingHorizontal: 10, paddingBottom: 6 },
   week: { flexDirection: 'row' },
   dayHit: { flex: 1, paddingVertical: 2 },
   dayFill: { width: '100%' },
-  day: { height: 46, borderRadius: 12, alignItems: 'center', paddingTop: 5 },
+  day: { height: 44, borderRadius: 12, alignItems: 'center', paddingTop: 5 },
+  dayCompact: { height: 34, paddingTop: 2 },
   dayOut: {},
   todayRing: { position: 'absolute', top: 2, left: 2, right: 2, bottom: 2, borderRadius: 11, borderWidth: 1, borderColor: c.accentSoftBorder },
+  todayRingCompact: { top: 0, left: 0, right: 0, bottom: 0, borderRadius: 10 },
   dayNum: { fontSize: 13, color: c.text, lineHeight: 16 },
+  dayNumCompact: { fontSize: 12, lineHeight: 15 },
   dayNumOut: { color: c.textFaint },
   dayNumToday: { color: c.accent, fontWeight: '700' },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 2.5, marginTop: 4 },

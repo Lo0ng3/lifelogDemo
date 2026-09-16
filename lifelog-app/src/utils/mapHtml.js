@@ -224,6 +224,9 @@ export function buildMapHtml({
 
           var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([34.0, 108.0], 4);
           map.attributionControl.setPrefix('');
+          // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级，
+          // 而我们要的是双击直接飞到该标点（缩放靠右下角/右上角控件就够了）
+          if (map.doubleClickZoom) map.doubleClickZoom.disable();
           if (TK) {
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
@@ -262,25 +265,25 @@ export function buildMapHtml({
               setTimeout(function () { marker.openPopup(); }, 120);
           }
 
-          // 单击 = 显示 / 收起评论（不移动地图）；双击 = 放大跳到该标点
-          var lastTapId = null, lastTapAt = 0, singleTapTimer = null;
+          // 单击 = 立刻显示 / 收起评论（地图不移动）；双击 = 放大跳到该标点。
+          // 单击动作不再延迟执行——先弹出来，若紧接着又来一次点按就撤销掉再飞过去，
+          // 这样不会出现"评论闪一下又消失"。
+          var lastTapId = null, lastTapAt = 0;
           function bindTapGesture(p, marker) {
               marker.on('click', function (e) {
                   if (e && e.originalEvent) { e.originalEvent.stopPropagation(); }
                   var now = Date.now();
-                  if (lastTapId === p.id && now - lastTapAt < 320) {
-                      // 双击：取消待执行的单击动作，直接放大跳转
+                  if (lastTapId === p.id && now - lastTapAt < 300) {
                       lastTapId = null; lastTapAt = 0;
-                      clearTimeout(singleTapTimer);
+                      safe(function () { marker.closePopup(); });   // 收掉单击弹出来的评论
                       focusPoint(p, marker);
                       return;
                   }
                   lastTapId = p.id; lastTapAt = now;
-                  clearTimeout(singleTapTimer);
-                  singleTapTimer = setTimeout(function () {
+                  safe(function () {
                       if (marker.isPopupOpen()) marker.closePopup();
                       else marker.openPopup();
-                  }, 230);
+                  });
               });
           }
 

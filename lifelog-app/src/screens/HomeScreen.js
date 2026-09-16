@@ -9,7 +9,7 @@ import {
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
-  useAnimatedStyle, useSharedValue, withSpring, withTiming, FadeIn,
+  useAnimatedStyle, useSharedValue, withTiming, Easing, FadeIn,
 } from 'react-native-reanimated';
 
 import {
@@ -51,17 +51,26 @@ function ViewSwitcher({ value, onChange }) {
 
   useEffect(() => {
     if (!trackWidth) return;
-    x.value = withSpring((trackWidth * idx) / VIEWS.length, { damping: 20, stiffness: 220, mass: 0.6 });
+    x.value = withTiming((trackWidth * idx) / VIEWS.length, { duration: 190, easing: Easing.out(Easing.cubic) });
   }, [idx, trackWidth, x]);
 
   const pillStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   const segWidth = trackWidth ? trackWidth / VIEWS.length : 0;
 
+  // 按下就直接起动画（不等 state 提交后的 effect），高亮才跟手
+  const press = (id, i) => {
+    if (trackWidth) {
+      const to = (trackWidth * i) / VIEWS.length;
+      x.value = withTiming(to, { duration: 190, easing: Easing.out(Easing.cubic) });
+    }
+    onChange(id);
+  };
+
   return (
     <View style={styles.segmentedControl} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width - 4)}>
       {segWidth > 0 && <Reanimated.View style={[styles.segmentPill, { width: segWidth }, pillStyle]} />}
-      {VIEWS.map(v => (
-        <TouchableOpacity key={v.id} style={styles.segmentBtn} onPress={() => onChange(v.id)} activeOpacity={0.8}>
+      {VIEWS.map((v, i) => (
+        <TouchableOpacity key={v.id} style={styles.segmentBtn} onPress={() => press(v.id, i)} activeOpacity={0.8}>
           <Text style={[styles.segmentText, value === v.id && styles.segmentTextActive]}>{v.label}</Text>
         </TouchableOpacity>
       ))}
@@ -200,13 +209,16 @@ export default function HomeScreen({ navigation }) {
   };
 
   const [viewMode, setViewMode] = useState('list'); 
+  const [pillMode, setPillMode] = useState('list');   // 药丸的选中态，跟手一点
+  const pendingView = useRef(null);                   // 最近一次点击的目标视图
   const mapRef = useRef(null);
   useEffect(() => {
     if (viewMode !== 'map') return undefined;
     const timer = setTimeout(() => {
       // 地图页刚从 display:none 切回来：容器尺寸变了，需要让 Leaflet 重新量一次
+      // 延迟到切换动画（约 300ms）之后再量，避免和药丸动画抢主线程
       mapRef.current?.injectJavaScript('window.__rcMap && window.__rcMap.markDirty(); true;');
-    }, 80);
+    }, 320);
     return () => clearTimeout(timer);
   }, [viewMode]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -354,6 +366,16 @@ export default function HomeScreen({ navigation }) {
     transform: [{ translateY: (1 - viewAnim.value) * 8 }],
   }));
 
+  // 切换视图：药丸立刻跟手；地图出场要重新布局（WebView 从 0 尺寸变回有尺寸），
+  // 所以让它晚一拍再显示，避免和切换动画抢主线程
+  const changeView = useCallback((id) => {
+    if (pendingView.current === id) return;
+    pendingView.current = id;
+    setPillMode(id);
+    if (id === 'map') setTimeout(() => { if (pendingView.current === id) setViewMode(id); }, 130);
+    else setViewMode(id);
+  }, []);
+
   return (
     <View style={styles.container}>
 
@@ -364,7 +386,7 @@ export default function HomeScreen({ navigation }) {
       )}
       <Animated.View style={[styles.sidebar, { transform: [{ translateX: sidebarAnim }] }]}>
         <View style={[styles.sidebarContent, { paddingTop: insets.top + 20 }]}>
-          <View style={styles.sidebarHeader}><View style={styles.largeAvatar}><User color={colors.textOnAccent} size={40} /></View><Text style={styles.userName}>旅行者</Text></View>
+          <View style={styles.sidebarHeader}><View style={styles.largeAvatar}><User color={colors.textOnAccent} size={40} /></View><Text style={styles.userName}>我</Text></View>
           <View style={styles.statsRow}>
             <View style={styles.statItem}><Text style={styles.statNum}>{logData.length}</Text><Text style={styles.statLabel}>总印记</Text></View>
           </View>
@@ -400,7 +422,7 @@ export default function HomeScreen({ navigation }) {
       <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.profileBtn} onPress={() => toggleSidebar(true)}><User color={colors.textOnAccent} size={20} /></TouchableOpacity>
-          <ViewSwitcher value={viewMode} onChange={setViewMode} />
+          <ViewSwitcher value={pillMode} onChange={changeView} />
           <View style={{ width: 36 }} /> 
         </View>
 
@@ -420,7 +442,8 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* 三个视图都保持挂载，仅切换显示：地图瓦片不因切页而重新下载 */}
+        {/* 一次只显示一个视图（display:none 切换）；地图出场要重新布局，
+            所以由 changeView 让药丸先动、视图晚一拍再出现 */}
         <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
@@ -539,8 +562,9 @@ const makeStyles = (c) => ({
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
   largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
   segmentedControl: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: 9, padding: 2, width: 204 },
+  // 药丸不要挂 elevation/阴影：Android 上移动的阴影每帧都要重画，高亮滑动会一顿一顿的
   segmentPill: { position: 'absolute', left: 2, top: 2, bottom: 2, borderRadius: 7, backgroundColor: c.bgElevated,
-    elevation: 2, shadowColor: c.shadow, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 3 },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
   segmentBtn: { flex: 1, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 7, zIndex: 1 },
   segmentText: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
   segmentTextActive: { color: c.textStrong, fontWeight: '600' },

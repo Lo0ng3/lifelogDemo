@@ -2,13 +2,13 @@ import React, { useState, useEffect, useContext, useRef, useCallback } from 'rea
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
-  BackHandler, ToastAndroid
+  BackHandler, ToastAndroid, Modal
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
+  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle, Maximize2
 } from 'lucide-react-native';
 import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
@@ -81,6 +81,7 @@ export default function AddScreen({ navigation, route }) {
   const [moodDraft, setMoodDraft] = useState('');
   const [editCoverIndex, setEditCoverIndex] = useState(null);   // 编辑时原封带回顾有的封面选择
   const [editPhotoCount, setEditPhotoCount] = useState(0);
+  const [fullscreenComment, setFullscreenComment] = useState(false);  // 评论/内容全屏编辑
   const [ticketOrigin, setTicketOrigin] = useState('');
   const [ticketDest, setTicketDest] = useState('');
   const [ticketNo, setTicketNo] = useState(''); 
@@ -788,8 +789,28 @@ export default function AddScreen({ navigation, route }) {
           <View style={[styles.divider, { marginVertical: 12 }]} />
 
           <View>
-            <Text style={styles.inputLabel}>{baseType === 'note' ? '内容' : '评论'}</Text>
-            <TextInput style={styles.commentInput} multiline numberOfLines={4} textAlignVertical="top" value={comment} onChangeText={setComment} />
+            <View style={styles.labelRow}>
+              <Text style={[styles.inputLabel, styles.labelRowText]}>{baseType === 'note' ? '内容' : '评论'}</Text>
+              {/* 内容写长了可以进全屏编辑 */}
+              <TouchableOpacity
+                style={styles.expandBtn}
+                onPress={() => setFullscreenComment(true)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Maximize2 size={14} color={colors.accent} />
+                <Text style={styles.expandBtnText}>全屏</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.commentInput}
+              multiline
+              numberOfLines={4}
+              textAlignVertical="top"
+              value={comment}
+              onChangeText={setComment}
+              placeholder={baseType === 'note' ? '写点什么…' : '写点评论…'}
+              placeholderTextColor={colors.textMuted}
+            />
           </View>
 
           {baseType === 'note' && subType === 'diary' && (
@@ -907,6 +928,34 @@ export default function AddScreen({ navigation, route }) {
         </BottomSheetView>
       </BottomSheetModal>
 
+      {/* 评论 / 内容全屏编辑：写长文时把输入区铺满整屏 */}
+      <Modal visible={fullscreenComment} animationType="slide" onRequestClose={() => setFullscreenComment(false)}>
+        <KeyboardAvoidingView
+          style={[styles.fullscreenWrap, { paddingTop: insets.top }]}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.fullscreenHeader}>
+            <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.cancelText}>返回</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>{baseType === 'note' ? '内容' : '评论'}</Text>
+            <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.saveText}>完成</Text>
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.fullscreenInput}
+            multiline
+            textAlignVertical="top"
+            autoFocus
+            value={comment}
+            onChangeText={setComment}
+            placeholder={baseType === 'note' ? '写点什么…' : '写点评论…'}
+            placeholderTextColor={colors.textMuted}
+          />
+        </KeyboardAvoidingView>
+      </Modal>
+
     </KeyboardAvoidingView>
   );
 }
@@ -969,6 +1018,15 @@ const makeStyles = (c) => ({
   weatherChipText: { fontSize: 13, color: c.textSecondary },
   weatherChipTextOn: { color: c.accent, fontWeight: '600' },
   commentInput: { backgroundColor: c.bgSunken, borderRadius: 10, padding: 12, fontSize: 15, height: 100, color: c.text, borderWidth: 1, borderColor: c.border },
+  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  labelRowText: { marginBottom: 0 },
+  expandBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 8, backgroundColor: c.accentSoft },
+  expandBtnText: { fontSize: 11.5, color: c.accent, fontWeight: '600' },
+  fullscreenWrap: { flex: 1, backgroundColor: c.bg },
+  fullscreenHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
+    paddingVertical: 14, backgroundColor: c.bgElevated, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+  fullscreenInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, lineHeight: 24, color: c.text, textAlignVertical: 'top' },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
   imageGridItem: { width: '33.33%', padding: 4 },
   imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.mediaPlaceholder, overflow: 'hidden' },
