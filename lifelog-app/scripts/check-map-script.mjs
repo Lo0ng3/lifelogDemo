@@ -80,6 +80,13 @@ const L = {
   marker: (ll, opts) => {
     // 轨迹上的「×N」次数徽章是 interactive:false，标点才是可点的
     const state = { open: false, options: opts || {} };
+    // 标点的 DOM 元素桩：记录注册的处理器，方便测试"直接绑 DOM"的手势路径
+    const el = {
+      __rcTapBound: false,
+      __handlers: {},
+      addEventListener(type, fn) { (el.__handlers[type] = el.__handlers[type] || []).push(fn); },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+    };
     const api = {
       addTo() { return this; },
       bindPopup() { return this; },
@@ -87,7 +94,9 @@ const L = {
       openPopup() { state.open = true; calls.popupOpen++; return this; },
       closePopup() { state.open = false; calls.popupOpen = Math.max(0, calls.popupOpen - 1); return this; },
       isPopupOpen() { return state.open; },
+      getElement() { return el; },
       __state: state,
+      __el: el,
     };
     calls.markers.push({ ll: latLng(ll), isBadge: opts && opts.interactive === false, api });
     return api;
@@ -101,8 +110,6 @@ const L = {
 
 const documentStub = { getElementById: $, addEventListener() {}, body: { className: '' } };
 const windowStub = { ReactNativeWebView: { postMessage() {} }, L };
-const noop = () => {};
-const evt = () => ({ originalEvent: { stopPropagation: noop } });
 
 let thrown = null;
 try {
@@ -140,8 +147,17 @@ if (pins.some((p) => p.api.__state.options.bubblingMouseEvents !== false)) {
 
 const pin = pins[0].api;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// 直接走"绑在标点 DOM 上"的那条路（真机上的主路径）：pointerdown + pointerup
+const domTap = (x = 5, y = 5) => {
+  const h = pin.__el.__handlers;
+  h.pointerdown?.forEach((fn) => fn({ clientX: x, clientY: y, stopPropagation() {}, preventDefault() {}, cancelable: true }));
+  h.pointerup?.forEach((fn) => fn({ clientX: x, clientY: y, stopPropagation() {}, preventDefault() {}, cancelable: true }));
+};
+if (!pin.__el.__handlers.pointerdown || !pin.__el.__handlers.pointerup) {
+  fail.push('标点没有绑定 DOM 手势（pointerdown/pointerup）');
+}
 // 等过双击判定窗口再点，确保这一下被当成"单击"
-const singleTap = async () => { await wait(360); pin.__click(evt()); };
+const singleTap = async () => { await wait(360); domTap(); };
 // ① 单击一次 → 应该立刻弹出评论，并且不移动地图
 const flyBefore = calls.flyTo;
 await singleTap();
@@ -153,7 +169,8 @@ if (pin.isPopupOpen()) fail.push('再次单击没能收起评论');
 // ③ 快速连点两次 → 放大飞到该标点，并弹出评论
 const flyBefore2 = calls.flyTo;
 await singleTap();       // 第一下：弹出评论
-pin.__click(evt());      // 紧接着第二下：判定为双击
+await wait(80);          // 真实双击的间隔
+domTap();                // 第二下：判定为双击
 if (calls.flyTo !== flyBefore2 + 1) fail.push('快速连点两次没有飞到该标点');
 if (!pin.isPopupOpen()) fail.push('双击后没有显示评论');
 

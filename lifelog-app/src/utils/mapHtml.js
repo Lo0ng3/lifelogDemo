@@ -269,30 +269,89 @@ export function buildMapHtml({
               setTimeout(function () { marker.openPopup(); }, 120);
           }
 
-          // 单击 = 立刻显示 / 收起评论（地图不移动）；双击 = 放大跳到该标点。
-          // 单击动作不再延迟执行——先弹出来，若紧接着又来一次点按就撤销掉再飞过去，
-          // 这样不会出现"评论闪一下又消失"。
-          var lastTapId = null, lastTapAt = 0;
+          /* ------------------------------------------------------------------
+           * 标点手势：单击 = 显示/收起评论（不移动地图）；连点两次 = 放大飞到该标点。
+           *
+           * 这里不依赖 Leaflet 的 click：Android WebView 上 click 的合成时机和次数
+           * 都不太一样（有的要等 ~300ms，有的还会多给一次），之前就出现过
+           * "单击没反应、双击才冒评论"。现在直接绑在标点 DOM 元素上，用
+           * pointerup / touchend / click 三种里最先到的那个来处理，并且拦在自己这里
+           * 不让它冒泡到地图（地图默认会因为一次 click 把刚打开的评论关掉）。
+           * ------------------------------------------------------------------ */
+          var lastDomTapAt = 0;
           var DOUBLE_TAP_MS = 320;
           function bindTapGesture(p, marker) {
-              marker.on('click', function (e) {
-                  // 再上一道保险：阻止 DOM 事件继续冒泡到地图容器
-                  if (e && e.originalEvent && L.DomEvent && L.DomEvent.stopPropagation) {
-                      L.DomEvent.stopPropagation(e.originalEvent);
-                  }
+              var lastTapId = null, lastTapAt = 0;
+
+              function handleTap() {
                   var now = Date.now();
+                  lastDomTapAt = now;
                   if (lastTapId === p.id && (now - lastTapAt) < DOUBLE_TAP_MS) {
+                      // 连点两次：收掉单击弹出来的评论，然后飞过去
                       lastTapId = null; lastTapAt = 0;
-                      safe(function () { marker.closePopup(); });   // 收掉单击弹出来的评论
+                      safe(function () { marker.closePopup(); });
                       focusPoint(p, marker);
                       return;
                   }
                   lastTapId = p.id; lastTapAt = now;
-                  // 单击：立刻显示 / 收起评论
                   safe(function () {
                       if (marker.isPopupOpen()) marker.closePopup();
                       else marker.openPopup();
                   });
+              }
+
+              function consume(ev) {
+                  if (ev) {
+                      if (ev.stopPropagation) ev.stopPropagation();
+                      if (ev.cancelable && ev.preventDefault) ev.preventDefault();
+                  }
+                  handleTap();
+              }
+
+              function bindElement() {
+                  var el = marker.getElement && marker.getElement();
+                  if (!el || el.__rcTapBound) return;
+                  el.__rcTapBound = true;
+                  var downAt = 0, downX = 0, downY = 0, lastEnd = 0;
+
+                  function pointOf(ev) {
+                      var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
+                      return { x: t.clientX || 0, y: t.clientY || 0 };
+                  }
+                  function onDown(ev) {
+                      var pnt = pointOf(ev);
+                      downAt = Date.now(); downX = pnt.x; downY = pnt.y;
+                  }
+                  function onEnd(ev) {
+                      var now = Date.now();
+                      if (now - lastEnd < 40) return;            // pointerup / touchend 同一拍只算一次
+                      lastEnd = now;
+                      var pnt = pointOf(ev);
+                      var moved = Math.abs(pnt.x - downX) + Math.abs(pnt.y - downY);
+                      // 长按或拖动过（多半是在拖地图）不算点击
+                      if (moved > 14 || (downAt && now - downAt > 800)) return;
+                      consume(ev);
+                  }
+
+                  el.addEventListener('pointerdown', onDown, true);
+                  el.addEventListener('touchstart', onDown, true);
+                  el.addEventListener('pointerup', onEnd, true);
+                  el.addEventListener('touchend', onEnd, true);
+                  el.addEventListener('click', function (ev) {
+                      if (Date.now() - lastEnd < 600) return;    // 上面已经处理过这一下
+                      consume(ev);
+                  }, true);
+              }
+
+              marker.on('add', bindElement);
+              bindElement();
+              // 兜底：万一拿不到 DOM 元素（很老的 WebView），仍走 Leaflet 的 click
+              marker.on('click', function (e) {
+                  if (e && e.originalEvent && L.DomEvent && L.DomEvent.stopPropagation) {
+                      L.DomEvent.stopPropagation(e.originalEvent);
+                  }
+                  if (Date.now() - lastDomTapAt < 600) return;
+                  handleTap();
               });
           }
 
