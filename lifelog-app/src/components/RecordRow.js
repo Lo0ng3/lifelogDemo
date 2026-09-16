@@ -74,6 +74,9 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 
   const stars = starsOf(item.rating);
   const essay = isEssay(item);
+  // 列表只显示日期（时分放到详情页）；正文一行，保证每行高度完全一致
+  const dayLabel = String(item.date || '').slice(5, 10);
+  const textLine = [item.subtitle, item.comment].filter(Boolean).join(' · ');
 
   const confirmDelete = () => Alert.alert(
     '删除印记',
@@ -111,7 +114,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
           <View style={styles.itemContent}>
             <View style={styles.itemHeader}>
               <Text style={styles.itemTitle} numberOfLines={1}>{shortTicketTitle(item.title)}</Text>
-              <Text style={styles.itemDate}>{item.date.replace(/^\d{4}-/, '')}</Text>
+              <Text style={styles.itemDate}>{dayLabel}</Text>
             </View>
             <View style={styles.metaRow}>
               <Text style={[styles.tag, { color: groupColor(item, colors), backgroundColor: groupSoft(item, colors) }]}>
@@ -131,8 +134,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
                 </View>
               )}
             </View>
-            {!!item.subtitle && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.subtitle}</Text>}
-            {!!item.comment && <Text style={styles.itemSubtitle} numberOfLines={2}>{item.comment}</Text>}
+            {!!textLine && <Text style={styles.itemSubtitle} numberOfLines={1}>{textLine}</Text>}
           </View>
         </View>
       </PressableScale>
@@ -143,7 +145,8 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 const makeStyles = (c) => ({
   swipeContainer: { backgroundColor: c.bgElevated },
   cardRow: { backgroundColor: c.bgElevated },
-  cardItem: { flexDirection: 'row', padding: 16 },
+  // 固定行高 = 封面 64 + 上下内边距 16×2，有无评论都一样高
+  cardItem: { flexDirection: 'row', padding: 16, height: 96, alignItems: 'center' },
   cardItemBorder: { borderBottomWidth: 1, borderBottomColor: c.divider },
   itemContent: { flex: 1, justifyContent: 'center' },
   itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },

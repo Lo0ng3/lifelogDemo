@@ -222,17 +222,18 @@ export default function DetailScreen({ route, navigation }) {
             <CoverIcon item={item} height={80} style={{ marginRight: 0 }} />
           ) : (
             <View style={[styles.iconBox, { backgroundColor: iconConfig.iconBgColor }]}>
-              <Text style={styles.iconEmoji}>{iconConfig.emoji}</Text>
+              <iconConfig.IconComponent color={iconConfig.iconColor} size={26} />
             </View>
           )}
           <View style={{ flex: 1 }}>
-            <View style={styles.detailTitleRow}>
-              <Text style={styles.detailTitle} numberOfLines={2}>{displayTitle}</Text>
+            {/* 标题独占一行，标签放到日期那一行：名字再长也不会把标签挤出去 */}
+            <Text style={styles.detailTitle} numberOfLines={2}>{displayTitle}</Text>
+            <View style={styles.detailMetaRow}>
+              <Text style={styles.detailDate}>{item.date}</Text>
               <Text style={[styles.typeTag, { color: iconConfig.iconColor, backgroundColor: iconConfig.iconBgColor }]}>
                 {labelOf(item)}
               </Text>
             </View>
-            <Text style={styles.detailDate}>{item.date}</Text>
           </View>
         </Animated.View>
 
@@ -357,11 +358,10 @@ const makeStyles = (c) => ({
   navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: c.text, marginHorizontal: 4 },
   detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgElevated, borderRadius: 14, padding: 14, gap: 12 },
   iconBox: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  iconEmoji: { fontSize: 26, lineHeight: 32 },
-  detailTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  detailMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' },
   detailTitle: { fontSize: 19, fontWeight: '700', color: c.text },
   typeTag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden', flexShrink: 0 },
-  detailDate: { fontSize: 13, color: c.textMuted, marginTop: 2 },
+  detailDate: { fontSize: 13, color: c.textMuted },
   reviewBox: { backgroundColor: c.bgElevated, borderRadius: 12, padding: 16, marginTop: 12 },
   reviewRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: c.star },

@@ -159,6 +159,4 @@ const dark = {
 
 export const palettes = { light, dark };
 
-export const themeModes = ['system', 'light', 'dark'];
-
 export const getPalette = (scheme) => (scheme === 'dark' ? dark : light);

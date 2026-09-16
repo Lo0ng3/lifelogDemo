@@ -880,6 +880,28 @@ svg.leaflet-image-layer.leaflet-interactive path {
               setTimeout(function () { marker.openPopup(); }, 120);
           }
 
+          // 单击 = 显示 / 收起评论（不移动地图）；双击 = 放大跳到该标点
+          var lastTapId = null, lastTapAt = 0, singleTapTimer = null;
+          function bindTapGesture(p, marker) {
+              marker.on('click', function (e) {
+                  if (e && e.originalEvent) { e.originalEvent.stopPropagation(); }
+                  var now = Date.now();
+                  if (lastTapId === p.id && now - lastTapAt < 320) {
+                      // 双击：取消待执行的单击动作，直接放大跳转
+                      lastTapId = null; lastTapAt = 0;
+                      clearTimeout(singleTapTimer);
+                      focusPoint(p, marker);
+                      return;
+                  }
+                  lastTapId = p.id; lastTapAt = now;
+                  clearTimeout(singleTapTimer);
+                  singleTapTimer = setTimeout(function () {
+                      if (marker.isPopupOpen()) marker.closePopup();
+                      else marker.openPopup();
+                  }, 230);
+              });
+          }
+
           function makeMarker(p) {
               var color = p.kind === 'location' ? LOC_COLOR : (COLORS[p.subType] || '#2F7BF6');
               // 地点标点压在旅票标点之上：全览时同一个城市里两类点经常重叠，
@@ -889,8 +911,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
                   riseOnHover: true,
                   zIndexOffset: p.kind === 'location' ? 400 : 100,
               });
-              marker.bindPopup(popupHtml(p), { closeButton: false, autoPan: false, offset: [0, -20], minWidth: 150, maxWidth: 230 });
-              marker.on('click', function () { focusPoint(p, marker); });
+              // 单击只弹评论不移动地图，所以让弹窗自己轻微把地图挪进可视区（autoPan），
+              // 双击的 flyTo 会覆盖这次平移
+              marker.bindPopup(popupHtml(p), { closeButton: false, autoPan: true, autoPanPadding: [26, 62], offset: [0, -20], minWidth: 150, maxWidth: 230 });
+              bindTapGesture(p, marker);
               marker.__point = p;
               allMarkers.push(marker);
               return marker;

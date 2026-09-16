@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  MapPin, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
+  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle
 } from 'lucide-react-native';
 import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
@@ -452,8 +452,11 @@ export default function AddScreen({ navigation, route }) {
       mood: baseType === 'note' ? essayMood : null,
       weather: baseType === 'note' && subType === 'diary' ? (weather || null) : null,
       // 时间选填：填了才拼进日期，不填只存日期（不再出现 00:00 凑数时间）
+      // 只有旅票带时分（出发时间有意义），其余类型只存日期
       date: `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`
-        + ((hour || minute) ? ` ${(hour || '00').padStart(2,'0')}:${(minute || '00').padStart(2,'0')}` : ''),
+        + (baseType === 'ticket' && (hour || minute)
+          ? ` ${(hour || '00').padStart(2,'0')}:${(minute || '00').padStart(2,'0')}`
+          : ''),
       rating: baseType === 'note' ? null : (rating > 0 ? rating : null),
       start,
       end,
@@ -738,15 +741,18 @@ export default function AddScreen({ navigation, route }) {
               <Text style={styles.dateLabelText}>日</Text>
             </View>
 
-            <View style={{ marginTop: 12 }}>
-              <Text style={styles.inputLabel}>具体时间（选填）</Text>
-              <View style={styles.dateRow}>
-                <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={hour} onChangeText={setHour} />
-                <Text style={styles.dateLabelText}>时</Text>
-                <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={minute} onChangeText={setMinute} />
-                <Text style={styles.dateLabelText}>分</Text>
+            {/* 只有旅票填时分；列表里只显示日期，具体时分开详情页看 */}
+            {baseType === 'ticket' && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.inputLabel}>具体时间（选填）</Text>
+                <View style={styles.dateRow}>
+                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={hour} onChangeText={setHour} />
+                  <Text style={styles.dateLabelText}>时</Text>
+                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={minute} onChangeText={setMinute} />
+                  <Text style={styles.dateLabelText}>分</Text>
+                </View>
               </View>
-            </View>
+            )}
           </View>
 
           <View style={styles.divider} />
@@ -857,10 +863,10 @@ export default function AddScreen({ navigation, route }) {
 
           <View style={styles.catRow}>
             {[
-              { id: 'ticket', label: '旅票', emoji: '✈️', color: colors.groupTicket, bg: colors.groupTicketSoft },
-              { id: 'location', label: '地点', emoji: '📍', color: colors.groupPlace, bg: colors.groupPlaceSoft },
-              { id: 'media', label: '娱乐', emoji: '🎬', color: colors.groupMedia, bg: colors.groupMediaSoft },
-              { id: 'note', label: '随笔', emoji: '📔', color: colors.groupNote, bg: colors.groupNoteSoft },
+              { id: 'ticket', label: '旅票', Icon: Plane, color: colors.groupTicket, bg: colors.groupTicketSoft },
+              { id: 'location', label: '地点', Icon: MapPin, color: colors.groupPlace, bg: colors.groupPlaceSoft },
+              { id: 'media', label: '娱乐', Icon: Film, color: colors.groupMedia, bg: colors.groupMediaSoft },
+              { id: 'note', label: '随笔', Icon: NotebookPen, color: colors.groupNote, bg: colors.groupNoteSoft },
             ].map(cat => (
               <TouchableOpacity
                 key={cat.id}
@@ -874,7 +880,7 @@ export default function AddScreen({ navigation, route }) {
                   setSheetBase(cat.id);
                 }}
               >
-                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><Text style={styles.catEmoji}>{cat.emoji}</Text></View>
+                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><cat.Icon size={18} color={cat.color} /></View>
                 <Text style={[styles.catLabel, sheetBase === cat.id && styles.catLabelActive]}>{cat.label}</Text>
               </TouchableOpacity>
             ))}

@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
   Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, Sun, Moon
+  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
@@ -34,18 +34,11 @@ import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../util
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// 外观选项：系统优先，允许手动固定
-const THEME_OPTIONS = [
-  { id: 'system', label: '跟随系统' },
-  { id: 'light', label: '浅色' },
-  { id: 'dark', label: '深色' },
-];
-
 const subTypeOptions = { ticket: TICKET_SUB_OPTIONS, media: MEDIA_SUB_OPTIONS };
 
 const VIEWS = [
   { id: 'list', label: '列表' },
-  { id: 'month', label: '月示' },
+  { id: 'month', label: '日历' },
   { id: 'map', label: '地图' },
 ];
 
@@ -79,8 +72,8 @@ function ViewSwitcher({ value, onChange }) {
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { logData, syncMedia, importLogs, tdtKey, setTdtKey } = useContext(LogContext);
-  // 外观：跟随系统（默认）/ 浅色 / 深色，全局共用一份主题
-  const { colors, isDark, preference, setPreference } = useTheme();
+  // 外观：始终跟随系统（和开屏图保持一致）
+  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
@@ -236,8 +229,6 @@ export default function HomeScreen({ navigation }) {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilters, setActiveFilters] = useState([]);
-  const [yearFilters, setYearFilters] = useState([]);
-  const [monthFilters, setMonthFilters] = useState([]);
   const filterSheetRef = useRef(null);
   const snapPoints = useMemo(() => ['60%', '85%'], []);
   const lastBackRef = useRef(0);
@@ -269,19 +260,6 @@ export default function HomeScreen({ navigation }) {
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
   );
 
-  const availableYears = useMemo(() => {
-    const years = new Set(logData.map(item => item.date.substring(0, 4)));
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
-  }, [logData]);
-
-  const handleYearToggle = (y) => {
-    setYearFilters(prev => {
-      const next = prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y];
-      if (next.length !== 1) setMonthFilters([]);
-      return next;
-    });
-  };
-
   const filteredAndSortedData = useMemo(() => {
     let result = [...logData];
     if (searchQuery.trim().length > 0) {
@@ -291,15 +269,9 @@ export default function HomeScreen({ navigation }) {
     if (activeFilters.length > 0) {
       result = result.filter(item => activeFilters.includes(item.subType) || activeFilters.includes(item.baseType));
     }
-    if (yearFilters.length > 0) {
-      result = result.filter(item => yearFilters.includes(item.date.substring(0, 4)));
-    }
-    if (yearFilters.length === 1 && monthFilters.length > 0) {
-      result = result.filter(item => monthFilters.includes(item.date.substring(5, 7))); 
-    }
     result.sort((a, b) => new Date(b.date) - new Date(a.date));
     return result;
-  }, [logData, activeFilters, yearFilters, monthFilters, searchQuery]);
+  }, [logData, activeFilters, searchQuery]);
 
   // 地图数据：打点（地点坐标 / 旅票起终点）+ 轨迹段（出发地→目的地聚合）
   const mapData = useMemo(() => {
@@ -421,24 +393,6 @@ export default function HomeScreen({ navigation }) {
               <Text style={styles.menuItemText}>清理缓存</Text>
             </TouchableOpacity>
             {/* 外观：默认跟随系统（白天浅色 / 夜间深色），也可以手动固定 */}
-            <View style={styles.menuItem}>
-              {isDark ? <Moon size={18} color={colors.textSecondary} style={{ marginRight: 10 }} /> : <Sun size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.menuItemText}>外观</Text>
-                <Text style={styles.menuItemSub}>{preference === 'system' ? `跟随系统（当前${isDark ? '深色' : '浅色'}）` : '已手动指定'}</Text>
-                <View style={styles.themeRow}>
-                  {THEME_OPTIONS.map(opt => (
-                    <TouchableOpacity
-                      key={opt.id}
-                      style={[styles.themeChip, preference === opt.id && styles.themeChipActive]}
-                      onPress={() => setPreference(opt.id)}
-                    >
-                      <Text style={[styles.themeChipText, preference === opt.id && styles.themeChipTextActive]}>{opt.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            </View>
           </View>
         </View>
       </Animated.View>
@@ -459,9 +413,9 @@ export default function HomeScreen({ navigation }) {
               <TextInput style={styles.searchInput} placeholder="搜索标题、关键字..." value={searchQuery} onChangeText={setSearchQuery} placeholderTextColor={colors.textMuted} />
               {searchQuery.length > 0 && <TouchableOpacity onPress={() => setSearchQuery('')}><X size={16} color={colors.textMuted} /></TouchableOpacity>}
             </View>
-            <TouchableOpacity style={[styles.filterBtn, (activeFilters.length > 0 || yearFilters.length > 0 || monthFilters.length > 0) ? styles.filterBtnActive : null]} onPress={() => filterSheetRef.current?.present()}>
-              <ListFilter size={16} color={(activeFilters.length > 0 || yearFilters.length > 0 || monthFilters.length > 0) ? colors.accent : colors.textSecondary} />
-              {(activeFilters.length > 0 || yearFilters.length > 0 || monthFilters.length > 0) && <View style={styles.filterDot} />}
+            <TouchableOpacity style={[styles.filterBtn, activeFilters.length > 0 && styles.filterBtnActive]} onPress={() => filterSheetRef.current?.present()}>
+              <ListFilter size={16} color={activeFilters.length > 0 ? colors.accent : colors.textSecondary} />
+              {activeFilters.length > 0 && <View style={styles.filterDot} />}
             </TouchableOpacity>
           </View>
         )}
@@ -521,26 +475,12 @@ export default function HomeScreen({ navigation }) {
         onDismiss={() => setSheetOpen(false)}
       >
         <BottomSheetView style={styles.sheetHeader}>
-          <BottomSheetTouchableOpacity onPress={() => {setActiveFilters([]); setYearFilters([]); setMonthFilters([]);}} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
+          <BottomSheetTouchableOpacity onPress={() => setActiveFilters([])} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
           <Text style={styles.sheetTitle}>筛选</Text>
           <BottomSheetTouchableOpacity onPress={() => filterSheetRef.current?.dismiss()} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextBlue}>完成</Text></BottomSheetTouchableOpacity>
         </BottomSheetView>
         <BottomSheetScrollView style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
-          <Text style={styles.categoryTitle}>时间</Text>
-          <Text style={styles.sectionTitle}>年份</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-            {availableYears.map(y => (<BottomSheetTouchableOpacity key={y} onPress={() => handleYearToggle(y)} style={[styles.chip, yearFilters.includes(y) && styles.chipActive]}><Text style={[styles.chipText, yearFilters.includes(y) && styles.chipTextActive]}>{y}年</Text></BottomSheetTouchableOpacity>))}
-          </ScrollView>
-          {yearFilters.length === 1 && (
-            <View style={styles.monthSection}>
-              <Text style={styles.sectionTitle}>月份</Text>
-              <View style={styles.chipGrid}>
-                {['01','02','03','04','05','06','07','08','09','10','11','12'].map(m => (<BottomSheetTouchableOpacity key={m} onPress={() => setMonthFilters(prev => monthFilters.includes(m) ? prev.filter(x => x !== m) : [...prev, m])} style={[styles.chip, monthFilters.includes(m) && styles.chipActive]}><Text style={[styles.chipText, monthFilters.includes(m) && styles.chipTextActive]}>{parseInt(m)}月</Text></BottomSheetTouchableOpacity>))}
-                <BottomSheetTouchableOpacity onPress={() => setMonthFilters([])} style={[styles.chip, monthFilters.length === 0 && styles.chipActive]}><Text style={[styles.chipText, monthFilters.length === 0 && styles.chipTextActive]}>全年</Text></BottomSheetTouchableOpacity>
-              </View>
-            </View>
-          )}
-          <View style={styles.divider} />
+          {/* 时间筛选已去掉：按年月看记录改到「日历」页里点年月选择 */}
           <Text style={styles.categoryTitle}>记录类型</Text>
           <Text style={styles.sectionTitle}>旅票</Text>
           <View style={styles.chipGrid}>

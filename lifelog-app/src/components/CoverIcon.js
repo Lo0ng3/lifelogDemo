@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { getIconConfig } from '../utils/icons';
 import { resolveMediaUri, remoteImageSource } from '../utils/media';
@@ -11,7 +11,7 @@ import { useTheme } from '../theme/ThemeProvider';
 // 无封面时回退类型图标（现状一致）。
 export default function CoverIcon({ item, height = 64, style }) {
   const { colors } = useTheme();
-  const { emoji, iconBgColor } = getIconConfig(item, colors);
+  const { IconComponent, iconColor, iconBgColor } = getIconConfig(item, colors);
   const entry = item?.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
   const [uri, setUri] = useState(null);
   // 自选封面的小图文件（coverThumbUrl）直接显示，省去每次重启解析相册；
@@ -37,7 +37,7 @@ export default function CoverIcon({ item, height = 64, style }) {
         />
       ) : (
         <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
-          <Text style={{ fontSize: Math.round(height * 0.46), lineHeight: Math.round(height * 0.58) }}>{emoji}</Text>
+          <IconComponent color={iconColor} size={Math.round(height * 0.44)} />
         </View>
       )}
     </View>

@@ -32,7 +32,7 @@ function DayCell({ cell, records, selected, isToday, onPress, colors, styles }) 
   const more = records.length - dots.length;
 
   return (
-    <PressableScale style={styles.dayHit} activeScale={0.9} onPress={onPress}>
+    <PressableScale containerStyle={styles.dayHit} style={styles.dayFill} activeScale={0.9} onPress={onPress}>
       <Reanimated.View style={[styles.day, cell.out && styles.dayOut, bg]}>
         {isToday && <View style={styles.todayRing} pointerEvents="none" />}
         <Text style={[styles.dayNum, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
@@ -60,6 +60,8 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
   const [selected, setSelected] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(now.getFullYear());
   const shift = useSharedValue(0);
 
   const byDate = useMemo(() => {
@@ -141,6 +143,13 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
     shift.value = 0;
   }, [shift]);
 
+  // 日历按整行切 7 个：用 flex 均分，不用百分比——百分比在部分机型上会四舍五入导致第 7 列换行堆叠
+  const weeks = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < cells.length; i += 7) out.push(cells.slice(i, i + 7));
+    return out;
+  }, [cells]);
+
   // 日历区左右滑动换月（纵向手势留给下面的列表滚动）
   const swipeMonth = useMemo(() => Gesture.Pan()
     .activeOffsetX([-14, 14])
@@ -179,7 +188,15 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
       <GestureDetector gesture={swipeMonth}>
         <Reanimated.View style={gridStyle}>
           <View style={styles.monthBar}>
-            <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
+            {/* 点年月可以跳到任意年月（不带日） */}
+            <TouchableOpacity
+              style={styles.monthLabelBtn}
+              onPress={() => { setPickerYear(cursor.y); setPickerOpen(v => !v); }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
+              <Text style={[styles.monthLabelChevron, pickerOpen && styles.monthLabelChevronUp]}>⌄</Text>
+            </TouchableOpacity>
             <View style={styles.nav}>
               <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(-1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
                 <Text style={styles.navBtnText}>‹</Text>
@@ -192,26 +209,66 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
               </TouchableOpacity>
             </View>
           </View>
-          <View style={styles.weekRow}>
-            {WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)}
-          </View>
-          <View style={styles.grid}>
-            {cells.map((cell) => (
-              <DayCell
-                key={cell.date}
-                cell={cell}
-                records={cell.out ? [] : (byDate.get(cell.date) || [])}
-                selected={selected === cell.date}
-                isToday={cell.date === todayKey()}
-                onPress={() => {
-                  if ((byDate.get(cell.date) || []).length === 0) return;
-                  setSelected((prev) => (prev === cell.date ? null : cell.date));
-                }}
-                colors={colors}
-                styles={styles}
-              />
-            ))}
-          </View>
+
+          {pickerOpen ? (
+            <View style={styles.picker}>
+              <View style={styles.pickerYearRow}>
+                <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(y => y - 1)}>
+                  <Text style={styles.navBtnText}>‹</Text>
+                </TouchableOpacity>
+                <Text style={styles.pickerYear}>{pickerYear}年</Text>
+                <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(y => y + 1)}>
+                  <Text style={styles.navBtnText}>›</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.pickerMonths}>
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
+                  const on = cursor.y === pickerYear && cursor.m === m;
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.monthChip, on && styles.monthChipOn]}
+                      onPress={() => {
+                        setCursor({ y: pickerYear, m });
+                        setSelected(null);
+                        setPickerOpen(false);
+                        shift.value = 0;
+                      }}
+                    >
+                      <Text style={[styles.monthChipText, on && styles.monthChipTextOn]}>{m}月</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.weekRow}>
+                {WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)}
+              </View>
+              <View style={styles.grid}>
+                {weeks.map((week, wi) => (
+                  <View key={wi} style={styles.week}>
+                    {week.map((cell) => (
+                      <DayCell
+                        key={cell.date}
+                        cell={cell}
+                        records={cell.out ? [] : (byDate.get(cell.date) || [])}
+                        selected={selected === cell.date}
+                        isToday={cell.date === todayKey()}
+                        onPress={() => {
+                          if ((byDate.get(cell.date) || []).length === 0) return;
+                          setSelected((prev) => (prev === cell.date ? null : cell.date));
+                        }}
+                        colors={colors}
+                        styles={styles}
+                      />
+                    ))}
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
         </Reanimated.View>
       </GestureDetector>
 
@@ -241,7 +298,10 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
 const makeStyles = (c) => ({
   container: { flex: 1 },
   monthBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
+  monthLabelBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, paddingRight: 6 },
   monthLabel: { fontSize: 16, fontWeight: '600', color: c.text },
+  monthLabelChevron: { fontSize: 13, color: c.textMuted, marginLeft: 5, marginTop: -3 },
+  monthLabelChevronUp: { transform: [{ rotate: '180deg' }], marginTop: 3 },
   nav: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   navBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center' },
   navBtnText: { fontSize: 16, color: c.textSecondary, marginTop: -2 },
@@ -249,8 +309,10 @@ const makeStyles = (c) => ({
   todayBtnText: { fontSize: 12.5, color: c.accent, fontWeight: '600' },
   weekRow: { flexDirection: 'row', paddingHorizontal: 10, marginTop: 4 },
   weekText: { flex: 1, textAlign: 'center', fontSize: 11, color: c.textMuted },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 10, paddingBottom: 6 },
-  dayHit: { width: `${100 / 7}%`, paddingVertical: 2 },
+  grid: { paddingHorizontal: 10, paddingBottom: 6 },
+  week: { flexDirection: 'row' },
+  dayHit: { flex: 1, paddingVertical: 2 },
+  dayFill: { width: '100%' },
   day: { height: 46, borderRadius: 12, alignItems: 'center', paddingTop: 5 },
   dayOut: {},
   todayRing: { position: 'absolute', top: 2, left: 2, right: 2, bottom: 2, borderRadius: 11, borderWidth: 1, borderColor: c.accentSoftBorder },
@@ -260,6 +322,17 @@ const makeStyles = (c) => ({
   dots: { flexDirection: 'row', alignItems: 'center', gap: 2.5, marginTop: 4 },
   dot: { width: 5, height: 5, borderRadius: 3 },
   more: { fontSize: 8.5, color: c.textMuted, marginLeft: 1 },
+
+  // 年月选择：只到月，不选日
+  picker: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 12 },
+  pickerYearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 10 },
+  pickerYear: { fontSize: 15, fontWeight: '600', color: c.text, minWidth: 72, textAlign: 'center' },
+  pickerMonths: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
+  monthChip: { width: 66, paddingVertical: 9, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1,
+    borderColor: c.border, alignItems: 'center' },
+  monthChipOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  monthChipText: { fontSize: 13, color: c.textSecondary },
+  monthChipTextOn: { color: c.accent, fontWeight: '600' },
 
   tlHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6, borderTopWidth: 1, borderTopColor: c.divider },
   tlTitle: { fontSize: 13.5, fontWeight: '600', color: c.text },

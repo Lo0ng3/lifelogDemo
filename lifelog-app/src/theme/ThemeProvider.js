@@ -1,45 +1,24 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { createContext, useContext, useMemo } from 'react';
 import { StyleSheet, useColorScheme } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { getPalette, themeModes } from './palette';
-
-// 外观偏好：'system'（默认，跟随系统深/浅色）| 'light' | 'dark'
-const STORAGE_KEY = '@theme_pref';
+import { getPalette } from './palette';
 
 const ThemeContext = createContext({
   colors: getPalette('light'),
   scheme: 'light',
   isDark: false,
-  preference: 'system',
-  setPreference: () => {},
 });
 
 export const ThemeProvider = ({ children }) => {
-  // 默认 system：夜间系统自动深色，白天浅色；用户也可以在侧边栏固定为某一档
-  const [preference, setPreferenceState] = useState('system');
+  // 只跟随系统：白天浅色、夜间深色。
+  // 开屏图是原生启动资源，只能在系统层面切深浅，App 内再做手动固定就会和开屏不一致，所以不提供手动档
   const systemScheme = useColorScheme();
-
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((v) => { if (alive && themeModes.includes(v)) setPreferenceState(v); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-
-  const setPreference = useCallback((next) => {
-    if (!themeModes.includes(next)) return;
-    setPreferenceState(next);
-    AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
-  }, []);
-
-  const scheme = preference === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : preference;
+  const scheme = systemScheme === 'dark' ? 'dark' : 'light';
   const colors = getPalette(scheme);
 
   const value = useMemo(
-    () => ({ colors, scheme, isDark: scheme === 'dark', preference, setPreference }),
-    [colors, scheme, preference, setPreference]
+    () => ({ colors, scheme, isDark: scheme === 'dark' }),
+    [colors, scheme]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
