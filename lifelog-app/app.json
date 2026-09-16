@@ -20,7 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.lo0ng.lifelogapp",
+      "package": "com.jiyin.lifelog",
       "versionCode": 20
     },
     "web": {

@@ -840,11 +840,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
               return;
           }
 
-          var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([34.0, 108.0], 4);
+          // closePopupOnClick: false —— 评论什么时候关由我们自己决定（默认行为会把
+          // 标点刚弹出的评论立刻关掉，表现就是"单击标点没反应"）
+          var map = L.map('map', { zoomControl: false, attributionControl: true, closePopupOnClick: false }).setView([34.0, 108.0], 4);
           map.attributionControl.setPrefix('');
           // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级，
           // 而我们要的是双击直接飞到该标点（缩放靠右下角/右上角控件就够了）
           if (map.doubleClickZoom) map.doubleClickZoom.disable();
+          // 点地图空白处收起评论（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
+          map.on('click', function () { map.closePopup(); });
           if (TK) {
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
@@ -887,17 +891,22 @@ svg.leaflet-image-layer.leaflet-interactive path {
           // 单击动作不再延迟执行——先弹出来，若紧接着又来一次点按就撤销掉再飞过去，
           // 这样不会出现"评论闪一下又消失"。
           var lastTapId = null, lastTapAt = 0;
+          var DOUBLE_TAP_MS = 320;
           function bindTapGesture(p, marker) {
               marker.on('click', function (e) {
-                  if (e && e.originalEvent) { e.originalEvent.stopPropagation(); }
+                  // 再上一道保险：阻止 DOM 事件继续冒泡到地图容器
+                  if (e && e.originalEvent && L.DomEvent && L.DomEvent.stopPropagation) {
+                      L.DomEvent.stopPropagation(e.originalEvent);
+                  }
                   var now = Date.now();
-                  if (lastTapId === p.id && now - lastTapAt < 300) {
+                  if (lastTapId === p.id && (now - lastTapAt) < DOUBLE_TAP_MS) {
                       lastTapId = null; lastTapAt = 0;
                       safe(function () { marker.closePopup(); });   // 收掉单击弹出来的评论
                       focusPoint(p, marker);
                       return;
                   }
                   lastTapId = p.id; lastTapAt = now;
+                  // 单击：立刻显示 / 收起评论
                   safe(function () {
                       if (marker.isPopupOpen()) marker.closePopup();
                       else marker.openPopup();
@@ -912,6 +921,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
               var marker = L.marker([p.lat, p.lng], {
                   icon: pinIcon(color),
                   riseOnHover: true,
+                  // 关键：标点的点击不传给地图，否则地图会立刻把评论关掉（单击"没反应"的根因）
+                  bubblingMouseEvents: false,
                   zIndexOffset: p.kind === 'location' ? 400 : 100,
               });
               // 单击只弹评论不移动地图，所以让弹窗自己轻微把地图挪进可视区（autoPan），

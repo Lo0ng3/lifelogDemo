@@ -54,7 +54,7 @@ const $ = (id) => {
   if (!dom.has(id)) dom.set(id, makeEl(id));
   return dom.get(id);
 };
-const calls = { zoomIn: 0, zoomOut: 0, fitBounds: 0, markers: [], polylines: [] };
+const calls = { zoomIn: 0, zoomOut: 0, fitBounds: 0, markers: [], polylines: [], flyTo: 0, popupOpen: 0, mapOptions: null };
 
 // 和 Leaflet 一样严格：NaN / undefined 一律抛错
 const latLng = (ll) => {
@@ -66,20 +66,31 @@ const latLng = (ll) => {
 const mapObj = {
   attributionControl: { setPrefix() {} },
   on() {}, setView() { return this; }, getZoom() { return 5; }, getCenter() { return { lat: 0, lng: 0 }; },
-  flyTo() {}, invalidateSize() {},
+  flyTo() { calls.flyTo++; }, invalidateSize() {},
   fitBounds() { calls.fitBounds++; },
   zoomIn() { calls.zoomIn++; }, zoomOut() { calls.zoomOut++; },
+  closePopup() { calls.popupOpen = Math.max(0, calls.popupOpen - 1); },
 };
 const layer = () => ({ addTo() { return this; }, clearLayers() {} });
 const L = {
-  map: () => mapObj,
+  map: (_id, options) => { calls.mapOptions = options; return mapObj; },
   tileLayer: () => layer(),
   layerGroup: () => layer(),
   divIcon: (o) => o,
   marker: (ll, opts) => {
     // 轨迹上的「×N」次数徽章是 interactive:false，标点才是可点的
-    calls.markers.push({ ll: latLng(ll), isBadge: opts && opts.interactive === false });
-    return { addTo() { return this; }, bindPopup() { return this; }, on() { return this; }, openPopup() {} };
+    const state = { open: false, options: opts || {} };
+    const api = {
+      addTo() { return this; },
+      bindPopup() { return this; },
+      on(evt, fn) { if (evt === 'click') api.__click = fn; return this; },
+      openPopup() { state.open = true; calls.popupOpen++; return this; },
+      closePopup() { state.open = false; calls.popupOpen = Math.max(0, calls.popupOpen - 1); return this; },
+      isPopupOpen() { return state.open; },
+      __state: state,
+    };
+    calls.markers.push({ ll: latLng(ll), isBadge: opts && opts.interactive === false, api });
+    return api;
   },
   polyline: (path) => {
     path.forEach(latLng);
@@ -90,6 +101,8 @@ const L = {
 
 const documentStub = { getElementById: $, addEventListener() {}, body: { className: '' } };
 const windowStub = { ReactNativeWebView: { postMessage() {} }, L };
+const noop = () => {};
+const evt = () => ({ originalEvent: { stopPropagation: noop } });
 
 let thrown = null;
 try {
@@ -117,9 +130,37 @@ $('zin').onclick?.();
 $('zout').onclick?.();
 if (calls.zoomIn !== 1 || calls.zoomOut !== 1) fail.push('点击缩放按钮没有触发地图缩放');
 
+/* -------------------- 标点手势：单击看评论 / 双击放大飞过去 -------------------- */
+if (!calls.mapOptions || calls.mapOptions.closePopupOnClick !== false) {
+  fail.push('地图没有关闭 closePopupOnClick（会导致单击标点弹出的评论被立刻关掉）');
+}
+if (pins.some((p) => p.api.__state.options.bubblingMouseEvents !== false)) {
+  fail.push('标点没有关闭 bubblingMouseEvents（点击会冒泡给地图，评论同样会被关掉）');
+}
+
+const pin = pins[0].api;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// 等过双击判定窗口再点，确保这一下被当成"单击"
+const singleTap = async () => { await wait(360); pin.__click(evt()); };
+// ① 单击一次 → 应该立刻弹出评论，并且不移动地图
+const flyBefore = calls.flyTo;
+await singleTap();
+if (!pin.isPopupOpen()) fail.push('单击标点没有弹出评论');
+if (calls.flyTo !== flyBefore) fail.push('单击标点不该移动地图');
+// ② 隔开一段时间再点一次 → 只是收起评论
+await singleTap();
+if (pin.isPopupOpen()) fail.push('再次单击没能收起评论');
+// ③ 快速连点两次 → 放大飞到该标点，并弹出评论
+const flyBefore2 = calls.flyTo;
+await singleTap();       // 第一下：弹出评论
+pin.__click(evt());      // 紧接着第二下：判定为双击
+if (calls.flyTo !== flyBefore2 + 1) fail.push('快速连点两次没有飞到该标点');
+if (!pin.isPopupOpen()) fail.push('双击后没有显示评论');
+
 const droppedShown = /坐标不完整/.test($('banner').textContent);
 
 console.log(`标点创建 ${pins.length} 个，次数徽章 ${badges.length} 个，轨迹 ${calls.polylines.length} 段，缩放调用 ${calls.zoomIn}/${calls.zoomOut}`);
+console.log(`手势自检：单击开评论 / 再点收起 / 连点两次 flyTo（共 ${calls.flyTo} 次飞点）`);
 console.log(`脏坐标提示：${droppedShown ? $('banner').textContent : '（未显示）'}`);
 if (fail.length) {
   console.error('✗ 自检未通过：\n- ' + fail.join('\n- '));
