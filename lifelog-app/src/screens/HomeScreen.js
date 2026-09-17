@@ -374,8 +374,28 @@ export default function HomeScreen({ navigation }) {
     pendingView.current = id;
     setPillMode(id);
     if (id === 'map') setMapMounted(true);
-    if (id === 'map') setTimeout(() => { if (pendingView.current === id) setViewMode(id); }, 130);
-    else setViewMode(id);
+    setViewMode(id);
+  }, []);
+
+  // 地图层常驻，所以它的透明度必须由一个"永远挂着的"动画样式控制：
+  // 之前把 viewFadeStyle 从数组里摘掉，Reanimated 留在原生视图上的 opacity=1 不会复位，
+  // 于是切回列表/日历后地图还浮在最上面。
+  const mapFade = useSharedValue(0);
+  useEffect(() => {
+    // 这里不做动画：地图是 WebView，逐帧改透明度要重新合成整层，
+    // 会和导航条高亮的滑动抢帧（就是"切地图时状态条卡一下"）。直接切换，
+    // 地图本来就是常驻渲染好的，瞬间出现即可。
+    mapFade.value = viewMode === 'map' ? 1 : 0;
+  }, [viewMode, mapFade]);
+  const mapLayerStyle = useAnimatedStyle(() => ({
+    opacity: mapFade.value,
+    transform: [{ translateY: (1 - mapFade.value) * 8 }],
+  }));
+
+  // 提前把地图 WebView 挂上（空闲时），这样第一次点「地图」也不用现建，切换更顺
+  useEffect(() => {
+    const timer = setTimeout(() => setMapMounted(true), 1200);
+    return () => clearTimeout(timer);
   }, []);
 
   return (
@@ -473,7 +493,7 @@ export default function HomeScreen({ navigation }) {
         {mapMounted && (
         <Reanimated.View
           pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
-          style={[styles.mapLayer, viewMode === 'map' ? viewFadeStyle : styles.mapHidden]}
+          style={[styles.mapLayer, mapLayerStyle]}
         >
           <WebView
             ref={mapRef}
@@ -591,7 +611,6 @@ const makeStyles = (c) => ({
   viewArea: { flex: 1 },
   // 地图层：绝对定位铺在同一块区域，隐藏时只降透明度（尺寸不变 → Leaflet 不会卸载瓦片）
   mapLayer: { ...StyleSheet.absoluteFillObject, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
-  mapHidden: { opacity: 0 },
   emptyText: { fontSize: 14, color: c.textMuted },
   map: { flex: 1 },
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },
