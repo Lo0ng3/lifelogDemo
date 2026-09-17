@@ -211,6 +211,7 @@ export default function HomeScreen({ navigation }) {
   const [viewMode, setViewMode] = useState('list'); 
   const [pillMode, setPillMode] = useState('list');   // 药丸的选中态，跟手一点
   const pendingView = useRef(null);                   // 最近一次点击的目标视图
+  const [mapMounted, setMapMounted] = useState(false); // 首次进地图才挂 WebView，之后一直保活
   const mapRef = useRef(null);
   useEffect(() => {
     if (viewMode !== 'map') return undefined;
@@ -372,6 +373,7 @@ export default function HomeScreen({ navigation }) {
     if (pendingView.current === id) return;
     pendingView.current = id;
     setPillMode(id);
+    if (id === 'map') setMapMounted(true);
     if (id === 'map') setTimeout(() => { if (pendingView.current === id) setViewMode(id); }, 130);
     else setViewMode(id);
   }, []);
@@ -442,8 +444,10 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* 一次只显示一个视图（display:none 切换）；地图出场要重新布局，
-            所以由 changeView 让药丸先动、视图晚一拍再出现 */}
+        {/* 一次只显示一个视图。列表 / 日历用 display:none 切换（各自独立出现）；
+            地图单独一层常驻：尺寸始终有效，切走时只把透明度降到 0，
+            这样 Leaflet 不会把瓦片卸掉，切回来是秒开、不用重新下载 */}
+        <View style={styles.viewArea}>
         <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
@@ -465,7 +469,12 @@ export default function HomeScreen({ navigation }) {
           />
         </Reanimated.View>
 
-        <Reanimated.View style={[styles.mapWrapper, viewMode !== 'map' && styles.hiddenView, viewFadeStyle]}>
+        {/* 首次进地图才挂载，之后一直保活 */}
+        {mapMounted && (
+        <Reanimated.View
+          pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
+          style={[styles.mapLayer, viewMode === 'map' ? viewFadeStyle : styles.mapHidden]}
+        >
           <WebView
             ref={mapRef}
             originWhitelist={['*']}
@@ -484,6 +493,8 @@ export default function HomeScreen({ navigation }) {
             }}
           />
         </Reanimated.View>
+        )}
+        </View>
       </View>
 
       <BottomSheetModal
@@ -577,8 +588,11 @@ const makeStyles = (c) => ({
   listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
   monthWrapper: { flex: 1, marginTop: 2, marginBottom: 20 },
   hiddenView: { display: 'none' },
+  viewArea: { flex: 1 },
+  // 地图层：绝对定位铺在同一块区域，隐藏时只降透明度（尺寸不变 → Leaflet 不会卸载瓦片）
+  mapLayer: { ...StyleSheet.absoluteFillObject, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
+  mapHidden: { opacity: 0 },
   emptyText: { fontSize: 14, color: c.textMuted },
-  mapWrapper: { flex: 1, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
   map: { flex: 1 },
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },
   exportBtnText: { color: c.bgElevated, marginLeft: 8, fontWeight: '600' },

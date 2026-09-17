@@ -601,12 +601,10 @@ export function buildMapHtml({
               map: map,          // 预览页 / 调试用
               redraw: redraw,
               fit: fitAll,
-              // 从列表切回地图：容器尺寸变了需要重新量；没被手动动过就再全览一次
+              // 从列表切回地图：地图层是保活的（尺寸没变），这里只做一次兜底重算，
+              // 不再重新全览——避免把用户上次的位置冲掉，也不会让瓦片白下载一轮
               markDirty: function () {
-                  var center = map.getCenter(), zoom = map.getZoom();
                   map.invalidateSize();
-                  if (map.__touched) map.setView(center, zoom, { animate: false });
-                  else fitAll();
               }
           };
           }
