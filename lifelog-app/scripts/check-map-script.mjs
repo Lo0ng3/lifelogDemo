@@ -48,6 +48,7 @@ const appScript = scripts[scripts.length - 1];
 const makeEl = (id) => ({
   id, textContent: '', innerHTML: '', className: '', onclick: null,
   style: {}, addEventListener() {}, getAttribute() { return null; },
+  offsetWidth: 224, offsetHeight: 90,
 });
 const dom = new Map();
 const $ = (id) => {
@@ -66,6 +67,7 @@ const latLng = (ll) => {
 const mapObj = {
   attributionControl: { setPrefix() {} },
   on() {}, setView() { return this; }, getZoom() { return 5; }, getCenter() { return { lat: 0, lng: 0 }; },
+  latLngToContainerPoint() { return { x: 180, y: 300 }; }, getSize() { return { x: 360, y: 600 }; },
   flyTo(_latlng, zoom) { calls.flyTo++; calls.flyToZoom = zoom; }, invalidateSize() {},
   fitBounds() { calls.fitBounds++; },
   zoomIn() { calls.zoomIn++; }, zoomOut() { calls.zoomOut++; },

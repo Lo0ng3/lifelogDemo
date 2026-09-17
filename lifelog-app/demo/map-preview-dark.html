@@ -711,11 +711,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
               box-shadow: 0 3px 12px rgba(0,0,0,0.45); opacity: 0; transition: opacity .18s; }
           .toast.show { opacity: 1; }
 
-          /* 标点内容卡：单击标点就在这里显示评论（不走 Leaflet 弹窗，
-             也就不存在"被地图的点击事件顺手关掉"这类问题） */
-          .rcCard { position: absolute; left: 10px; right: 10px; bottom: 52px; z-index: 900; display: none;
-              background: #1B1D22; color: #F2F3F5; border-radius: 14px; padding: 12px 14px;
-              box-shadow: 0 8px 26px rgba(0,0,0,0.55); }
+          /* 标点内容卡：自绘浮层（不走 Leaflet 弹窗，所以不会被地图的点击事件关掉），
+             位置由 JS 跟着标点算，默认浮在标点上方，避免挡住标点本身影响连点两次 */
+          .rcCard { position: absolute; left: 0; top: 0; z-index: 900; display: none; width: 224px;
+              background: #1B1D22; color: #F2F3F5; border-radius: 13px; padding: 11px 13px;
+              box-shadow: 0 8px 26px rgba(0,0,0,0.55); will-change: transform; }
+          .rcCard::after { content: ""; position: absolute; left: 50%; bottom: -6px; margin-left: -6px;
+              width: 12px; height: 12px; border-radius: 2px; background: #1B1D22; transform: rotate(45deg); }
+          .rcCard.below::after { bottom: auto; top: -6px; }
           .rcCard .row { display: flex; align-items: flex-start; gap: 8px; }
           .rcCard .t { flex: 1; font-size: 14px; font-weight: 700; color: #F2F3F5; }
           .rcCard .x { flex: none; width: 22px; height: 22px; border-radius: 11px; border: none; padding: 0;
@@ -867,8 +870,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
           // 点地图空白处收起内容卡（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
           map.on('click', function () { hideCard(); });
           if (TK) {
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
+              // 手机端 Leaflet 默认 updateWhenIdle=true：放大过程中不加载新瓦片，
+              // 等动画结束才开始拉，看起来就是"放大很慢"。改成边放大边加载（false），
+              // 并把 keepBuffer 调大，平移/缩放时少出现空白和闪烁。
+              var tileOpts = { subdomains: '01234567', maxZoom: 18, updateWhenIdle: false, keepBuffer: 4 };
+              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, tileOpts).addTo(map);
+              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, tileOpts).addTo(map);
           }
 
           var locLayer = L.layerGroup().addTo(map);
@@ -894,10 +901,37 @@ svg.leaflet-image-layer.leaflet-interactive path {
              不再用 Leaflet 弹窗：弹窗会被地图自身的点击事件关掉（单击"没反应"的根源），
              而且弹窗还带 autoPan，会出现"点一下地图动了但看不到内容"。 */
           var cardPointId = null;
+          var cardLatLng = null;
+
+          // 把内容卡摆到标点上方（贴近时自动翻到下方），并留出 34px 让标点本身露出来，
+          // 这样连点两次仍然点在标点上，不会被卡片挡住
+          function positionCard() {
+              var card = $('rcCard');
+              if (!card || !cardLatLng || card.style.display === 'none') return;
+              var pt = map.latLngToContainerPoint(cardLatLng);
+              var size = map.getSize();
+              var w = card.offsetWidth || 224;
+              var h = card.offsetHeight || 90;
+              var left = Math.round(pt.x - w / 2);
+              left = Math.max(8, Math.min(size.x - w - 8, left));
+              var below = false;
+              var top = Math.round(pt.y - h - 30);
+              if (top < 8) { top = Math.round(pt.y + 28); below = true; }
+              card.className = 'rcCard' + (below ? ' below' : '');
+              card.style.left = left + 'px';
+              card.style.top = top + 'px';
+          }
+          var cardRaf = 0;
+          function schedulePosition() {
+              if (cardRaf) return;
+              cardRaf = requestAnimationFrame(function () { cardRaf = 0; positionCard(); });
+          }
+
           function showCard(p) {
               var card = $('rcCard');
               if (!card) return;
               cardPointId = p.id;
+              cardLatLng = [p.lat, p.lng];
               card.innerHTML =
                   '<div class="row"><span class="t">' + esc(p.title) + '</span>' +
                   '<button class="x" id="rcCardClose">✕</button></div>' +
@@ -905,14 +939,19 @@ svg.leaflet-image-layer.leaflet-interactive path {
                   (p.note ? '<div class="n">' + esc(p.note) + '</div>' : '') +
                   '<button class="go rc-open" data-detail="' + esc(String(p.id)) + '">查看详情 ›</button>';
               card.style.display = 'block';
+              positionCard();          // 先按标点位置摆好，再等布局稳定后校正一次
+              setTimeout(positionCard, 0);
               var close = $('rcCardClose');
               if (close) close.onclick = hideCard;
           }
           function hideCard() {
               cardPointId = null;
+              cardLatLng = null;
               var card = $('rcCard');
               if (card) card.style.display = 'none';
           }
+          // 地图一动，卡片跟着标点走
+          map.on('move zoom viewreset resize', schedulePosition);
 
           // 双击标点：飞到该点并适度放大（原来直接跳到 13 级，观感太冲）
           function focusPoint(p, marker) {
@@ -1129,6 +1168,53 @@ svg.leaflet-image-layer.leaflet-interactive path {
           redraw();
           if (POINTS.length || SEGS.length) setTimeout(function () { safe(fitAll); }, 350);
           window.onresize = function () { map.invalidateSize(); };
+
+          /* ---------------- 瓦片预热 ----------------
+             地图停稳后，顺手把"当前视野中心 +1 级（3×3）和 +2 级（1 张）"的瓦片拉到
+             WebView 缓存里。这样下一次放大时大多命中缓存，不会一格一格慢慢冒出来。 */
+          var prefetchKey = '';
+          var prefetchTimer = null;
+          function tileXY(lat, lng, z) {
+              var n = Math.pow(2, z);
+              var latRad = lat * Math.PI / 180;
+              return {
+                  x: Math.floor((lng + 180) / 360 * n),
+                  y: Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n),
+              };
+          }
+          function prefetchTiles() {
+              if (!TK || typeof Image === 'undefined') return;
+              var z = Math.round(map.getZoom()) + 1;
+              if (z > 18) return;
+              var c = map.getCenter();
+              var t = tileXY(c.lat, c.lng, z);
+              var key = z + ':' + t.x + ':' + t.y;
+              if (key === prefetchKey) return;
+              prefetchKey = key;
+              var subs = '01234567';
+              var want = [];
+              var i, dx, dy;
+              for (dx = -1; dx <= 1; dx++) { for (dy = -1; dy <= 1; dy++) want.push([z, dx, dy]); }
+              want.push([z + 1, 0, 0]);                       // 再上一级只要中心那张
+              for (i = 0; i < want.length; i++) {
+                  var zz = want[i][0];
+                  if (zz > 18) continue;
+                  var tt = tileXY(c.lat, c.lng, zz);
+                  var x = tt.x + want[i][1], y = tt.y + want[i][2];
+                  var s = subs.charAt(Math.abs(x + y) % 8);
+                  ['vec_w', 'cva_w'].forEach(function (lyr) {
+                      var img = new Image();
+                      img.decoding = 'async';
+                      img.src = 'https://t' + s + '.tianditu.gov.cn/DataServer?T=' + lyr +
+                          '&x=' + x + '&y=' + y + '&l=' + zz + '&tk=' + TK;
+                  });
+              }
+          }
+          map.on('moveend zoomend', function () {
+              clearTimeout(prefetchTimer);
+              prefetchTimer = setTimeout(function () { safe(prefetchTiles); }, 900);
+          });
+
           window.__rcMap = {
               map: map,          // 预览页 / 调试用
               redraw: redraw,
