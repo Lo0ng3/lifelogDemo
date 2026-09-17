@@ -41,3 +41,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+# 构建产物：APK 走 GitHub Releases 分发，不要提交进仓库（单文件 >100MB 会被 GitHub 拒绝）
+*.apk
+*.aab
+

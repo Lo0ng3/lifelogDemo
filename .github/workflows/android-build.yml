@@ -1,19 +1,22 @@
 # 用 GitHub Actions 直接出 Android APK（不消耗 Expo/EAS 的构建额度）
 #
 # 用法：仓库 → Actions → 「构建 Android APK」→ Run workflow（只手动触发，不自动跑）
-#   跑完在该次运行的 Artifacts 里下载 app-release-apk（zip 里就是 APK）。
+#   跑完两处可下载：① 该次运行的 Artifacts（保留 90 天）
+#                   ② Releases 里的 apk-latest（长期有效，链接固定，适合发给别人）
 #
 # 说明：
-# - 这里走 expo prebuild + gradlew，和 EAS 无关，所以不受 EAS 每月免费额度限制。
-# - 下载 Gradle / Android SDK / NDK 都发生在 GitHub 的构建机器上（云端），不占你本机
-#   带宽和磁盘；下次运行有缓存，通常 5-10 分钟。你只需要下载最后的 APK 产物。
-# - 默认用 React Native 模板自带的 debug keystore 签名（自己装 / 发给朋友测试都够用）；
-#   要"覆盖安装手机上已装的包"需要同一把签名密钥，见文件末尾注释。
+# - 走 expo prebuild + gradlew，和 EAS 无关，不受 EAS 每月免费额度限制。
+# - 只打 arm64-v8a + armeabi-v7a 两种 ABI，包体积比四种全打小一半左右。
+# - 下载 Gradle / Android SDK / NDK 都发生在 GitHub 的构建机器上（云端）。
+# - 默认用 RN 模板自带的 debug keystore 签名（自己装 / 发给朋友测试都够用）。
 name: 构建 Android APK
 
 on:
   # 只手动触发：Actions → 「构建 Android APK」→ Run workflow
   workflow_dispatch:
+
+permissions:
+  contents: write        # 发布 Release 需要写权限
 
 defaults:
   run:
@@ -76,18 +79,36 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('lifelog-app/android/**/*.gradle*', 'lifelog-app/package-lock.json') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: 打包 Release APK
+      - name: 打包 Release APK（只打 arm64 / arm 32 位，体积减半）
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -x lint
+          ./gradlew assembleRelease --no-daemon -x lint \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: 上传 APK
+      - name: 上传为该次运行的产物
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
           path: lifelog-app/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: 发布到 Releases（固定链接，方便发给别人下载）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd ..
+          VER=$(node -e "console.log('v'+require('./lifelog-app/app.json').expo.version)")
+          CODE=$(node -e "console.log(require('./lifelog-app/app.json').expo.android.versionCode)")
+          TAG="apk-latest"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "最新 APK（直接下载安装）" \
+            --notes "每次构建自动更新。下载下面的 app-release.apk 装到 Android 手机即可（首次安装需允许「未知来源」）。"
+          gh release upload "$TAG" lifelog-app/android/app/build/outputs/apk/release/*.apk --clobber
+          gh release edit "$TAG" --title "最新 APK  $VER (versionCode $CODE)" \
+            --notes "版本 $VER（versionCode $CODE）。下载下面的 app-release.apk 装到 Android 手机即可（首次安装需允许「未知来源」）。"
+          echo "下载页：https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
 
 # ---------------------------------------------------------------------------
 # 想让新 APK 能"覆盖安装"手机上已装的那个（签名必须一致）：
