@@ -23,7 +23,8 @@
 ## 地图
 
 - Leaflet 已内联进 bundle（`node scripts/embed-leaflet.mjs` 重新生成），不再依赖 CDN；天地图 Key 在侧边栏「地图服务 Key」里填。
-- 右下角两个小胶囊控制「轨迹 / 标点」，右上角缩放；点标点会飞到该点并放大、弹出内容卡片，卡片里可跳详情。
+- 右下角两个小胶囊控制「轨迹 / 标点」，右上角缩放；**单击标点**在底部弹出该点的内容卡（标题/日期/备注 + 查看详情），**连点两次**才飞到该点并适度放大（最多 12 级）。
+- 标点手势直接绑在标点元素上（pointer/touch），不依赖 WebView 的 click 合成；内容卡是自绘的浮层，不走 Leaflet 弹窗，因此不会被地图的点击事件关掉。
 - 坐标缺失/异常的记录会被跳过，不会影响其它标点，也不会让缩放按钮失效（曾经就是脏坐标抛错把后面的绑定全带崩）。改完地图逻辑跑一下 `node scripts/check-map-script.mjs` 自检。
 - `node scripts/preview-map.mjs [--key=天地图Key]` → `demo/map-preview-light.html` / `-dark.html`（不给 Key 时用 OSM 底图）。
 

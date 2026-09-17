@@ -54,7 +54,7 @@ const $ = (id) => {
   if (!dom.has(id)) dom.set(id, makeEl(id));
   return dom.get(id);
 };
-const calls = { zoomIn: 0, zoomOut: 0, fitBounds: 0, markers: [], polylines: [], flyTo: 0, popupOpen: 0, mapOptions: null };
+const calls = { zoomIn: 0, zoomOut: 0, fitBounds: 0, markers: [], polylines: [], flyTo: 0, flyToZoom: null, popupOpen: 0, mapOptions: null };
 
 // 和 Leaflet 一样严格：NaN / undefined 一律抛错
 const latLng = (ll) => {
@@ -66,7 +66,7 @@ const latLng = (ll) => {
 const mapObj = {
   attributionControl: { setPrefix() {} },
   on() {}, setView() { return this; }, getZoom() { return 5; }, getCenter() { return { lat: 0, lng: 0 }; },
-  flyTo() { calls.flyTo++; }, invalidateSize() {},
+  flyTo(_latlng, zoom) { calls.flyTo++; calls.flyToZoom = zoom; }, invalidateSize() {},
   fitBounds() { calls.fitBounds++; },
   zoomIn() { calls.zoomIn++; }, zoomOut() { calls.zoomOut++; },
   closePopup() { calls.popupOpen = Math.max(0, calls.popupOpen - 1); },
@@ -161,18 +161,20 @@ const singleTap = async () => { await wait(360); domTap(); };
 // ① 单击一次 → 应该立刻弹出评论，并且不移动地图
 const flyBefore = calls.flyTo;
 await singleTap();
-if (!pin.isPopupOpen()) fail.push('单击标点没有弹出评论');
+if ($('rcCard').style.display !== 'block') fail.push('单击标点没有显示评论卡');
 if (calls.flyTo !== flyBefore) fail.push('单击标点不该移动地图');
 // ② 隔开一段时间再点一次 → 只是收起评论
 await singleTap();
-if (pin.isPopupOpen()) fail.push('再次单击没能收起评论');
+if ($('rcCard').style.display !== 'none') fail.push('再次单击没能收起评论卡');
 // ③ 快速连点两次 → 放大飞到该标点，并弹出评论
 const flyBefore2 = calls.flyTo;
 await singleTap();       // 第一下：弹出评论
 await wait(80);          // 真实双击的间隔
 domTap();                // 第二下：判定为双击
 if (calls.flyTo !== flyBefore2 + 1) fail.push('快速连点两次没有飞到该标点');
-if (!pin.isPopupOpen()) fail.push('双击后没有显示评论');
+if ($('rcCard').style.display !== 'block') fail.push('双击后没有显示评论卡');
+// ④ 放大级别：双击后的目标缩放不该超过 12（之前直接跳到 13，观感太冲）
+if (calls.flyToZoom > 12) fail.push(`双击放大过度：目标缩放 ${calls.flyToZoom}`);
 
 const droppedShown = /坐标不完整/.test($('banner').textContent);
 

@@ -98,10 +98,26 @@ export function buildMapHtml({
           .tool svg { width: 14px; height: 14px; display: block; }
           .tool.off { opacity: 0.5; }
           .tool.on { background: #0A84FF; border-color: #0A84FF; color: #FFF; }
-          .toast { position: absolute; right: 10px; bottom: 48px; z-index: 900; padding: 5px 10px; border-radius: 9px;
+          /* 提示挪到顶部居中：底部留给标点内容卡，避免两者叠在一起 */
+          .toast { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); z-index: 950; padding: 5px 10px; border-radius: 9px;
               background: ${c.controlBg}; color: ${c.controlText}; font-size: 11.5px; border: 0.5px solid ${c.controlBorder};
               box-shadow: 0 3px 12px rgba(0,0,0,${isDark ? '0.45' : '0.18'}); opacity: 0; transition: opacity .18s; }
           .toast.show { opacity: 1; }
+
+          /* 标点内容卡：单击标点就在这里显示评论（不走 Leaflet 弹窗，
+             也就不存在"被地图的点击事件顺手关掉"这类问题） */
+          .rcCard { position: absolute; left: 10px; right: 10px; bottom: 52px; z-index: 900; display: none;
+              background: ${c.cardBg}; color: ${c.cardText}; border-radius: 14px; padding: 12px 14px;
+              box-shadow: 0 8px 26px rgba(0,0,0,${isDark ? '0.55' : '0.24'}); }
+          .rcCard .row { display: flex; align-items: flex-start; gap: 8px; }
+          .rcCard .t { flex: 1; font-size: 14px; font-weight: 700; color: ${c.cardText}; }
+          .rcCard .x { flex: none; width: 22px; height: 22px; border-radius: 11px; border: none; padding: 0;
+              background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; color: ${c.cardMeta};
+              font-size: 13px; line-height: 1; font-family: inherit; }
+          .rcCard .m { font-size: 11.5px; color: ${c.cardMeta}; margin-top: 3px; }
+          .rcCard .n { font-size: 12.5px; color: ${c.cardNote}; margin-top: 6px; line-height: 1.5; max-height: 54px; overflow: hidden; }
+          .rcCard .go { margin-top: 9px; font-size: 12.5px; font-weight: 600; color: ${c.controlText === '#374151' ? '#007AFF' : '#0A84FF'};
+              background: none; border: none; padding: 0; font-family: inherit; }
 
           .hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 700;
               max-width: 78%; text-align: center; font-size: 12.5px; line-height: 1.7; color: ${c.cardMeta};
@@ -130,6 +146,7 @@ export function buildMapHtml({
       </div>
       <div class="toast" id="toast"></div>
       <div class="hint" id="hint" style="display:none"></div>
+      <div class="rcCard" id="rcCard"></div>
 
       ${hasLeaflet ? `<script>${leafletJs}</script>` : ''}
       <script>
@@ -229,8 +246,8 @@ export function buildMapHtml({
           // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级，
           // 而我们要的是双击直接飞到该标点（缩放靠右下角/右上角控件就够了）
           if (map.doubleClickZoom) map.doubleClickZoom.disable();
-          // 点地图空白处收起评论（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
-          map.on('click', function () { map.closePopup(); });
+          // 点地图空白处收起内容卡（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
+          map.on('click', function () { hideCard(); });
           if (TK) {
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
               L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, { subdomains: '01234567', maxZoom: 18 }).addTo(map);
@@ -255,18 +272,36 @@ export function buildMapHtml({
               return L.divIcon({ className: 'rc-badge', html: html, iconSize: [22, 22], iconAnchor: [11, 11] });
           }
 
-          function popupHtml(p) {
-              return '<div class="rc-title">' + esc(p.title) + '</div>'
-                  + '<div class="rc-meta">' + esc(p.date) + '</div>'
-                  + (p.note ? '<div class="rc-note">' + esc(p.note) + '</div>' : '')
-                  + '<button class="rc-open" data-detail="' + esc(String(p.id)) + '">查看详情 ›</button>';
+          /* ---------------- 标点内容卡 ----------------
+             不再用 Leaflet 弹窗：弹窗会被地图自身的点击事件关掉（单击"没反应"的根源），
+             而且弹窗还带 autoPan，会出现"点一下地图动了但看不到内容"。 */
+          var cardPointId = null;
+          function showCard(p) {
+              var card = $('rcCard');
+              if (!card) return;
+              cardPointId = p.id;
+              card.innerHTML =
+                  '<div class="row"><span class="t">' + esc(p.title) + '</span>' +
+                  '<button class="x" id="rcCardClose">✕</button></div>' +
+                  '<div class="m">' + esc(p.date) + '</div>' +
+                  (p.note ? '<div class="n">' + esc(p.note) + '</div>' : '') +
+                  '<button class="go rc-open" data-detail="' + esc(String(p.id)) + '">查看详情 ›</button>';
+              card.style.display = 'block';
+              var close = $('rcCardClose');
+              if (close) close.onclick = hideCard;
+          }
+          function hideCard() {
+              cardPointId = null;
+              var card = $('rcCard');
+              if (card) card.style.display = 'none';
           }
 
-          // 点标点：飞到该点并放大（当前已经更近时保持原缩放），同时弹出内容卡片
+          // 双击标点：飞到该点并适度放大（原来直接跳到 13 级，观感太冲）
           function focusPoint(p, marker) {
-              var target = Math.max(map.getZoom(), p.zoom || 13);
-              map.flyTo([p.lat, p.lng], target, { duration: 0.7, easeLinearity: 0.28 });
-              setTimeout(function () { marker.openPopup(); }, 120);
+              var z = map.getZoom();
+              var target = z >= 12 ? z : Math.min(12, Math.max(z + 3, 9));
+              map.flyTo([p.lat, p.lng], target, { duration: 0.55, easeLinearity: 0.28 });
+              setTimeout(function () { showCard(p); }, 60);
           }
 
           /* ------------------------------------------------------------------
@@ -287,16 +322,17 @@ export function buildMapHtml({
                   var now = Date.now();
                   lastDomTapAt = now;
                   if (lastTapId === p.id && (now - lastTapAt) < DOUBLE_TAP_MS) {
-                      // 连点两次：收掉单击弹出来的评论，然后飞过去
+                      // 连点两次：收掉单击弹出来的内容卡，然后飞过去
                       lastTapId = null; lastTapAt = 0;
-                      safe(function () { marker.closePopup(); });
+                      hideCard();
                       focusPoint(p, marker);
                       return;
                   }
                   lastTapId = p.id; lastTapAt = now;
+                  // 单击：立刻显示 / 收起这个标点的评论（不走 Leaflet 弹窗，关不掉）
                   safe(function () {
-                      if (marker.isPopupOpen()) marker.closePopup();
-                      else marker.openPopup();
+                      if (cardPointId === p.id) hideCard();
+                      else showCard(p);
                   });
               }
 
@@ -366,9 +402,6 @@ export function buildMapHtml({
                   bubblingMouseEvents: false,
                   zIndexOffset: p.kind === 'location' ? 400 : 100,
               });
-              // 单击只弹评论不移动地图，所以让弹窗自己轻微把地图挪进可视区（autoPan），
-              // 双击的 flyTo 会覆盖这次平移
-              marker.bindPopup(popupHtml(p), { closeButton: false, autoPan: true, autoPanPadding: [26, 62], offset: [0, -20], minWidth: 150, maxWidth: 230 });
               bindTapGesture(p, marker);
               marker.__point = p;
               allMarkers.push(marker);
@@ -415,6 +448,7 @@ export function buildMapHtml({
           function redraw() {
               try {
                   allMarkers = [];
+                  hideCard();          // 重新绘制标点时把内容卡收掉，避免指向已经不存在的点
                   renderLoc();
                   drawTraj();
               } catch (e) {
