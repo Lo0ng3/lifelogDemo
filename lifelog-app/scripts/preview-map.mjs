@@ -43,8 +43,11 @@ const leafletCss = read('vendor/leaflet/leaflet.min.css');
 
 const keyArg = process.argv.find((a) => a.startsWith('--key='));
 const tdtKey = keyArg ? keyArg.slice('--key='.length).trim() : (process.env.TDT_KEY || '');
-// 没给 Key 的预览页补一层 OSM 瓦片，不然浏览器里只有底色和标点，看不出地理位置关系
-const osmFallback = tdtKey ? '' : `
+// 服务商：--provider=amap 用高德街道（不需要 key）；默认天地图
+const providerArg = process.argv.find((a) => a.startsWith('--provider='));
+const provider = providerArg ? providerArg.slice('--provider='.length).trim() : 'tianditu';
+// 天地图没给 Key 的预览页补一层 OSM 瓦片，不然浏览器里只有底色和标点，看不出地理位置关系
+const osmFallback = (tdtKey || provider === 'amap') ? '' : `
 <script>
   if (window.__rcMap && window.__rcMap.map && window.L) {
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(window.__rcMap.map);
@@ -83,11 +86,13 @@ for (const scheme of ['light', 'dark']) {
     points,
     segs,
     tdtKey,
+    provider,
     colors: palettes[scheme].map,
     leafletJs,
     leafletCss,
   }).replace('</body>', `${osmFallback}</body>`);
-  const out = join(root, `demo/map-preview-${scheme}.html`);
+  const suffix = provider === 'amap' ? `-amap` : '';
+  const out = join(root, `demo/map-preview-${scheme}${suffix}.html`);
   writeFileSync(out, html, 'utf8');
   console.log(`已生成 ${out}（${points.length} 个标点 / ${segs.length} 段轨迹）`);
 }

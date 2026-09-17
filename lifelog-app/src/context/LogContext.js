@@ -11,11 +11,16 @@ export const LogContext = createContext();
 export const LogProvider = ({ children }) => {
   const [logData, setLogData] = useState([]);
   const [tdtKey, setTdtKeyState] = useState('');
+  // 地图服务商：'tianditu'（默认）| 'amap'；两家的 key 各自保存
+  const [mapProvider, setProviderState] = useState('tianditu');
+  const [amapKey, setAmapKeyState] = useState('');
 
   useEffect(() => {
     loadLogs();
     // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
+    AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu') setProviderState(v); }).catch(() => {});
+    AsyncStorage.getItem('@amap_key').then(v => { if (v) setAmapKeyState(v); }).catch(() => {});
   }, []);
 
   const setTdtKey = async (key) => {
@@ -25,6 +30,26 @@ export const LogProvider = ({ children }) => {
       await AsyncStorage.setItem('@tdt_key', next);
     } catch (e) {
       console.error('保存天地图Key失败', e);
+    }
+  };
+
+  const setMapProvider = async (provider) => {
+    const next = provider === 'amap' ? 'amap' : 'tianditu';
+    setProviderState(next);
+    try {
+      await AsyncStorage.setItem('@map_provider', next);
+    } catch (e) {
+      console.error('保存地图服务商失败', e);
+    }
+  };
+
+  const setAmapKey = async (key) => {
+    const next = (key || '').trim();
+    setAmapKeyState(next);
+    try {
+      await AsyncStorage.setItem('@amap_key', next);
+    } catch (e) {
+      console.error('保存高德Key失败', e);
     }
   };
 
@@ -234,7 +259,10 @@ export const LogProvider = ({ children }) => {
 
   return (
     // 记得把新方法暴露出去
-    <LogContext.Provider value={{ logData, addLog, deleteLog, updateLog, syncMedia, importLogs, tdtKey, setTdtKey }}>
+    <LogContext.Provider value={{
+      logData, addLog, deleteLog, updateLog, syncMedia, importLogs,
+      tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
+    }}>
       {children}
     </LogContext.Provider>
   );

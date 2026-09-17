@@ -22,11 +22,14 @@
 
 ## 地图
 
-- Leaflet 已内联进 bundle（`node scripts/embed-leaflet.mjs` 重新生成），不再依赖 CDN；天地图 Key 在侧边栏「地图服务 Key」里填。
-- 右下角两个小胶囊控制「轨迹 / 标点」，右上角缩放；**单击标点**在底部弹出该点的内容卡（标题/日期/备注 + 查看详情），**连点两次**才飞到该点并适度放大（最多 12 级）。
-- 标点手势直接绑在标点元素上（pointer/touch），不依赖 WebView 的 click 合成；内容卡是自绘的浮层，不走 Leaflet 弹窗，因此不会被地图的点击事件关掉。
+- Leaflet 已内联进 bundle（`node scripts/embed-leaflet.mjs` 重新生成），不再依赖 CDN。
+- **两种地图服务可选**（侧边栏「地图服务」）：天地图（底图 + 检索共用 tk）或高德（街道底图**不需要 key**，检索用「Web 服务」key）。
+- 坐标系统一存 WGS-84；用高德底图显示时自动转 GCJ-02，从高德检索拿到的坐标入库前转回 WGS-84，所以在两家之间切换不会让已有地点/轨迹偏移。
+- 右下角两个小胶囊控制「轨迹 / 标点」，右上角缩放；**单击标点**在标点上方弹出内容卡（标题/日期/备注 + 查看详情），**连点两次**才飞到该点并适度放大（最多 12 级）。
+- 标点手势直接绑在标点元素上（pointer/touch），不依赖 WebView 的 click 合成；内容卡是自绘浮层（跟着地图移动），不走 Leaflet 弹窗，因此不会被地图的点击事件关掉。
+- 地图层保活：首次进地图后常驻、只切透明度，列表/日历仍一次只挂一个；瓦片不会因为切视图而重载。
 - 坐标缺失/异常的记录会被跳过，不会影响其它标点，也不会让缩放按钮失效（曾经就是脏坐标抛错把后面的绑定全带崩）。改完地图逻辑跑一下 `node scripts/check-map-script.mjs` 自检。
-- `node scripts/preview-map.mjs [--key=天地图Key]` → `demo/map-preview-light.html` / `-dark.html`（不给 Key 时用 OSM 底图）。
+- `node scripts/preview-map.mjs [--key=天地图Key] [--provider=amap]` → `demo/map-preview-light.html` / `-dark.html`（`--provider=amap` 出高德版，文件名带 `-amap`）。
 
 ## 选图器
 

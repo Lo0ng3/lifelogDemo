@@ -27,6 +27,39 @@ const DEFAULT_MAP_COLORS = {
 const TYPE_COLORS = { flight: '#2F7BF6', train: '#10B981', bus: '#F97316', ship: '#8B5CF6' };
 const LOCATION_COLOR = '#EE4D3D';
 
+// 底图：天地图（WGS-84，需要 tk）/ 高德街道（GCJ-02，不需要 key）
+const AMAP_TILE = 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}';
+
+// WGS-84 → GCJ-02：内部坐标统一 WGS-84，高德底图是火星坐标，不做纠偏会偏 300~600 米
+const GCJ_A = 6378245.0;
+const GCJ_EE = 0.00669342162296594323;
+const gcjTransformLat = (x, y) => {
+  let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+  ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320.0 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+  return ret;
+};
+const gcjTransformLng = (x, y) => {
+  let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+  ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+  return ret;
+};
+const wgs84ToGcj02 = (lat, lng) => {
+  if (!(lng > 72.004 && lng < 137.8347 && lat > 0.8293 && lat < 55.8271)) return { lat, lng };
+  let dLat = gcjTransformLat(lng - 105.0, lat - 35.0);
+  let dLng = gcjTransformLng(lng - 105.0, lat - 35.0);
+  const radLat = (lat / 180.0) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - GCJ_EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / (((GCJ_A * (1 - GCJ_EE)) / (magic * sqrtMagic)) * Math.PI);
+  dLng = (dLng * 180.0) / ((GCJ_A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { lat: lat + dLat, lng: lng + dLng };
+};
+
 // 嵌入 script 的 JSON：转义 "<" 防止内容提前闭合标签
 const safeJson = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
 
@@ -34,6 +67,7 @@ export function buildMapHtml({
   points = [],
   segs = [],
   tdtKey = '',
+  provider = 'tianditu',
   colors,
   leafletJs = '',
   leafletCss = '',
@@ -41,6 +75,22 @@ export function buildMapHtml({
   const c = { ...DEFAULT_MAP_COLORS, ...(colors || {}) };
   const isDark = /invert/.test(c.tileFilter || '');
   const hasLeaflet = !!leafletJs;
+  // 高德底图：坐标先纠偏成 GCJ-02 再交给 WebView；天地图不用动
+  const useAmap = provider === 'amap';
+  const shift = useAmap ? (({ lat, lng }) => wgs84ToGcj02(lat, lng)) : ((p) => p);
+  const shiftedPoints = points.map((p) => {
+    const s = shift({ lat: p.lat, lng: p.lng });
+    return { ...p, lat: s.lat, lng: s.lng };
+  });
+  const shiftedSegs = segs.map((seg) => {
+    const from = shift({ lat: seg.from.latitude, lng: seg.from.longitude });
+    const to = shift({ lat: seg.to.latitude, lng: seg.to.longitude });
+    return {
+      ...seg,
+      from: { ...seg.from, latitude: from.lat, longitude: from.lng },
+      to: { ...seg.to, latitude: to.lat, longitude: to.lng },
+    };
+  });
 
   // 本地库缺失时的兜底：仍然给一组 CDN 地址，至少不是必然失败
   const cdnFallback = hasLeaflet ? '' : `
@@ -153,9 +203,12 @@ export function buildMapHtml({
 
       ${hasLeaflet ? `<script>${leafletJs}</script>` : ''}
       <script>
-          var POINTS = ${safeJson(points)};
-          var SEGS = ${safeJson(segs)};
+          var POINTS = ${safeJson(shiftedPoints)};
+          var SEGS = ${safeJson(shiftedSegs)};
           var TK = ${safeJson(tdtKey || '')};
+          var PROVIDER = ${safeJson(provider)};
+          var USE_AMAP = PROVIDER === 'amap';
+          var NEED_KEY = !USE_AMAP;                    // 高德底图不需要 key
           var COLORS = ${safeJson(TYPE_COLORS)};
           var LOC_COLOR = ${safeJson(LOCATION_COLOR)};
           var DOT_BORDER = ${safeJson(c.dotBorder)};
@@ -237,7 +290,7 @@ export function buildMapHtml({
           function boot() {
           if (!window.L) {
               // 库没起来时给明确提示，不留一块无法解释的空白
-              if (!TK) showBanner('未配置天地图 Key，可在侧边栏「地图服务 Key」中填写');
+              if (NEED_KEY && !TK) showBanner('未配置天地图 Key，可在侧边栏「地图服务」中填写');
               showHint('地图组件未能加载<br/><span style="font-size:11.5px">请检查网络后重新进入地图页</span>');
               return;
           }
@@ -251,13 +304,16 @@ export function buildMapHtml({
           if (map.doubleClickZoom) map.doubleClickZoom.disable();
           // 点地图空白处收起内容卡（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
           map.on('click', function () { hideCard(); });
-          if (TK) {
-              // 手机端 Leaflet 默认 updateWhenIdle=true：放大过程中不加载新瓦片，
-              // 等动画结束才开始拉，看起来就是"放大很慢"。改成边放大边加载（false），
-              // 并把 keepBuffer 调大，平移/缩放时少出现空白和闪烁。
-              var tileOpts = { subdomains: '01234567', maxZoom: 18, updateWhenIdle: false, keepBuffer: 4 };
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, tileOpts).addTo(map);
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, tileOpts).addTo(map);
+          // 手机端 Leaflet 默认 updateWhenIdle=true：放大过程中不加载新瓦片，
+          // 等动画结束才开始拉，看起来就是"放大很慢"。改成边放大边加载（false），
+          // 并把 keepBuffer 调大，平移/缩放时少出现空白和闪烁。
+          var tileOpts = { maxZoom: 18, updateWhenIdle: false, keepBuffer: 4 };
+          if (USE_AMAP) {
+              // 高德街道（矢量 + 注记一起出图），不需要 key
+              L.tileLayer(${safeJson(AMAP_TILE)}, Object.assign({ subdomains: '1234' }, tileOpts)).addTo(map);
+          } else if (TK) {
+              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
+              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
           }
 
           var locLayer = L.layerGroup().addTo(map);
@@ -506,7 +562,7 @@ export function buildMapHtml({
               }
               var msgs = [];
               if (DROPPED > 0) msgs.push(DROPPED + ' 条记录的坐标不完整，已跳过（不影响其它标点）');
-              if (!TK) msgs.push('未配置天地图 Key，可在侧边栏「地图服务 Key」中填写');
+              if (NEED_KEY && !TK) msgs.push('未配置天地图 Key，可在侧边栏「地图服务」中填写');
               if (msgs.length) showBanner(msgs.join(' · ')); else hideBanner();
           }
 
@@ -573,6 +629,13 @@ export function buildMapHtml({
               var key = z + ':' + t.x + ':' + t.y;
               if (key === prefetchKey) return;
               prefetchKey = key;
+              if (USE_AMAP) {
+                  // 高德：只预热中心那张 +1 级（够用，也不多费流量）
+                  var aImg = new Image();
+                  aImg.src = 'https://webrd0' + (1 + Math.abs(t.x + t.y) % 4) +
+                      '.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=' + t.x + '&y=' + t.y + '&z=' + z;
+                  return;
+              }
               var subs = '01234567';
               var want = [];
               var i, dx, dy;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
@@ -66,7 +66,12 @@ export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { logData, addLog, updateLog, tdtKey } = useContext(LogContext);
+  const { logData, addLog, updateLog, tdtKey, mapProvider, amapKey } = useContext(LogContext);
+  // 地点联想 / 地理编码用当前地图服务商的 key（天地图 tk / 高德 Web 服务 key）
+  const loc = useMemo(
+    () => ({ provider: mapProvider, key: mapProvider === 'amap' ? amapKey : tdtKey }),
+    [mapProvider, tdtKey, amapKey]
+  );
   
   const [editId, setEditId] = useState(null); 
   const [baseType, setBaseType] = useState('ticket'); 
@@ -227,7 +232,7 @@ export default function AddScreen({ navigation, route }) {
       try {
         let candidates;
         if (baseType === 'location') {
-          candidates = await fetchPlaceSuggestions(searchQuery.trim(), tdtKey, controller.signal);
+          candidates = await fetchPlaceSuggestions(searchQuery.trim(), loc, controller.signal);
         } else {
           candidates = await fetchSuggestions(searchQuery.trim(), subType, controller.signal);
           // 精确/前缀匹配优先排序，让候选更贴近用户想记的作品
@@ -259,7 +264,7 @@ export default function AddScreen({ navigation, route }) {
       controller.abort();
       clearTimeout(delayDebounceFn);
     };
-  }, [searchQuery, baseType, subType, tdtKey, searchFocused]);
+  }, [searchQuery, baseType, subType, loc, searchFocused]);
 
   // 旅票出发地/目的地：天地图地名联想（isPrompt 的联想词无坐标，选中后拿它继续搜）
   useEffect(() => {
@@ -269,7 +274,7 @@ export default function AddScreen({ navigation, route }) {
     if (!ticketOrigin.trim()) { setOriginResults([]); setShowOriginAuto(false); return; }
     const controller = new AbortController();
     const t = setTimeout(() => {
-      fetchPlaceSuggestions(ticketOrigin, tdtKey, controller.signal)
+      fetchPlaceSuggestions(ticketOrigin, loc, controller.signal)
         .then(results => { setOriginResults(results); setShowOriginAuto(true); })
         .catch(error => {
           if (error?.name !== 'AbortError' && Platform.OS === 'android') {
@@ -278,7 +283,7 @@ export default function AddScreen({ navigation, route }) {
         });
     }, 300);
     return () => { controller.abort(); clearTimeout(t); };
-  }, [ticketOrigin, baseType, tdtKey, originFocused]);
+  }, [ticketOrigin, baseType, loc, originFocused]);
 
   useEffect(() => {
     if (baseType !== 'ticket') return;
@@ -287,7 +292,7 @@ export default function AddScreen({ navigation, route }) {
     if (!ticketDest.trim()) { setDestResults([]); setShowDestAuto(false); return; }
     const controller = new AbortController();
     const t = setTimeout(() => {
-      fetchPlaceSuggestions(ticketDest, tdtKey, controller.signal)
+      fetchPlaceSuggestions(ticketDest, loc, controller.signal)
         .then(results => { setDestResults(results); setShowDestAuto(true); })
         .catch(error => {
           if (error?.name !== 'AbortError' && Platform.OS === 'android') {
@@ -296,7 +301,7 @@ export default function AddScreen({ navigation, route }) {
         });
     }, 300);
     return () => { controller.abort(); clearTimeout(t); };
-  }, [ticketDest, baseType, tdtKey, destFocused]);
+  }, [ticketDest, baseType, loc, destFocused]);
 
   // 联想选中：普通结果记住坐标并收起（跳过自动重搜）；联想词没有坐标，换词后继续搜
   const pickOrigin = (item) => {
@@ -374,8 +379,8 @@ export default function AddScreen({ navigation, route }) {
   const resolvePlace = async (name, coord) => {
     if (!name.trim()) return null;
     let lng = coord ? coord.lng : null, lat = coord ? coord.lat : null;
-    if (lng == null && hasLocationSearch(tdtKey)) {
-      const g = await fetchPlaceGeocode(name, tdtKey).catch(() => null);
+    if (lng == null && hasLocationSearch(loc)) {
+      const g = await fetchPlaceGeocode(name, loc).catch(() => null);
       if (g) { lng = g.lng; lat = g.lat; }
     }
     return { name: name.trim(), longitude: lng, latitude: lat };
@@ -423,8 +428,8 @@ export default function AddScreen({ navigation, route }) {
       let lng = locationCoords ? locationCoords.lng : null;
       let lat = locationCoords ? locationCoords.lat : null;
       if (lng == null && photoCoord) { lng = photoCoord.longitude; lat = photoCoord.latitude; }
-      if (lng == null && hasLocationSearch(tdtKey)) {
-        const g = await fetchPlaceGeocode(searchQuery, tdtKey).catch(() => null);
+      if (lng == null && hasLocationSearch(loc)) {
+        const g = await fetchPlaceGeocode(searchQuery, loc).catch(() => null);
         if (g) { lng = g.lng; lat = g.lat; }
       }
       if (lng != null && lat != null) coordinates = { latitude: lat, longitude: lng };
@@ -585,8 +590,10 @@ export default function AddScreen({ navigation, route }) {
                   ))}
                 </Reanimated.View>
               )}
-              {!hasLocationSearch(tdtKey) && (
-                <Text style={styles.autoCompleteHint}>提示：在侧边栏「地图服务 Key」填入天地图 Key（免费）后，出发地/目的地才能联想定位</Text>
+              {!hasLocationSearch(loc) && (
+                <Text style={styles.autoCompleteHint}>
+                  提示：在侧边栏「地图服务」里选好服务商并填入 Key（天地图免费 tk / 高德 Web 服务 Key）后，出发地、目的地才能联想定位
+                </Text>
               )}
               <Text style={[styles.inputLabel, { marginTop: 16 }]}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
               <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketNo} onChangeText={setTicketNo} /></View>
@@ -612,11 +619,13 @@ export default function AddScreen({ navigation, route }) {
                 />
               </View>
 
-              {!hasLocationSearch(tdtKey) && (
-                <Text style={styles.autoCompleteHint}>提示：在侧边栏「地图服务 Key」填入天地图 Key（免费）后，可联想地点并自动定位</Text>
+              {!hasLocationSearch(loc) && (
+                <Text style={styles.autoCompleteHint}>
+                  提示：在侧边栏「地图服务」里选好服务商并填入 Key（天地图免费 tk / 高德 Web 服务 Key）后，可联想地点并自动定位
+                </Text>
               )}
 
-              {hasLocationSearch(tdtKey) && showSearchAuto && searchResults.length > 0 && (
+              {hasLocationSearch(loc) && showSearchAuto && searchResults.length > 0 && (
                 <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
                   {isSearching ? (
                     <View style={{ padding: 16, alignItems: 'center' }}>

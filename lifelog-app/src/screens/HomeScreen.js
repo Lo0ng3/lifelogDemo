@@ -80,21 +80,41 @@ function ViewSwitcher({ value, onChange }) {
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { logData, syncMedia, importLogs, tdtKey, setTdtKey } = useContext(LogContext);
+  const {
+    logData, syncMedia, importLogs,
+    tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
+  } = useContext(LogContext);
   // 外观：始终跟随系统（和开屏图保持一致）
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
 
-  // 地图服务 Key 设置弹窗
+  // 地图服务设置弹窗：天地图 / 高德二选一，两家的 Key 各自保存
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keyDraft, setKeyDraft] = useState('');
-  const openSettings = () => { setKeyDraft(tdtKey); setSettingsOpen(true); };
+  const [providerDraft, setProviderDraft] = useState(mapProvider);
+  const openSettings = () => {
+    setProviderDraft(mapProvider);
+    setKeyDraft(mapProvider === 'amap' ? amapKey : tdtKey);
+    setSettingsOpen(true);
+  };
+  // 切换服务商时把输入框换成对应的 key
+  const switchProviderDraft = (next) => {
+    setProviderDraft(next);
+    setKeyDraft(next === 'amap' ? amapKey : tdtKey);
+  };
   const saveKey = async () => {
-    await setTdtKey(keyDraft);
+    await setMapProvider(providerDraft);
+    if (providerDraft === 'amap') await setAmapKey(keyDraft);
+    else await setTdtKey(keyDraft);
     setSettingsOpen(false);
-    if (Platform.OS === 'android') ToastAndroid.show(keyDraft.trim() ? '天地图 Key 已保存' : '已清除天地图 Key', ToastAndroid.SHORT);
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(
+        `${providerDraft === 'amap' ? '高德' : '天地图'}${keyDraft.trim() ? ' 已保存' : ' Key 已清除'}`,
+        ToastAndroid.SHORT
+      );
+    }
   };
 
   // 相册同步：把断链的影像重新关联到相册原片（升级/换机/重装后的修复入口）
@@ -338,10 +358,11 @@ export default function HomeScreen({ navigation }) {
     points: mapData.points,
     segs: mapData.segs,
     tdtKey,
+    provider: mapProvider,
     colors: colors.map,
     leafletJs: LEAFLET_JS,
     leafletCss: LEAFLET_CSS,
-  }), [mapData, tdtKey, colors.map]);
+  }), [mapData, tdtKey, mapProvider, colors.map]);
 
 
   const openDetail = useCallback((item) => navigation.navigate('Detail', { item }), [navigation]);
@@ -416,8 +437,12 @@ export default function HomeScreen({ navigation }) {
             <TouchableOpacity style={styles.menuItem} onPress={openSettings}>
               <Settings size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.menuItemText}>地图服务 Key</Text>
-                <Text style={styles.menuItemSub}>{tdtKey ? '天地图服务已配置' : '未配置，地图与联想不可用'}</Text>
+                <Text style={styles.menuItemText}>地图服务</Text>
+                <Text style={styles.menuItemSub}>
+                  {mapProvider === 'amap'
+                    ? (amapKey ? '高德已配置（底图 + 地名检索）' : '高德未配置 Key，联想不可用')
+                    : (tdtKey ? '天地图已配置（底图 + 地名检索）' : '天地图未配置，地图与联想不可用')}
+                </Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
@@ -559,17 +584,35 @@ export default function HomeScreen({ navigation }) {
         <TouchableOpacity style={styles.settingsOverlay} activeOpacity={1} onPress={() => setSettingsOpen(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.settingsCard} onPress={() => {}}>
             <Text style={styles.settingsTitle}>设置</Text>
-            <Text style={styles.settingsLabel}>天地图 Key</Text>
+            <Text style={styles.settingsLabel}>地图服务</Text>
+            <View style={styles.providerRow}>
+              {[{ id: 'tianditu', label: '天地图' }, { id: 'amap', label: '高德' }].map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[styles.providerChip, providerDraft === p.id && styles.providerChipOn]}
+                  onPress={() => switchProviderDraft(p.id)}
+                >
+                  <Text style={[styles.providerChipText, providerDraft === p.id && styles.providerChipTextOn]}>{p.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.settingsLabel, { marginTop: 14 }]}>
+              {providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 Key'}
+            </Text>
             <TextInput
               style={styles.settingsInput}
               value={keyDraft}
               onChangeText={setKeyDraft}
-              placeholder="在 lbs.tianditu.gov.cn 免费申请"
+              placeholder={providerDraft === 'amap' ? '在 lbs.amap.com 控制台申请（Web 服务）' : '在 lbs.tianditu.gov.cn 免费申请'}
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <Text style={styles.settingsHint}>用于地图底图、地点与出发/到达的地名联想。Key 只保存在本机，换机后需重新填写。</Text>
+            <Text style={styles.settingsHint}>
+              {providerDraft === 'amap'
+                ? '高德底图（街道图）不需要 Key；这里的 Key 只用于地点联想/地理编码，请申请「Web 服务」类型。坐标会自动做 GCJ-02 纠偏，两种服务商之间切换不会跑偏。'
+                : '天地图 Key 同时用于底图与地点联想（WGS-84 无偏移）。Key 只保存在本机，换机后需重新填写。'}
+            </Text>
             <View style={styles.settingsBtnRow}>
               <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setSettingsOpen(false)}>
                 <Text style={styles.settingsBtnCancelText}>取消</Text>
@@ -638,6 +681,12 @@ const makeStyles = (c) => ({
   settingsCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 14, padding: 18 },
   settingsTitle: { fontSize: 17, fontWeight: '600', color: c.text, marginBottom: 14 },
   settingsLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
+  providerRow: { flexDirection: 'row', gap: 8 },
+  providerChip: { flex: 1, paddingVertical: 9, borderRadius: 10, backgroundColor: c.bgSunken,
+    borderWidth: 1, borderColor: c.border, alignItems: 'center' },
+  providerChipOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  providerChipText: { fontSize: 14, color: c.textSecondary },
+  providerChipTextOn: { color: c.accent, fontWeight: '600' },
   settingsInput: { borderWidth: 1, borderColor: c.border, borderRadius: 10, backgroundColor: c.bgSunken, paddingHorizontal: 12, height: 44, fontSize: 14, color: c.text },
   settingsHint: { fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 },
   settingsBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },

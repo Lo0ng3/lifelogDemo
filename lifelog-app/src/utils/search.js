@@ -3,6 +3,8 @@
 // - Apple 已把影视类目从 iTunes 搜索 API 下架，iTunes 音乐结果对记录作品没有参考价值，故不再兜底
 // - 游戏没有稳定免密数据源，不提供联想（豆瓣主站联想接口已下线）
 
+import { gcj02ToWgs84 } from './coord';
+
 const DOUBAN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 };
@@ -20,9 +22,13 @@ const DOUBAN_POSTER_RATIO = 2 / 3;
 
 const doubanHostBySubType = { movie: 'movie', tv: 'movie', anime: 'movie', book: 'book' };
 
-// 地点联想 / 地理编码：天地图（lbs.tianditu.gov.cn，个人免费、全链路 WGS-84 无偏移）
-// Key 在应用侧边栏「地图服务 Key」中配置（存本机 AsyncStorage），地图 WebView 底图共用
-export const hasLocationSearch = (tdtKey) => !!tdtKey;
+// 地点联想 / 地理编码：两种服务商可选
+// - 天地图：全链路 WGS-84 无偏移，底图/检索共用同一个 tk
+// - 高德：检索结果是 GCJ-02（火星坐标），这里统一转回 WGS-84 再交给上层，
+//   保证库里存的始终是 WGS-84；底图那侧显示时再转过去
+// loc = { provider: 'tianditu' | 'amap', key }
+export const hasLocationSearch = (loc) => !!loc?.key;
+export const locationProviderLabel = (loc) => (loc?.provider === 'amap' ? '高德' : '天地图');
 
 // 天地图 API 在华为云 WAF 后面：非浏览器 User-Agent（如 RN 的 okhttp）会被 403，统一伪装成浏览器
 const TDT_HEADERS = {
@@ -37,8 +43,14 @@ const parseLonlat = s => {
 
 // 地名搜索 V2.0 模糊搜索做输入联想。
 // 返回 [{ name, district, lng, lat, isPrompt }]；isPrompt 的联想词无坐标，选中后拿 name 再搜一次
-export async function fetchPlaceSuggestions(query, tdtKey, signal) {
-  if (!tdtKey || !query.trim()) return [];
+export async function fetchPlaceSuggestions(query, loc, signal) {
+  const { provider, key } = loc || {};
+  if (!key || !query.trim()) return [];
+  if (provider === 'amap') return fetchAmapSuggestions(query, key, signal);
+  return fetchTdtSuggestions(query, key, signal);
+}
+
+async function fetchTdtSuggestions(query, tdtKey, signal) {
   const postStr = JSON.stringify({
     keyWord: query.trim(),
     level: 12,
@@ -89,9 +101,61 @@ export async function fetchPlaceSuggestions(query, tdtKey, signal) {
   }).slice(0, 8);
 }
 
+/* ---------------------- 高德（REST 检索，坐标为 GCJ-02，这里转回 WGS-84） ---------------------- */
+const amapLoc = (location) => {
+  const [lng, lat] = String(location || '').split(',').map(Number);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  return { lng, lat };
+};
+
+async function fetchAmapSuggestions(query, key, signal) {
+  const url = `https://restapi.amap.com/v3/assistant/inputtips?key=${encodeURIComponent(key)}`
+    + `&keywords=${encodeURIComponent(query.trim())}&datatype=all&city=全国&citylimit=false`;
+  const res = await withTimeout(fetch(url, { signal }));
+  const body = await res.text();
+  let data = null;
+  try { data = JSON.parse(body); } catch { throw new Error(`HTTP ${res.status} ${body.slice(0, 50)}`); }
+  if (data.status !== '1') throw new Error(data.info || `高德返回 ${data.infocode || res.status}`);
+  return (data.tips || [])
+    .filter((t) => t && t.name)
+    .map((t) => {
+      const ll = amapLoc(t.location);
+      const w = ll ? gcj02ToWgs84(ll.lat, ll.lng) : null;
+      return {
+        name: t.name,
+        district: [t.district, t.address].filter(Boolean).join(' · '),
+        lng: w ? w.lng : null,
+        lat: w ? w.lat : null,
+        isPrompt: !w,     // 没坐标的候选：选中后拿名字再搜一次
+      };
+    })
+    .slice(0, 8);
+}
+
+async function fetchAmapGeocode(name, key, signal) {
+  const url = `https://restapi.amap.com/v3/geocode/geo?key=${encodeURIComponent(key)}`
+    + `&address=${encodeURIComponent(name.trim())}`;
+  const res = await withTimeout(fetch(url, { signal }));
+  const body = await res.text();
+  let data = null;
+  try { data = JSON.parse(body); } catch { return null; }
+  if (data.status !== '1') return null;
+  const first = (data.geocodes || [])[0];
+  const ll = first && amapLoc(first.location);
+  if (!ll) return null;
+  const w = gcj02ToWgs84(ll.lat, ll.lng);
+  return { lng: w.lng, lat: w.lat };
+}
+
 // 正地理编码：手输名称没走联想选择时的坐标兜底；解析不到返回 null
-export async function fetchPlaceGeocode(name, tdtKey, signal) {
-  if (!tdtKey || !name.trim()) return null;
+export async function fetchPlaceGeocode(name, loc, signal) {
+  const { provider, key } = loc || {};
+  if (!key || !name.trim()) return null;
+  if (provider === 'amap') return fetchAmapGeocode(name, key, signal);
+  return fetchTdtGeocode(name, key, signal);
+}
+
+async function fetchTdtGeocode(name, tdtKey, signal) {
   const res = await withTimeout(fetch(`https://api.tianditu.gov.cn/geocoder?postStr=${encodeURIComponent(JSON.stringify({ keyWord: name.trim() }))}&tk=${encodeURIComponent(tdtKey)}`, { headers: TDT_HEADERS, signal }));
   const body = await res.text();
   let data = null;
