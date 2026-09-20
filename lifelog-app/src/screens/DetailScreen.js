@@ -10,7 +10,10 @@ import {
   Star, StarHalf, X, PlayCircle, ChevronLeft
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  FadeInDown, useSharedValue, useAnimatedStyle, withTiming, runOnJS,
+} from 'react-native-reanimated';
 
 import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
@@ -19,9 +22,83 @@ import { isEssay, labelOf } from '../utils/recordMeta';
 import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
+import { lockPortrait } from '../utils/screenLock';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// 详情查看器里的图片：捏合缩放 / 双击放大 / 放大后拖动。
+// 视频仍走原生播放控件（全屏播放本身就是"放大看"），这里只管图片。
+function ZoomableImage({ uri, active, onZoomChange }) {
+  const { width: winW, height: winH } = Dimensions.get('window');
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const tx = useSharedValue(0), ty = useSharedValue(0);
+  const savedTx = useSharedValue(0), savedTy = useSharedValue(0);
+
+  const reset = () => {
+    'worklet';
+    scale.value = withTiming(1);
+    tx.value = withTiming(0);
+    ty.value = withTiming(0);
+    savedScale.value = 1;
+    savedTx.value = 0;
+    savedTy.value = 0;
+  };
+  const notify = (on) => { if (onZoomChange) onZoomChange(on); };
+
+  const pinch = Gesture.Pinch()
+    .onUpdate((e) => { scale.value = Math.min(6, Math.max(1, savedScale.value * e.scale)); })
+    .onEnd(() => {
+      if (scale.value <= 1.05) { reset(); runOnJS(notify)(false); return; }
+      savedScale.value = scale.value;
+      runOnJS(notify)(true);
+    });
+  // 放大之后才允许拖动，并且限制在图片范围内（避免把图拖出屏幕外找不回来）
+  const pan = Gesture.Pan()
+    .onUpdate((e) => {
+      if (savedScale.value <= 1.05) return;
+      tx.value = savedTx.value + e.translationX;
+      ty.value = savedTy.value + e.translationY;
+    })
+    .onEnd(() => {
+      const maxX = ((savedScale.value - 1) * winW) / 2;
+      const maxY = ((savedScale.value - 1) * winH) / 2;
+      tx.value = withTiming(Math.max(-maxX, Math.min(maxX, tx.value)));
+      ty.value = withTiming(Math.max(-maxY, Math.min(maxY, ty.value)));
+      savedTx.value = tx.value;
+      savedTy.value = ty.value;
+    });
+  const doubleTap = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd(() => {
+      if (savedScale.value > 1.05) { reset(); runOnJS(notify)(false); return; }
+      scale.value = withTiming(2.5);
+      savedScale.value = 2.5;
+      runOnJS(notify)(true);
+    });
+  const gesture = Gesture.Simultaneous(pinch, pan, doubleTap);
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
+  }));
+
+  // 翻到别的影像时把这一张的缩放还原，回来时不会莫名其妙还是放大的
+  useEffect(() => {
+    if (!active) {
+      scale.value = 1; savedScale.value = 1;
+      tx.value = 0; ty.value = 0;
+      savedTx.value = 0; savedTy.value = 0;
+    }
+  }, [active, scale, savedScale, tx, ty, savedTx, savedTy]);
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <Animated.View style={[{ width: '100%', height: '100%' }, animStyle]}>
+        <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="contain" cachePolicy="memory" />
+      </Animated.View>
+    </GestureDetector>
+  );
+}
 
 // 视频封面：只生成一次封面帧（内存缓存），避免为了一张缩略图挂载真实播放器
 function VideoThumb({ entry, style, contentFit = 'cover' }) {
@@ -50,7 +127,7 @@ function LiveGridBadge({ entry }) {
 
 // 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放。
 // 静帧始终垫底：视频出首帧才盖上来（消除开始时的闪黑），播完自动回到静帧、可再次点按重播
-function LivePhotoPage({ entry }) {
+function LivePhotoPage({ entry, active, onZoomChange }) {
   const styles = useThemedStyles(makeStyles);
   const [info, setInfo] = useState(null);
   const [playingUri, setPlayingUri] = useState(null);
@@ -74,6 +151,14 @@ function LivePhotoPage({ entry }) {
       setLoading(false);
     }
   };
+  // 普通照片：直接给可缩放版本（双指捏合 / 双击放大 / 放大后拖动）
+  if (!isLive) {
+    return (
+      <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
+        <ZoomableImage uri={entry.uri} active={active} onZoomChange={onZoomChange} />
+      </View>
+    );
+  }
   return (
     <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
       <TouchableOpacity
@@ -134,9 +219,17 @@ export default function DetailScreen({ route, navigation }) {
 
   const [viewerIndex, setViewerIndex] = useState(-1);
   const [currentViewIndex, setCurrentViewIndex] = useState(-1);
+  // 图片放大后要禁用横向翻页，否则捏合/拖动会和翻页抢手势
+  const [viewerZoomed, setViewerZoomed] = useState(false);
+
+  // 详情页一律竖屏：万一从地图全屏（横屏）直接跳过来，这里兜底把屏幕锁回竖屏
+  useEffect(() => { lockPortrait(); }, []);
   const onViewableItemsChanged = useMemo(
     () => ({ viewableItems }) => {
-      if (viewableItems.length > 0) setCurrentViewIndex(viewableItems[0].index);
+      if (viewableItems.length > 0) {
+        setCurrentViewIndex(viewableItems[0].index);
+        setViewerZoomed(false);
+      }
     },
     []
   );
@@ -297,9 +390,15 @@ export default function DetailScreen({ route, navigation }) {
       </ScrollView>
 
       {/* 全屏图片/视频查看器 */}
-      <Modal visible={viewerIndex >= 0} transparent animationType="fade" statusBarTranslucent={true} onRequestClose={() => { setViewerIndex(-1); setCurrentViewIndex(-1); }}>
+      <Modal
+        visible={viewerIndex >= 0}
+        transparent
+        animationType="fade"
+        statusBarTranslucent={true}
+        onRequestClose={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}
+      >
         <View style={styles.viewerContainer}>
-          <TouchableOpacity style={[styles.viewerCloseBtn, { top: insets.top + 10 }]} onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); }}>
+          <TouchableOpacity style={[styles.viewerCloseBtn, { top: insets.top + 10 }]} onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}>
             <X size={28} color="#FFF" />
           </TouchableOpacity>
 
@@ -308,6 +407,7 @@ export default function DetailScreen({ route, navigation }) {
             keyExtractor={(_, i) => i.toString()}
             horizontal
             pagingEnabled
+            scrollEnabled={!viewerZoomed}
             showsHorizontalScrollIndicator={false}
             initialScrollIndex={viewerIndex >= 0 ? viewerIndex : 0}
             getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
@@ -336,7 +436,7 @@ export default function DetailScreen({ route, navigation }) {
                     </View>
                   )
                 ) : (
-                  <LivePhotoPage entry={entry} />
+                  <LivePhotoPage entry={entry} active={index === currentViewIndex} onZoomChange={setViewerZoomed} />
                 )}
               </View>
             )}

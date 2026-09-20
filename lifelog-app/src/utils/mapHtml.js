@@ -378,19 +378,12 @@ export function buildMapHtml({
           var GROUPS = [];
 
           // 标点：内联 SVG 画水滴型定位标，不依赖任何外部样式类。
-          // 记录数 > 1 时在右上角加一个数字角标（同一个 SVG 里画，不额外堆 DOM 节点）。
-          function pinIcon(color, count) {
-              var badge = '';
-              if (count > 1) {
-                  badge = '<circle cx="31" cy="8" r="7" fill="' + color + '" stroke="' + DOT_BORDER + '" stroke-width="1.6"/>'
-                      + '<text x="31" y="11.4" text-anchor="middle" font-size="9" font-weight="700" fill="#FFF"'
-                      + ' font-family="-apple-system, system-ui, sans-serif">' + (count > 99 ? '99+' : count) + '</text>';
-              }
-              return '<svg width="40" height="28" viewBox="0 0 40 28" xmlns="http://www.w3.org/2000/svg">'
+          // 一个地点有多条记录时仍然只画一根针，但针上不再挂「×N」角标——
+          // 有几条翻开内容卡看「1/2」就行，地图上保持干净。
+          function pinIcon(color) {
+              return '<svg width="22" height="28" viewBox="0 0 22 28" xmlns="http://www.w3.org/2000/svg">'
                   + '<path d="M11 26.4C11 26.4 19.4 17.2 19.4 10.6A8.4 8.4 0 1 0 2.6 10.6C2.6 17.2 11 26.4 11 26.4Z" fill="' + color + '" stroke="' + DOT_BORDER + '" stroke-width="1.8"/>'
-                  + '<circle cx="11" cy="10.5" r="3.2" fill="' + DOT_BORDER + '"/>'
-                  + badge
-                  + '</svg>';
+                  + '<circle cx="11" cy="10.5" r="3.2" fill="' + DOT_BORDER + '"/></svg>';
           }
           function badgeIcon(count, color) {
               return '<div style="min-width:22px;height:22px;padding:0 4px;border-radius:11px;background:' + DOT_BORDER
@@ -610,7 +603,9 @@ export function buildMapHtml({
                   viewMode: '2D',
                   zooms: [3, 18],
                   resizeEnable: true,
-                  doubleClickZoom: false,     // 双击留给"飞到标点"
+                  // 双击放大保持开启：双击空白处放大一级，双击标点仍然是"飞到该标点"
+                  // （标点的点击被自己的手势拦下了，不会和地图的双击冲突）
+                  doubleClickZoom: true,
                   showLabel: true,
                   mapStyle: DARK ? 'amap://styles/dark' : 'amap://styles/normal',
                   features: ['bg', 'road', 'building', 'point'],
@@ -625,16 +620,16 @@ export function buildMapHtml({
               return {
                   kind: 'amap',
                   group: group,
-                 pin: function (ll, html, o) {
+                  pin: function (ll, html, o) {
                       var wrap = document.createElement('div');
                       wrap.className = 'rc-pin';
-                      wrap.style.cssText = 'width:40px;height:28px;';
+                      wrap.style.cssText = 'width:22px;height:28px;';
                       wrap.innerHTML = html;
                       var m = new AMap.Marker({
                           position: [ll.lng, ll.lat],
                           content: wrap,
                           anchor: 'bottom-left',
-                          // 水滴尖在 (11, 26)，相对左下角是往左 11、往下 2
+                          // 水滴尖在 (11, 26)，相对 22×28 的左下角是往左 11、往下 2
                           offset: new AMap.Pixel(-11, 2),
                           zIndex: o && o.z ? o.z : 100,
                           bubble: false,
@@ -710,8 +705,8 @@ export function buildMapHtml({
               // 标点刚弹出的评论立刻关掉，表现就是"单击标点没反应"）
               var map = L.map('map', { zoomControl: false, attributionControl: true, closePopupOnClick: false }).setView([34.0, 108.0], 4);
               map.attributionControl.setPrefix('');
-              // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级
-              if (map.doubleClickZoom) map.doubleClickZoom.disable();
+              // 双击放大保持开启（Leaflet 默认）：双击空白处放大一级；双击标点仍是"飞到该标点"——
+              // 标点的手势把 DOM 事件拦在自己这一层了，地图容器收不到第二下，两者不会打架。
 
               // 手机端默认 updateWhenIdle=true：放大过程中不加载新瓦片，等动画结束才开始拉，
               // 看起来就是"放大很慢"。改成边放大边加载（false）。
@@ -801,7 +796,7 @@ export function buildMapHtml({
                   },
                   pin: function (ll, html, o) {
                       var m = L.marker([ll.lat, ll.lng], {
-                          icon: L.divIcon({ className: 'rc-pin', html: html, iconSize: [40, 28], iconAnchor: [11, 26], popupAnchor: [0, -22] }),
+                          icon: L.divIcon({ className: 'rc-pin', html: html, iconSize: [22, 28], iconAnchor: [11, 26], popupAnchor: [0, -22] }),
                           riseOnHover: true,
                           // 关键：标点的点击不传给地图，否则地图会立刻把评论关掉
                           bubblingMouseEvents: false,
@@ -865,7 +860,7 @@ export function buildMapHtml({
               // 按默认层级会让红色地点点被蓝色的起终点盖住。
               // 记录越多的点再往上一层，免得被邻居的单条记录挡住。
               var z = (g.onLoc ? 400 : 100) + Math.min(80, g.records.length * 4);
-              return Engine.pin({ lat: g.lat, lng: g.lng }, pinIcon(g.color, g.records.length), { z: z, onTap: makeTapHandler(g) });
+              return Engine.pin({ lat: g.lat, lng: g.lng }, pinIcon(g.color), { z: z, onTap: makeTapHandler(g) });
           }
           function renderLoc() {
               locLayer.clear();

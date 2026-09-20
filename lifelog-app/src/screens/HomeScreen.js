@@ -34,24 +34,7 @@ import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 import { tabBarStyleFor, HIDDEN_TAB_BAR } from '../navigation/tabBarStyle';
-
-// 屏幕方向锁：地图全屏时锁成横屏、退出时还原竖屏。
-// 用 try + require：万一装的是没有这个原生模块的旧包（没重新构建 APK），
-// 这里降级成"只铺满屏幕、不转屏"，而不是整个页面崩掉。
-let ScreenOrientation = null;
-try {
-  ScreenOrientation = require('expo-screen-orientation');
-} catch {
-  ScreenOrientation = null;
-}
-const setScreenLock = async (lock) => {
-  try {
-    if (!ScreenOrientation || lock == null) return;
-    await ScreenOrientation.lockAsync(lock);
-  } catch {
-    // 模拟器 / 旧安装包上锁不了就忽略：地图照样铺满，只是跟随设备方向
-  }
-};
+import { lockLandscape, lockPortrait, waitPortrait } from '../utils/screenLock';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -285,34 +268,39 @@ export default function HomeScreen({ navigation }) {
      这样不用写死头部/标题的高度。 */
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [fsInset, setFsInset] = useState(null);
+  const rootRef = useRef(null);
   const viewAreaRef = useRef(null);
   const { width: winW, height: winH } = useWindowDimensions();
 
-  const measureViewArea = useCallback(() => new Promise((resolve) => {
-    const node = viewAreaRef.current;
+  const measureRect = useCallback((ref) => new Promise((resolve) => {
+    const node = ref.current;
     if (!node || typeof node.measureInWindow !== 'function') { resolve(null); return; }
     node.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
   }), []);
 
-  // 进全屏 / 转屏之后都要重新量一次（转屏会改窗口尺寸和内边距）
+  // 全屏时把地图层撑满「整屏」：同一时刻量「根容器」和「地图所在容器」两个矩形，
+  // 用它们的差值做补偿。这样即使转屏过程中窗口尺寸和布局还没同步，算出来的也是
+  // 相对关系（之前用 useWindowDimensions 的旧值算，横屏后会在右侧留一条白边）。
+  const applyFullscreenInset = useCallback(() => {
+    Promise.all([measureRect(rootRef), measureRect(viewAreaRef)]).then(([root, area]) => {
+      if (!root || !area) return;
+      setFsInset({
+        left: area.x - root.x,
+        top: area.y - root.y,
+        right: -((root.x + root.width) - (area.x + area.width)),
+        bottom: -((root.y + root.height) - (area.y + area.height)),
+      });
+    });
+  }, [measureRect]);
+
+  // 进全屏 / 转屏 / 隐藏 TabBar 都会改布局，多补几拍最稳
   useEffect(() => {
     if (!mapFullscreen) { setFsInset(null); return undefined; }
     let alive = true;
-    const measure = () => {
-      measureViewArea().then((rect) => {
-        if (!alive || !rect) return;
-        setFsInset({
-          left: -rect.x,
-          top: -rect.y,
-          right: -(winW - rect.x - rect.width),
-          bottom: -(winH - rect.y - rect.height),
-        });
-      });
-    };
-    // 两拍：转屏/布局刚变时先量一次，等动画彻底停了再校一次
-    const timers = [90, 600].map((delay) => setTimeout(measure, delay));
+    const run = () => { if (alive) applyFullscreenInset(); };
+    const timers = [60, 260, 700].map((delay) => setTimeout(run, delay));
     return () => { alive = false; timers.forEach(clearTimeout); };
-  }, [mapFullscreen, winW, winH, measureViewArea]);
+  }, [mapFullscreen, winW, winH, applyFullscreenInset]);
 
   // 尺寸变了要让 Leaflet 重新量：全屏、转屏、退出各补一次
   useEffect(() => {
@@ -348,13 +336,21 @@ export default function HomeScreen({ navigation }) {
     toggleSidebar(false);
     navigation.setOptions({ tabBarStyle: HIDDEN_TAB_BAR });
     setMapFullscreen(true);
-    setScreenLock(ScreenOrientation?.OrientationLock?.LANDSCAPE);
+    lockLandscape();
   }, [navigation, toggleSidebar]);
   const exitMapFullscreen = useCallback(() => {
     setMapFullscreen(false);
     navigation.setOptions({ tabBarStyle: tabBarStyleFor(colors) });
-    setScreenLock(ScreenOrientation?.OrientationLock?.PORTRAIT_UP);
+    lockPortrait();
   }, [navigation, colors]);
+
+  // 从地图打开详情：全屏（横屏）时先退回竖屏再跳，避免详情页在半横屏状态下排版错乱
+  const openDetailFromMap = useCallback((item) => {
+    if (!item) return;
+    if (!mapFullscreen) { navigation.navigate('Detail', { item }); return; }
+    exitMapFullscreen();
+    waitPortrait().then(() => navigation.navigate('Detail', { item }));
+  }, [mapFullscreen, exitMapFullscreen, navigation]);
   // 兜底：页面万一被卸载（卸载时还停在全屏），把方向和 TabBar 一起还原
   const fullscreenStateRef = useRef({ on: false, tabBar: null });
   useEffect(() => {
@@ -362,7 +358,7 @@ export default function HomeScreen({ navigation }) {
   }, [mapFullscreen, colors]);
   useEffect(() => () => {
     if (!fullscreenStateRef.current.on) return;
-    setScreenLock(ScreenOrientation?.OrientationLock?.PORTRAIT_UP);
+    lockPortrait();
     navigation.setOptions({ tabBarStyle: fullscreenStateRef.current.tabBar });
   }, [navigation]);
 
@@ -548,7 +544,7 @@ export default function HomeScreen({ navigation }) {
   }, []);
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} ref={rootRef} collapsable={false}>
       {/* 地图全屏时把状态栏也收起来，才是真正的整屏 */}
       <StatusBar hidden={mapFullscreen} />
 
@@ -622,7 +618,12 @@ export default function HomeScreen({ navigation }) {
         {/* 一次只显示一个视图。列表 / 日历用 display:none 切换（各自独立出现）；
             地图单独一层常驻：尺寸始终有效，切走时只把透明度降到 0，
             这样 Leaflet 不会把瓦片卸掉，切回来是秒开、不用重新下载 */}
-        <View style={[styles.viewArea, mapFullscreen && styles.viewAreaFullscreen]} ref={viewAreaRef} collapsable={false}>
+        <View
+          style={[styles.viewArea, mapFullscreen && styles.viewAreaFullscreen]}
+          ref={viewAreaRef}
+          collapsable={false}
+          onLayout={() => { if (mapFullscreen) setTimeout(applyFullscreenInset, 0); }}
+        >
         <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
@@ -662,7 +663,7 @@ export default function HomeScreen({ navigation }) {
                 const msg = JSON.parse(e.nativeEvent.data);
                 if (msg.type === 'openDetail') {
                   const item = logData.find(l => String(l.id) === String(msg.id));
-                  if (item) navigation.navigate('Detail', { item });
+                  openDetailFromMap(item);
                 } else if (msg.type === 'mapFullscreen') {
                   // 地图上的「全屏」按钮：全屏时铺满整屏并锁横屏，再点一次还原
                   if (msg.on) enterMapFullscreen();

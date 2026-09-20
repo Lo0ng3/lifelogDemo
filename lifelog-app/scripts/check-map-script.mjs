@@ -94,6 +94,7 @@ function bootMap({
   };
   const mapObj = {
     attributionControl: { setPrefix() {} },
+    doubleClickZoom: { disable() { calls.doubleClickDisabled = true; } },
     on(evt, fn) {
       // 事件名可能是 'moveend zoomend' 这样的组合串，逐个记下来方便自检里手动触发
       String(evt).split(' ').forEach((name) => { (calls.mapHandlers[name] = calls.mapHandlers[name] || []).push(fn); });
@@ -224,10 +225,10 @@ if (calls.zoomIn !== 1 || calls.zoomOut !== 1) fail.push('点击缩放按钮没�
 
 /* ------------------- 同一坐标的多条记录：合并成一个 + 数量角标 ------------------- */
 const pinHtml = (m) => String((m.api.__state ? (m.api.__state.options.icon || {}).html : m.opts.content && m.opts.content.innerHTML) || '');
-const mergedPin = pins.find((m) => pinHtml(m).includes('>2<'));
-if (!mergedPin) fail.push('同一个地点的两条记录没有合并出「角标 2」的标点');
-if (pins.some((m) => pinHtml(m).includes('>1<'))) fail.push('单条记录的标点不该出现数字角标');
-const pin = (mergedPin || pins[0]);
+// 3 条合法记录里两条同坐标 → 只画 2 个标点；标点上不再挂「有几条记录」的数字角标
+if (pins.some((m) => /<text/.test(pinHtml(m)))) fail.push('标点上不该再显示「这个地点有几条记录」的数字角标');
+const mergedPin = pins[0];
+const pin = mergedPin;
 
 /* ------------------- 标点手势：单击看评论 / 双击放大飞过去 ------------------- */
 if (!calls.mapOptions || calls.mapOptions.closePopupOnClick !== false) {
@@ -308,6 +309,7 @@ if (calls.tileOptions.some((t) => t.options.updateWhenZooming !== false)) {
 if (!calls.tileOptions.every((t) => t.options.keepBuffer <= 3)) {
   fail.push('瓦片图层的 keepBuffer 偏大（屏幕外留的瓦片越多，合成越重）');
 }
+if (calls.doubleClickDisabled) fail.push('栅格模式把 Leaflet 的双击放大关掉了（双击空白处应该能放大一级）');
 
 /* ======================= 高德栅格底图（不需要 key）那一遍 ======================= */
 // 旧版预热开头就是「没 key 就直接 return」，高德用户没填 key 时等于一张都不预热。
@@ -345,7 +347,7 @@ const ao = jsapi.calls.amapMapOptions;
 if (!ao) fail.push('矢量模式没有创建 AMap.Map');
 else {
   if (ao.mapStyle !== 'amap://styles/dark') fail.push(`深色下应当用官方深色样式，实际 ${ao.mapStyle}`);
-  if (ao.doubleClickZoom !== false) fail.push('高德地图没有关掉双击放大（双击要留给"飞到标点"）');
+  if (ao.doubleClickZoom === false) fail.push('矢量模式关掉了双击放大（双击空白处应该能放大一级）');
   if (ao.resizeEnable !== true) fail.push('高德地图没有打开 resizeEnable（全屏/转屏后尺寸不会跟）');
 }
 if (!jsapi.calls.tileOptions.length === false) { /* 矢量模式不建瓦片图层，这里不做断言 */ }
@@ -354,8 +356,10 @@ const jPins = jsapi.calls.markers.filter((m) => !m.isBadge);
 const jBadges = jsapi.calls.markers.filter((m) => m.isBadge);
 if (jPins.length !== 2) fail.push(`矢量模式标点数量应为 2，实际 ${jPins.length}`);
 if (jBadges.length !== 1) fail.push(`矢量模式次数徽章应为 1，实际 ${jBadges.length}`);
-const jMerged = jPins.find((m) => String(m.opts.content.innerHTML).includes('>2<'));
-if (!jMerged) fail.push('矢量模式没有合并出「角标 2」的标点');
+if (jPins.some((m) => /<text/.test(String(m.opts.content.innerHTML)))) {
+  fail.push('矢量模式标点上不该再显示记录条数角标');
+}
+const jMerged = jPins[0];
 if (!jsapi.calls.polylines.length) fail.push('矢量模式没有画轨迹线');
 else {
   const path = jsapi.calls.polylines[0].path;

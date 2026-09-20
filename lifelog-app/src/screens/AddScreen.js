@@ -33,6 +33,12 @@ const SUB_LABEL = {
 };
 const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '班次' };
 
+// 比对「相关记录」用的归一化：忽略空格、全半角标点与大小写
+const normKey = (s) => String(s || '')
+  .replace(/\s+/g, '')
+  .replace(/[（）()·・,，.。:：;；\-—_/|、]/g, '')
+  .toLowerCase();
+
 // 联想词条：标题 + 作者/年份，自然换行展示
 function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
   return (
@@ -385,6 +391,43 @@ export default function AddScreen({ navigation, route }) {
     }
     return { name: name.trim(), longitude: lng, latitude: lat };
   };
+
+  /* ---------------- 「已经有相关记录」提醒 ----------------
+     基本信息填完（类型 / 名称或行程 / 日期，不含评分·评论·影像）之后，
+     如果库里已经有同一个地点、同一条行程、同名作品的记录，就在表单里提示一下。
+     只是提醒：照样能保存（同名重看一部电影、同一个地方再去一次都很正常）。 */
+  const basicsReady = !!year && !!month && !!day && (
+    baseType === 'ticket' ? !!(ticketOrigin.trim() && ticketDest.trim())
+      : baseType === 'note' ? !!(noteTitle.trim() || comment.trim())
+        : !!searchQuery.trim()
+  );
+  const relatedRecords = useMemo(() => {
+    if (!basicsReady) return [];
+    const wantTitle = normKey(baseType === 'note' ? (noteTitle.trim() || comment.trim().split('\n')[0]) : searchQuery);
+    const wantFrom = normKey(ticketOrigin);
+    const wantTo = normKey(ticketDest);
+    const wantNo = normKey(ticketNo);
+    // 地点：坐标 200 米内就算同一个地方（检索结果的微小差异不该被当成两个地方）
+    const nearBy = (c) => {
+      if (!locationCoords || !c || c.latitude == null || c.longitude == null) return false;
+      const dy = (c.latitude - locationCoords.lat) * 111320;
+      const dx = (c.longitude - locationCoords.lng) * 111320 * Math.cos((c.latitude * Math.PI) / 180);
+      return Math.sqrt(dx * dx + dy * dy) <= 200;
+    };
+    return logData
+      .filter((it) => it && it.id !== editId && it.baseType === baseType)
+      .filter((it) => {
+        if (baseType === 'ticket') {
+          const sameRoute = !!wantFrom && !!wantTo
+            && normKey(it.start?.name) === wantFrom && normKey(it.end?.name) === wantTo;
+          const sameNo = !!wantNo && normKey(it.subtitle) === wantNo;
+          return sameRoute || sameNo;
+        }
+        if (baseType === 'location') return (!!wantTitle && normKey(it.title) === wantTitle) || nearBy(it.coordinates);
+        return !!wantTitle && normKey(it.title) === wantTitle;
+      })
+      .slice(0, 5);
+  }, [basicsReady, baseType, noteTitle, comment, searchQuery, ticketOrigin, ticketDest, ticketNo, locationCoords, logData, editId]);
 
   const handleSave = async () => {
     if (!year || !month || !day) {
@@ -766,6 +809,20 @@ export default function AddScreen({ navigation, route }) {
           </View>
 
           <View style={styles.divider} />
+          {/* 已经记过同一个地方 / 同一段行程 / 同一部作品时提醒一下（不拦保存） */}
+          {relatedRecords.length > 0 && (
+            <TouchableOpacity
+              style={styles.dupNote}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('Detail', { item: relatedRecords[0] })}
+            >
+              <Text style={styles.dupNoteTitle}>已经有 {relatedRecords.length} 条相关记录</Text>
+              <Text style={styles.dupNoteBody} numberOfLines={2}>
+                最近一条：{String(relatedRecords[0].date || '').slice(0, 10)} · {relatedRecords[0].title}
+                {'\n'}仍然可以继续保存，点这里先看一眼已有的那条。
+              </Text>
+            </TouchableOpacity>
+          )}
           {/* 随笔用心情 emoji 代替评分；心情必填 */}
           {baseType === 'note' ? (
             <View style={styles.ratingSection}>
@@ -970,6 +1027,12 @@ export default function AddScreen({ navigation, route }) {
 }
 
 const makeStyles = (c) => ({
+  dupNote: {
+    marginTop: 12, padding: 12, borderRadius: 12,
+    backgroundColor: c.warnSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.warnText,
+  },
+  dupNoteTitle: { fontSize: 13.5, fontWeight: '600', color: c.warnText },
+  dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 1.5, opacity: 0.92 },
   container: { flex: 1, backgroundColor: c.bg },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
   cancelText: { fontSize: 16, color: c.textSecondary },
