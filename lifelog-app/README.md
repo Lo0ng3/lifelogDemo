@@ -50,6 +50,23 @@
 memo 化的格子、虚拟化窗口收敛到 ±2 屏、滚动/拖动动画全部跑在 UI 线程（Reanimated），
 滚动过程中不再有 setState。
 
+## 从系统分享进来（图库选图 → 分享到「印记」）
+
+- 在系统图库/相册里选好照片或视频 → 分享 → 选「印记」，App 会被拉起（或从后台回到前台）
+  并**直接落到「添加」页**，这些影像已经挂在表单的照片区，类型 / 日期 / 评论照常自己填。
+- 原生入口：`expo-share-intent`（SDK 54 对应 v5）的 config plugin 在 `AndroidManifest` 里
+  给 MainActivity 加了 `ACTION_SEND` 与 `ACTION_SEND_MULTIPLE` 的 `image/*` / `video/*`
+  过滤条件，并把 launchMode 设为 `singleTask`（App 在前台时走 onNewIntent 而不是重开）。
+  **这是原生改动：必须重新构建 APK，也不能用 Expo Go。** iOS 这版显式关掉了（`disableIOS: true`），
+  要用的话得另配 share extension（该包在 iOS 上还需要一个 xcode patch）。
+- 分享进来的文件会先被原生模块落到**系统缓存**，缓存随时可能被清、而且不在 App 自己的媒体目录里，
+  所以 [ShareIntentBridge](src/components/ShareIntentBridge.js) 会**复制一份到 `documentDirectory/media/`**：
+  这样就走上了和应用内选图完全相同的流水线——保存记录时按 文件名/大小/尺寸 重链回相册原片，
+  重链成功即删掉副本（App 长期不持有副本）；重链不上也能当本地副本正常显示。
+- 实现位置：`App.js` 最外层挂 `ShareIntentProvider`，`ShareIntentBridge` 收下文件 → 复制 →
+  通过 `navigationRef` 跳到「Main / Add」并带上 `params.sharedMedia`，`AddScreen` 收到后追加到
+  `selectedImages` 并清掉参数（`shareToken` 保证同一批影像重复分享也能再次触发）。
+
 ## 视图与类型
 
 - 首页三段视图：**列表 / 月示 / 地图**。月示图上半是日历（圆点按一级类型着色，最多 3 个 + `+N`），

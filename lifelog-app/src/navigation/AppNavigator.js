@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { Compass, PlusCircle } from 'lucide-react-native';
 
 // 引入我们刚才写的两个页面
@@ -14,6 +14,10 @@ import { tabBarStyleFor } from './tabBarStyle';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+
+// 导航 ref：分享进来的影像要在「任意页面」都能跳到「添加」页（见 ShareIntentBridge），
+// 那时拿不到组件的 navigation prop，只能走这个全局 ref
+export const navigationRef = createNavigationContainerRef();
 
 function Tabs() {
   const { colors } = useTheme();
@@ -76,7 +80,7 @@ export default function AppNavigator() {
   }, [colors, isDark]);
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} ref={navigationRef}>
       <Stack.Navigator
         screenOptions={{
           headerShown: false,

@@ -44,6 +44,14 @@
       ],
       "@react-native-community/datetimepicker",
       [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": ["image/*", "video/*"],
+          "androidMultiIntentFilters": ["image/*", "video/*"],
+          "disableIOS": true
+        }
+      ],
+      [
         "expo-media-library",
         {
           "photosPermission": "需要访问相册权限，App 将直接读取相册中的照片和视频，不会在应用内重复保存副本。",

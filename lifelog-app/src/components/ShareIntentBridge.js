@@ -1,0 +1,91 @@
+// 系统分享 → App 选图：在图库/相册里选好照片，分享到「印记」，
+// 这里把分享进来的影像收下来并直接跳到「添加」页挂到表单上。
+//
+// 为什么还要复制一份：expo-share-intent 是把分享内容落到**系统缓存目录**的，
+// 缓存随时可能被系统清掉，而且那个路径不在 App 自己的媒体目录里——
+// 保存记录时的"重链回相册原片"逻辑（isAppOwnedMediaPath / relinkNewEntries）
+// 认不出它。所以统一复制进 documentDirectory/media/：
+//   · 与"应用内选图"完全同一条流水线：保存时按 文件名/大小/尺寸 重链回相册原片，
+//     重链成功就把副本删掉，App 长期不持有副本；
+//   · 重链不上（比如原片已删）也能当本地副本正常显示。
+import { useEffect, useRef } from 'react';
+import { useShareIntentContext } from 'expo-share-intent';
+import * as FileSystem from 'expo-file-system/legacy';
+
+import { navigationRef } from '../navigation/AppNavigator';
+
+const MEDIA_DIR = `${FileSystem.documentDirectory}media`;
+
+// 文件名里的非法字符换成下划线，其余（含中文）保留，方便和相册原片按名字匹配
+const safeName = (name, index, video) => {
+  const fallback = `shared_${Date.now()}_${index}.${video ? 'mp4' : 'jpg'}`;
+  const raw = String(name || '').trim() || fallback;
+  return raw.replace(/[\\/:*?"<>|\s]+/g, '_');
+};
+
+async function importSharedFiles(files) {
+  const info = await FileSystem.getInfoAsync(MEDIA_DIR);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(MEDIA_DIR, { intermediates: true });
+
+  const entries = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const from = f?.path;
+    if (!from) continue;
+    const video = String(f.mimeType || '').startsWith('video/');
+    const name = safeName(f.fileName, i, video);
+    let to = `${MEDIA_DIR}/${name}`;
+    try {
+      const exist = await FileSystem.getInfoAsync(to);
+      if (exist.exists) to = `${MEDIA_DIR}/${Date.now()}_${i}_${name}`;
+      await FileSystem.copyAsync({ from, to });
+    } catch (e) {
+      console.warn('[share] 复制分享的影像失败', from, e?.message || e);
+      continue;
+    }
+    entries.push({
+      uri: to,
+      isVideo: video,
+      filename: name,
+      size: typeof f.size === 'number' ? f.size : undefined,
+    });
+  }
+  return entries;
+}
+
+// 等导航容器就绪再跳（冷启动分享时导航还没挂好）
+const navigateToAdd = (params, tries = 0) => {
+  if (navigationRef.isReady()) {
+    navigationRef.navigate('Main', { screen: 'Add', params });
+    return;
+  }
+  if (tries > 40) return;                       // 约 5 秒还没就绪就放弃，避免死循环
+  setTimeout(() => navigateToAdd(params, tries + 1), 120);
+};
+
+export default function ShareIntentBridge() {
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  const handling = useRef(false);
+
+  useEffect(() => {
+    if (!hasShareIntent || handling.current) return;
+    const files = (shareIntent?.files || []).filter((f) => f?.path);
+    handling.current = true;
+    (async () => {
+      try {
+        const entries = files.length ? await importSharedFiles(files) : [];
+        resetShareIntent();
+        if (entries.length) {
+          // shareToken 用时间戳：同一批影像再分享一次也能触发接收端
+          navigateToAdd({ sharedMedia: entries, shareToken: Date.now() });
+        }
+      } catch (e) {
+        console.warn('[share] 处理分享内容失败', e?.message || e);
+      } finally {
+        handling.current = false;
+      }
+    })();
+  }, [hasShareIntent, shareIntent, resetShareIntent]);
+
+  return null;
+}

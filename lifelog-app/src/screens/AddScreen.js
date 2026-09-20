@@ -102,6 +102,20 @@ export default function AddScreen({ navigation, route }) {
   const [hour, setHour] = useState('');
   const [minute, setMinute] = useState('');
   const [selectedImages, setSelectedImages] = useState([]);
+
+  // 系统分享进来的影像（图库 → 分享 → 印记）：直接挂到当前表单上，
+  // 类型/日期这些还是由用户自己填；同一批影像重复分享也能再次触发（shareToken 变）
+  const sharedMedia = route?.params?.sharedMedia;
+  const shareToken = route?.params?.shareToken;
+  useEffect(() => {
+    if (!Array.isArray(sharedMedia) || sharedMedia.length === 0) return;
+    setSelectedImages((prev) => [...prev, ...sharedMedia]);
+    setShowSearchAuto(false);
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(`已加入 ${sharedMedia.length} 个分享进来的影像`, ToastAndroid.SHORT);
+    }
+    navigation.setParams({ sharedMedia: null, shareToken: undefined });
+  }, [sharedMedia, shareToken, navigation]);
   
   // 娱乐类别的网络检索状态
   const [searchQuery, setSearchQuery] = useState('');
