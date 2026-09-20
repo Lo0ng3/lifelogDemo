@@ -1,5 +1,6 @@
 // 生成本地地图预览页（浅色 + 深色），用于在浏览器里检查标点、轨迹、控件与弹窗。
-// 用法：node scripts/preview-map.mjs [--key=天地图Key]
+// 用法：node scripts/preview-map.mjs [--key=天地图Key] [--provider=amap]
+//       [--jsapi-key=高德Web端Key --jsapi-code=安全密钥]
 // 不给 Key 时预览页用 OSM 底图顶上，方便直接看出标点位置（App 内仍走天地图）
 // 产物：demo/map-preview-light.html、demo/map-preview-dark.html
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, copyFileSync } from 'node:fs';
@@ -36,6 +37,12 @@ const initialLogData = [
   { id: 10, baseType: 'ticket', subType: 'flight', title: '广州 → 曼谷', subtitle: 'CZ3081', date: '2025-03-15',
     start: { name: '广州白云国际机场', longitude: 113.3024, latitude: 23.3924 },
     end: { name: '素万那普国际机场', longitude: 100.7470, latitude: 13.6900 } },
+  // 同一个地点的第二条记录：预览页里应当并成"角标 2"的一个标点，点开后能左右翻
+  { id: 20, baseType: 'location', subType: 'location', title: '外滩 · 跨年', subtitle: '人山人海', date: '2024-01-01',
+    coordinates: { latitude: 31.2304, longitude: 121.4737 } },
+  // 和上面那条航班的出发机场同一个坐标：旅票起点 + 地点记录也会并到同一个标点上
+  { id: 21, baseType: 'location', subType: 'location', title: '首都机场 T3 接机', subtitle: '等了两个小时', date: '2024-02-10',
+    coordinates: { latitude: 40.0723, longitude: 116.5971 } },
 ];
 
 const leafletJs = read('vendor/leaflet/leaflet.min.js');
@@ -46,6 +53,12 @@ const tdtKey = keyArg ? keyArg.slice('--key='.length).trim() : (process.env.TDT_
 // 服务商：--provider=amap 用高德街道（不需要 key）；默认天地图
 const providerArg = process.argv.find((a) => a.startsWith('--provider='));
 const provider = providerArg ? providerArg.slice('--provider='.length).trim() : 'tianditu';
+// 矢量渲染预览：给了 JS API key 就走高德官方 SDK（浏览器里也能开，和 App 内同一份 HTML）
+const jsKeyArg = process.argv.find((a) => a.startsWith('--jsapi-key='));
+const jsCodeArg = process.argv.find((a) => a.startsWith('--jsapi-code='));
+const jsApiKey = jsKeyArg ? jsKeyArg.slice('--jsapi-key='.length).trim() : '';
+const securityCode = jsCodeArg ? jsCodeArg.slice('--jsapi-code='.length).trim() : '';
+const useJsApi = provider === 'amap' && !!jsApiKey;
 // 天地图没给 Key 的预览页补一层 OSM 瓦片，不然浏览器里只有底色和标点，看不出地理位置关系
 const osmFallback = (tdtKey || provider === 'amap') ? '' : `
 <script>
@@ -87,12 +100,15 @@ for (const scheme of ['light', 'dark']) {
     segs,
     tdtKey,
     provider,
+    jsApiKey,
+    securityCode,
+    dark: scheme === 'dark',
     colors: palettes[scheme].map,
-    leafletJs,
-    leafletCss,
+    leafletJs: useJsApi ? '' : leafletJs,
+    leafletCss: useJsApi ? '' : leafletCss,
   }).replace('</body>', `${osmFallback}</body>`);
-  const suffix = provider === 'amap' ? `-amap` : '';
+  const suffix = provider === 'amap' ? (useJsApi ? '-amap-jsapi' : '-amap') : '';
   const out = join(root, `demo/map-preview-${scheme}${suffix}.html`);
   writeFileSync(out, html, 'utf8');
-  console.log(`已生成 ${out}（${points.length} 个标点 / ${segs.length} 段轨迹）`);
+  console.log(`已生成 ${out}（${points.length} 个标点 / ${segs.length} 段轨迹${useJsApi ? '，高德 JS API 矢量渲染' : ''}）`);
 }

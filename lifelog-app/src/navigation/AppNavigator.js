@@ -1,5 +1,4 @@
 import React, { useMemo } from 'react';
-import { StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
@@ -11,6 +10,7 @@ import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
 import { useTheme } from '../theme/ThemeProvider';
+import { tabBarStyleFor } from './tabBarStyle';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -26,11 +26,7 @@ function Tabs() {
         // 配置底部导航栏的样式（跟随主题）
         tabBarActiveTintColor: colors.accent, // 选中时的颜色
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
-        tabBarStyle: {
-          backgroundColor: colors.bgElevated,
-          borderTopColor: colors.border,
-          borderTopWidth: StyleSheet.hairlineWidth,
-        },
+        tabBarStyle: tabBarStyleFor(colors),
         headerShown: false, // 隐藏默认的顶部标题栏，我们后续自己画
       }}
     >

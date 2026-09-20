@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal
+  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal,
+  useWindowDimensions
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings
@@ -31,6 +33,25 @@ import { buildMapHtml } from '../utils/mapHtml';
 import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
+import { tabBarStyleFor, HIDDEN_TAB_BAR } from '../navigation/tabBarStyle';
+
+// 屏幕方向锁：地图全屏时锁成横屏、退出时还原竖屏。
+// 用 try + require：万一装的是没有这个原生模块的旧包（没重新构建 APK），
+// 这里降级成"只铺满屏幕、不转屏"，而不是整个页面崩掉。
+let ScreenOrientation = null;
+try {
+  ScreenOrientation = require('expo-screen-orientation');
+} catch {
+  ScreenOrientation = null;
+}
+const setScreenLock = async (lock) => {
+  try {
+    if (!ScreenOrientation || lock == null) return;
+    await ScreenOrientation.lockAsync(lock);
+  } catch {
+    // 模拟器 / 旧安装包上锁不了就忽略：地图照样铺满，只是跟随设备方向
+  }
+};
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -83,9 +104,10 @@ export default function HomeScreen({ navigation }) {
   const {
     logData, syncMedia, importLogs,
     tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
+    amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
   } = useContext(LogContext);
   // 外观：始终跟随系统（和开屏图保持一致）
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
@@ -93,25 +115,37 @@ export default function HomeScreen({ navigation }) {
   // 地图服务设置弹窗：天地图 / 高德二选一，两家的 Key 各自保存
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keyDraft, setKeyDraft] = useState('');
+  const [jsKeyDraft, setJsKeyDraft] = useState('');
+  const [jsCodeDraft, setJsCodeDraft] = useState('');
   const [providerDraft, setProviderDraft] = useState(mapProvider);
   const openSettings = () => {
     setProviderDraft(mapProvider);
     setKeyDraft(mapProvider === 'amap' ? amapKey : tdtKey);
+    setJsKeyDraft(amapJsKey);
+    setJsCodeDraft(amapJsCode);
     setSettingsOpen(true);
   };
   // 切换服务商时把输入框换成对应的 key
   const switchProviderDraft = (next) => {
     setProviderDraft(next);
     setKeyDraft(next === 'amap' ? amapKey : tdtKey);
+    if (next === 'amap') {
+      setJsKeyDraft(amapJsKey);
+      setJsCodeDraft(amapJsCode);
+    }
   };
   const saveKey = async () => {
     await setMapProvider(providerDraft);
     if (providerDraft === 'amap') await setAmapKey(keyDraft);
     else await setTdtKey(keyDraft);
+    if (providerDraft === 'amap') {
+      await setAmapJsKey(jsKeyDraft);
+      await setAmapJsCode(jsCodeDraft);
+    }
     setSettingsOpen(false);
     if (Platform.OS === 'android') {
       ToastAndroid.show(
-        `${providerDraft === 'amap' ? '高德' : '天地图'}${keyDraft.trim() ? ' 已保存' : ' Key 已清除'}`,
+        `${providerDraft === 'amap' ? '高德' : '天地图'}${keyDraft.trim() || jsKeyDraft.trim() ? ' 已保存' : ' Key 已清除'}`,
         ToastAndroid.SHORT
       );
     }
@@ -233,6 +267,7 @@ export default function HomeScreen({ navigation }) {
   const pendingView = useRef(null);                   // 最近一次点击的目标视图
   const [mapMounted, setMapMounted] = useState(false); // 首次进地图才挂 WebView，之后一直保活
   const mapRef = useRef(null);
+
   useEffect(() => {
     if (viewMode !== 'map') return undefined;
     const timer = setTimeout(() => {
@@ -242,11 +277,58 @@ export default function HomeScreen({ navigation }) {
     }, 320);
     return () => clearTimeout(timer);
   }, [viewMode]);
+
+  /* ---------------- 地图全屏（横屏） ----------------
+     全屏不是换一个 WebView：地图层原地撑到整屏（WebView 不重建 → 瓦片、视角、
+     已经打开的卡片都保住），同时把屏幕锁成横屏并隐藏状态栏；退出时还原。
+     地图层是 viewArea 的子节点，用「负的左上 + 负的右下」把它顶到窗口四边，
+     这样不用写死头部/标题的高度。 */
+  const [mapFullscreen, setMapFullscreen] = useState(false);
+  const [fsInset, setFsInset] = useState(null);
+  const viewAreaRef = useRef(null);
+  const { width: winW, height: winH } = useWindowDimensions();
+
+  const measureViewArea = useCallback(() => new Promise((resolve) => {
+    const node = viewAreaRef.current;
+    if (!node || typeof node.measureInWindow !== 'function') { resolve(null); return; }
+    node.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
+  }), []);
+
+  // 进全屏 / 转屏之后都要重新量一次（转屏会改窗口尺寸和内边距）
+  useEffect(() => {
+    if (!mapFullscreen) { setFsInset(null); return undefined; }
+    let alive = true;
+    const measure = () => {
+      measureViewArea().then((rect) => {
+        if (!alive || !rect) return;
+        setFsInset({
+          left: -rect.x,
+          top: -rect.y,
+          right: -(winW - rect.x - rect.width),
+          bottom: -(winH - rect.y - rect.height),
+        });
+      });
+    };
+    // 两拍：转屏/布局刚变时先量一次，等动画彻底停了再校一次
+    const timers = [90, 600].map((delay) => setTimeout(measure, delay));
+    return () => { alive = false; timers.forEach(clearTimeout); };
+  }, [mapFullscreen, winW, winH, measureViewArea]);
+
+  // 尺寸变了要让 Leaflet 重新量：全屏、转屏、退出各补一次
+  useEffect(() => {
+    const sync = () => mapRef.current?.injectJavaScript(
+      `window.__rcMap && window.__rcMap.setFullscreen(${mapFullscreen ? 'true' : 'false'}); true;`
+    );
+    sync();
+    const timers = [260, 620].map((delay) => setTimeout(sync, delay));
+    return () => timers.forEach(clearTimeout);
+  }, [mapFullscreen, winW, winH]);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const sidebarAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.5)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
-  const toggleSidebar = (open) => {
+  const toggleSidebar = useCallback((open) => {
     setIsSidebarOpen(open);
     Animated.spring(sidebarAnim,
       {
@@ -258,7 +340,31 @@ export default function HomeScreen({ navigation }) {
       }
     ).start();
     Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 200, useNativeDriver: true }).start();
-  };
+  }, [sidebarAnim, overlayAnim]);
+
+  // 进 / 退全屏：先铺满（布局立刻变），再锁方向；退出反过来。
+  // 底部 TabBar 也要藏起来/装回去，不然全屏地图底部会露出一条 TabBar
+  const enterMapFullscreen = useCallback(() => {
+    toggleSidebar(false);
+    navigation.setOptions({ tabBarStyle: HIDDEN_TAB_BAR });
+    setMapFullscreen(true);
+    setScreenLock(ScreenOrientation?.OrientationLock?.LANDSCAPE);
+  }, [navigation, toggleSidebar]);
+  const exitMapFullscreen = useCallback(() => {
+    setMapFullscreen(false);
+    navigation.setOptions({ tabBarStyle: tabBarStyleFor(colors) });
+    setScreenLock(ScreenOrientation?.OrientationLock?.PORTRAIT_UP);
+  }, [navigation, colors]);
+  // 兜底：页面万一被卸载（卸载时还停在全屏），把方向和 TabBar 一起还原
+  const fullscreenStateRef = useRef({ on: false, tabBar: null });
+  useEffect(() => {
+    fullscreenStateRef.current = { on: mapFullscreen, tabBar: tabBarStyleFor(colors) };
+  }, [mapFullscreen, colors]);
+  useEffect(() => () => {
+    if (!fullscreenStateRef.current.on) return;
+    setScreenLock(ScreenOrientation?.OrientationLock?.PORTRAIT_UP);
+    navigation.setOptions({ tabBarStyle: fullscreenStateRef.current.tabBar });
+  }, [navigation]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilters, setActiveFilters] = useState([]);
@@ -273,6 +379,11 @@ export default function HomeScreen({ navigation }) {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!navigation.isFocused()) return false;
+      // 地图还在全屏（横屏）：先退全屏，不要直接提示退出应用
+      if (mapFullscreen) {
+        exitMapFullscreen();
+        return true;
+      }
       if (sheetOpen) {
         filterSheetRef.current?.dismiss();
         return true;
@@ -287,7 +398,7 @@ export default function HomeScreen({ navigation }) {
       return true;
     });
     return () => sub.remove();
-  }, [navigation, sheetOpen]);
+  }, [navigation, sheetOpen, mapFullscreen, exitMapFullscreen]);
 
   const renderBackdrop = useCallback(
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
@@ -353,16 +464,33 @@ export default function HomeScreen({ navigation }) {
     return { points, segs };
   }, [filteredAndSortedData]);
 
-  // 地图 HTML：Leaflet 本地内联注入 + 主题配色，深浅色切换时只重建这一份字符串
+  // 矢量渲染（高德官方 JS API 2.0）只在「高德 + 填了 Web端(JS API) key」时启用；
+  // 一旦 JS API 没能出图就自动切回栅格底图，改 key / 换服务商会重新试一次
+  const [jsApiFailed, setJsApiFailed] = useState(false);
+  const useJsApi = mapProvider === 'amap' && !!amapJsKey.trim() && !jsApiFailed;
+  useEffect(() => { setJsApiFailed(false); }, [amapJsKey, amapJsCode, mapProvider]);
+
+  // 地图 HTML：栅格模式内联本地 Leaflet，矢量模式加载高德官方 SDK；
+  // 主题色 / 深浅色切换时只重建这一份字符串
   const mapHtml = useMemo(() => buildMapHtml({
     points: mapData.points,
     segs: mapData.segs,
     tdtKey,
     provider: mapProvider,
+    jsApiKey: useJsApi ? amapJsKey : '',
+    securityCode: useJsApi ? amapJsCode : '',
+    dark: isDark,
+    notice: jsApiFailed ? '高德 JS API 没能出图，已切回栅格底图（检查 JS API Key / 安全密钥 / 网络）' : '',
     colors: colors.map,
-    leafletJs: LEAFLET_JS,
-    leafletCss: LEAFLET_CSS,
-  }), [mapData, tdtKey, mapProvider, colors.map]);
+    // 矢量模式不注入 Leaflet：省掉 145KB 的内联脚本，也少一份用不上的库
+    leafletJs: useJsApi ? '' : LEAFLET_JS,
+    leafletCss: useJsApi ? '' : LEAFLET_CSS,
+  }), [mapData, tdtKey, mapProvider, amapJsKey, amapJsCode, useJsApi, isDark, jsApiFailed, colors.map]);
+  // source 对象要 memo：否则每次 HomeScreen 重渲染（滑动侧边栏、打字搜索…）
+  // 都会给 WebView 换一个新对象，WebView 把整张地图连同瓦片重新加载一遍
+  // baseUrl 给页面一个正经的 https 源：高德 JS API 会往 vdata.amap.com 发跨域请求，
+  // about:blank（源为 null）在某些版本上会被拦
+  const mapSource = useMemo(() => ({ html: mapHtml, baseUrl: 'https://localhost/' }), [mapHtml]);
 
 
   const openDetail = useCallback((item) => navigation.navigate('Detail', { item }), [navigation]);
@@ -421,6 +549,8 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
+      {/* 地图全屏时把状态栏也收起来，才是真正的整屏 */}
+      <StatusBar hidden={mapFullscreen} />
 
       {isSidebarOpen && (
         <Animated.View style={[styles.sidebarOverlay, { opacity: overlayAnim }]}>
@@ -440,7 +570,7 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.menuItemText}>地图服务</Text>
                 <Text style={styles.menuItemSub}>
                   {mapProvider === 'amap'
-                    ? (amapKey ? '高德已配置（底图 + 地名检索）' : '高德未配置 Key，联想不可用')
+                    ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 地名检索已配置' : ' · 未配置检索 Key'}`
                     : (tdtKey ? '天地图已配置（底图 + 地名检索）' : '天地图未配置，地图与联想不可用')}
                 </Text>
               </View>
@@ -466,7 +596,7 @@ export default function HomeScreen({ navigation }) {
         </View>
       </Animated.View>
 
-      <View style={[styles.mainContent, { paddingTop: insets.top }]}>
+      <View style={[styles.mainContent, { paddingTop: insets.top }, mapFullscreen && styles.mainContentFullscreen]}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.profileBtn} onPress={() => toggleSidebar(true)}><User color={colors.textOnAccent} size={20} /></TouchableOpacity>
           <ViewSwitcher value={pillMode} onChange={changeView} />
@@ -492,7 +622,7 @@ export default function HomeScreen({ navigation }) {
         {/* 一次只显示一个视图。列表 / 日历用 display:none 切换（各自独立出现）；
             地图单独一层常驻：尺寸始终有效，切走时只把透明度降到 0，
             这样 Leaflet 不会把瓦片卸掉，切回来是秒开、不用重新下载 */}
-        <View style={styles.viewArea}>
+        <View style={[styles.viewArea, mapFullscreen && styles.viewAreaFullscreen]} ref={viewAreaRef} collapsable={false}>
         <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
@@ -518,12 +648,12 @@ export default function HomeScreen({ navigation }) {
         {mapMounted && (
         <Reanimated.View
           pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
-          style={[styles.mapLayer, mapLayerStyle]}
+          style={[styles.mapLayer, mapFullscreen && styles.mapLayerFullscreen, fsInset, mapLayerStyle]}
         >
           <WebView
             ref={mapRef}
             originWhitelist={['*']}
-            source={{ html: mapHtml }}
+            source={mapSource}
             style={styles.map}
             scrollEnabled={false}
             onMessage={(e) => {
@@ -533,6 +663,14 @@ export default function HomeScreen({ navigation }) {
                 if (msg.type === 'openDetail') {
                   const item = logData.find(l => String(l.id) === String(msg.id));
                   if (item) navigation.navigate('Detail', { item });
+                } else if (msg.type === 'mapFullscreen') {
+                  // 地图上的「全屏」按钮：全屏时铺满整屏并锁横屏，再点一次还原
+                  if (msg.on) enterMapFullscreen();
+                  else exitMapFullscreen();
+                } else if (msg.type === 'jsApiFailed') {
+                  // 高德 JS API 没出图（key / 安全密钥 / 网络 / WebGL）：切回栅格底图，
+                  // 地图照样能用，并在顶部说明原因
+                  setJsApiFailed(true);
                 }
               } catch {}
             }}
@@ -603,14 +741,41 @@ export default function HomeScreen({ navigation }) {
               style={styles.settingsInput}
               value={keyDraft}
               onChangeText={setKeyDraft}
-              placeholder={providerDraft === 'amap' ? '在 lbs.amap.com 控制台申请（Web 服务）' : '在 lbs.tianditu.gov.cn 免费申请'}
+              placeholder={providerDraft === 'amap' ? '在 lbs.amap.com 控制台申请，类型选「Web 服务」' : '在 lbs.tianditu.gov.cn 免费申请'}
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
             />
+            {providerDraft === 'amap' && (
+              <>
+                <Text style={[styles.settingsLabel, { marginTop: 14 }]}>高德 Web 端(JS API) Key</Text>
+                <TextInput
+                  style={styles.settingsInput}
+                  value={jsKeyDraft}
+                  onChangeText={setJsKeyDraft}
+                  placeholder="选填：填了就用官方矢量渲染，放大更顺"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Text style={[styles.settingsLabel, { marginTop: 10 }]}>安全密钥 securityJsCode</Text>
+                <TextInput
+                  style={styles.settingsInput}
+                  value={jsCodeDraft}
+                  onChangeText={setJsCodeDraft}
+                  placeholder="与上面那把 JS API Key 配对，缺一不可"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </>
+            )}
             <Text style={styles.settingsHint}>
               {providerDraft === 'amap'
-                ? '高德底图（街道图）不需要 Key；这里的 Key 只用于地点联想/地理编码，请申请「Web 服务」类型。坐标会自动做 GCJ-02 纠偏，两种服务商之间切换不会跑偏。'
+                ? '两把 Key 各管一件事，互不通用：①「Web 服务」Key 只用于地点联想 / 地理编码；'
+                  + '②「Web端(JS API)」Key + 安全密钥用来渲染底图——填了就是官方矢量渲染（缩放跟手、深色用官方深色样式），'
+                  + '不填则自动用高德栅格瓦片（免 Key，但放大是一格一格加载的）。'
+                  + 'JS API 加载失败会自动切回栅格底图，不会白屏。坐标自动做 GCJ-02 纠偏，两家之间切换不会跑偏。'
                 : '天地图 Key 同时用于底图与地点联想（WGS-84 无偏移）。Key 只保存在本机，换机后需重新填写。'}
             </Text>
             <View style={styles.settingsBtnRow}>
@@ -632,6 +797,8 @@ export default function HomeScreen({ navigation }) {
 const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   mainContent: { flex: 1 },
+  // 全屏时让页面主体压过侧边栏（地图铺满整屏后，侧边栏/遮罩还在同一层里）
+  mainContentFullscreen: { zIndex: 300 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, height: 44 },
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
   largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
@@ -652,8 +819,12 @@ const makeStyles = (c) => ({
   monthWrapper: { flex: 1, marginTop: 2, marginBottom: 20 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
+  // 全屏时把承载地图的容器抬到最上层：地图层靠负的四周补偿撑满整屏，
+  // 会盖住头部和标题，所以容器本身也要压过侧边栏（侧边栏 zIndex 100）
+  viewAreaFullscreen: { zIndex: 300 },
   // 地图层：绝对定位铺在同一块区域，隐藏时只降透明度（尺寸不变 → Leaflet 不会卸载瓦片）
   mapLayer: { ...StyleSheet.absoluteFillObject, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
+  mapLayerFullscreen: { marginTop: 0, marginHorizontal: 0, marginBottom: 0, borderRadius: 0 },
   emptyText: { fontSize: 14, color: c.textMuted },
   map: { flex: 1 },
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },

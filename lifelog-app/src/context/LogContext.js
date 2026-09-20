@@ -14,6 +14,11 @@ export const LogProvider = ({ children }) => {
   // 地图服务商：'tianditu'（默认）| 'amap'；两家的 key 各自保存
   const [mapProvider, setProviderState] = useState('tianditu');
   const [amapKey, setAmapKeyState] = useState('');
+  // 高德矢量渲染（官方 JS API 2.0）：Web端(JS API) key + 安全密钥。
+  // 填了就用矢量渲染，没填自动用栅格瓦片（免 key）；这两把 key 和上面那把
+  // 「Web 服务」key 各管一件事，互不通用。
+  const [amapJsKey, setAmapJsKeyState] = useState('');
+  const [amapJsCode, setAmapJsCodeState] = useState('');
 
   useEffect(() => {
     loadLogs();
@@ -21,6 +26,8 @@ export const LogProvider = ({ children }) => {
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu') setProviderState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_key').then(v => { if (v) setAmapKeyState(v); }).catch(() => {});
+    AsyncStorage.getItem('@amap_js_key').then(v => { if (v) setAmapJsKeyState(v); }).catch(() => {});
+    AsyncStorage.getItem('@amap_js_code').then(v => { if (v) setAmapJsCodeState(v); }).catch(() => {});
   }, []);
 
   const setTdtKey = async (key) => {
@@ -50,6 +57,26 @@ export const LogProvider = ({ children }) => {
       await AsyncStorage.setItem('@amap_key', next);
     } catch (e) {
       console.error('保存高德Key失败', e);
+    }
+  };
+
+  const setAmapJsKey = async (key) => {
+    const next = (key || '').trim();
+    setAmapJsKeyState(next);
+    try {
+      await AsyncStorage.setItem('@amap_js_key', next);
+    } catch (e) {
+      console.error('保存高德 JS API Key 失败', e);
+    }
+  };
+
+  const setAmapJsCode = async (code) => {
+    const next = (code || '').trim();
+    setAmapJsCodeState(next);
+    try {
+      await AsyncStorage.setItem('@amap_js_code', next);
+    } catch (e) {
+      console.error('保存高德安全密钥失败', e);
     }
   };
 
@@ -262,6 +289,7 @@ export const LogProvider = ({ children }) => {
     <LogContext.Provider value={{
       logData, addLog, deleteLog, updateLog, syncMedia, importLogs,
       tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
+      amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
     }}>
       {children}
     </LogContext.Provider>

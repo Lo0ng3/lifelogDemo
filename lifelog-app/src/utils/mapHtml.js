@@ -1,13 +1,27 @@
 // 地图 WebView 的 HTML 生成器（纯函数，可在 node 里直接跑出预览页）。
 //
-// 设计要点：
-// 1) Leaflet 由 App 本地打包（assets/vendor）注入，不再依赖 CDN：国内网络下
+// 两种渲染引擎，同一套交互与控件（标点聚合、内容卡分页、全屏、开关都在共享核心里，
+// 只有「怎么把底图/标点/线画出来」这一层按引擎实现）：
+//
+//   A. 高德 JS API 2.0（矢量瓦片 + WebGL，官方 SDK）——配了「Web端(JS API) key」时启用。
+//      这是唯一能追上高德 App 那种缩放顺滑度的路子；深色也用官方深色样式，不再拿
+//      CSS 滤镜反相瓦片。缺点：SDK 要联网从 webapi.amap.com 加载，key / 安全密钥
+//      配错或网络不通就画不出来 —— 所以有自动回退（见 B）。
+//   B. Leaflet + 栅格瓦片（天地图 / 高德街道图）——默认与回退路径，不需要高德 key。
+//
+// 其它设计要点：
+// 1) Leaflet 由 App 本地打包（vendor/leaflet）内联注入，不依赖 CDN：国内网络下
 //    jsdelivr/unpkg 经常拉不到，库加载失败时整张地图（连同标点）都会是空白；
 // 2) 标点用内联 SVG 画，不依赖任何外部 CSS 类，避免个别 WebView 上
 //    transform/border-radius 组合渲染异常导致「标点不见了」；
-// 3) 控制条只保留两组小控件：右下角「轨迹 / 标点」两个小胶囊 + 右上角缩放，
-//    尽量少遮挡地图；
-// 4) 点标点 = 地图飞到该点并放大 + 弹出内容卡片（卡片里可跳详情）。
+// 3) 控制条只保留两组小控件：右下角「轨迹 / 标点」两个小胶囊 + 右上角缩放/全览/全屏；
+// 4) 点标点 = 地图飞到该点并放大 + 弹出内容卡片（卡片里可跳详情）；
+// 5) 同一个坐标上的多条记录只画一个标点（角标显示条数），卡片里左右切换着看，
+//    不再叠成一摞谁也点不准的针；
+// 6) 「全屏」按钮通过 postMessage 交给 RN 侧铺满整屏 + 锁横屏（WebView 不重建，
+//    所以视角和已打开的卡片都保住）；
+// 7) 栅格模式下放大顺不顺，主要看「新一级的瓦片什么时候开始下」：缩放动画期间不重算
+//    瓦片网格，并在地图停下来 / 刚开始缩放时就把下一级瓦片预热进 WebView 缓存。
 
 const DEFAULT_MAP_COLORS = {
   bg: '#F2F2F7',
@@ -26,9 +40,13 @@ const DEFAULT_MAP_COLORS = {
 
 const TYPE_COLORS = { flight: '#2F7BF6', train: '#10B981', bus: '#F97316', ship: '#8B5CF6' };
 const LOCATION_COLOR = '#EE4D3D';
+// 内容卡上显示的类型名（和 recordMeta.js 里的二级类型标签保持一致）
+const TYPE_LABELS = { flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船', location: '地点' };
 
-// 底图：天地图（WGS-84，需要 tk）/ 高德街道（GCJ-02，不需要 key）
+// 底图（栅格模式）：天地图（WGS-84，需要 tk）/ 高德街道（GCJ-02，不需要 key）
 const AMAP_TILE = 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}';
+// 矢量模式：高德官方 JS API 2.0
+const AMAP_JS_BASE = 'https://webapi.amap.com/maps?v=2.0&key=';
 
 // WGS-84 → GCJ-02：内部坐标统一 WGS-84，高德底图是火星坐标，不做纠偏会偏 300~600 米
 const GCJ_A = 6378245.0;
@@ -48,6 +66,9 @@ const gcjTransformLng = (x, y) => {
   return ret;
 };
 const wgs84ToGcj02 = (lat, lng) => {
+  // 先转数字：坐标万一以字符串传进来，"lat + dLat" 会变成字符串拼接（结果是 NaN）
+  lat = Number(lat); lng = Number(lng);
+  if (!isFinite(lat) || !isFinite(lng)) return { lat, lng };
   if (!(lng > 72.004 && lng < 137.8347 && lat > 0.8293 && lat < 55.8271)) return { lat, lng };
   let dLat = gcjTransformLat(lng - 105.0, lat - 35.0);
   let dLng = gcjTransformLng(lng - 105.0, lat - 35.0);
@@ -63,20 +84,33 @@ const wgs84ToGcj02 = (lat, lng) => {
 // 嵌入 script 的 JSON：转义 "<" 防止内容提前闭合标签
 const safeJson = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
 
+// 全屏按钮的两个图标（进入 = 四角向外，退出 = 四角向内）
+const ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg>';
+const ICON_COLLAPSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M9 20v-5H4"/><path d="M15 20v-5h5"/></svg>';
+
 export function buildMapHtml({
   points = [],
   segs = [],
   tdtKey = '',
   provider = 'tianditu',
+  jsApiKey = '',
+  securityCode = '',
+  notice = '',
+  dark,
   colors,
   leafletJs = '',
   leafletCss = '',
 } = {}) {
   const c = { ...DEFAULT_MAP_COLORS, ...(colors || {}) };
-  const isDark = /invert/.test(c.tileFilter || '');
-  const hasLeaflet = !!leafletJs;
-  // 高德底图：坐标先纠偏成 GCJ-02 再交给 WebView；天地图不用动
+  // 深色与否由调用方显式给（色板里没有这个字段）；没给就按 tileFilter 猜
+  const isDark = typeof dark === 'boolean' ? dark : /invert/.test(c.tileFilter || '');
   const useAmap = provider === 'amap';
+  // 配了「Web端(JS API) key」才走矢量渲染；没配就用栅格瓦片（免 key）
+  const apiKey = String(jsApiKey || '').trim();
+  const security = String(securityCode || '').trim();
+  const useJsApi = useAmap && !!apiKey;
+  const hasLeaflet = !useJsApi && !!leafletJs;
+  // 高德两种模式都是 GCJ-02；天地图不用动
   const shift = useAmap ? (({ lat, lng }) => wgs84ToGcj02(lat, lng)) : ((p) => p);
   const shiftedPoints = points.map((p) => {
     const s = shift({ lat: p.lat, lng: p.lng });
@@ -92,20 +126,20 @@ export function buildMapHtml({
     };
   });
 
-  // 本地库缺失时的兜底：仍然给一组 CDN 地址，至少不是必然失败
-  const cdnFallback = hasLeaflet ? '' : `
+  // 栅格模式下 Leaflet 本地库缺失时的兜底：仍然给一组 CDN 地址，至少不是必然失败
+  const cdnFallback = (!useJsApi && !leafletJs) ? `
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script>
         if (!window.L) document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"><\\/scr' + 'ipt>');
-      </script>`;
+      </script>` : '';
 
   return `<!DOCTYPE html>
   <html>
   <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-      <style>${leafletCss}</style>
+      ${hasLeaflet ? `<style>${leafletCss}</style>` : ''}
       ${cdnFallback}
       <style>
           html, body { height: 100%; width: 100%; margin: 0; padding: 0; background: ${c.bg};
@@ -113,19 +147,14 @@ export function buildMapHtml({
           #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: ${c.bg}; }
           .leaflet-control-attribution { display: none; }
           .leaflet-container { background: ${c.bg}; outline: none; }
-          ${c.tileFilter && c.tileFilter !== 'none'
+          ${hasLeaflet && c.tileFilter && c.tileFilter !== 'none'
             ? `.leaflet-tile-pane { filter: ${c.tileFilter}; }`
             : ''}
+          /* 高德 JS API 自带版权/Logo，按规范原样保留，不做隐藏 */
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
               box-shadow: 0 6px 22px rgba(0,0,0,${isDark ? '0.55' : '0.22'}); }
           .leaflet-popup-content { margin: 11px 13px; line-height: 1.45; }
           .leaflet-popup-tip { background: ${c.cardBg}; }
-          .rc-title { font-size: 14px; font-weight: 700; color: ${c.cardText}; }
-          .rc-meta { font-size: 11.5px; color: ${c.cardMeta}; margin-top: 2px; }
-          .rc-note { font-size: 12.5px; color: ${c.cardNote}; margin-top: 5px; max-width: 210px;
-              display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-          .rc-open { margin-top: 8px; font-size: 12.5px; font-weight: 600; color: ${c.controlText === '#374151' ? '#007AFF' : '#0A84FF'};
-              background: none; border: none; padding: 0; font-family: inherit; }
 
           /* ---- 控件：只占很小一块，尽量不挡地图 ---- */
           .zoomer { position: absolute; right: 10px; top: 10px; z-index: 800; display: flex; flex-direction: column;
@@ -137,6 +166,7 @@ export function buildMapHtml({
           .zoomer button { width: 32px; height: 30px; border: none; background: transparent; color: ${c.controlText};
               font-size: 15px; line-height: 1; cursor: pointer; font-family: inherit; }
           .zoomer button + button { border-top: 0.5px solid ${c.controlBorder}; }
+          .zoomer button svg { width: 15px; height: 15px; display: block; margin: 0 auto; }
           .zoomer button:active { background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; }
 
           .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex; gap: 6px; }
@@ -154,7 +184,7 @@ export function buildMapHtml({
               box-shadow: 0 3px 12px rgba(0,0,0,${isDark ? '0.45' : '0.18'}); opacity: 0; transition: opacity .18s; }
           .toast.show { opacity: 1; }
 
-          /* 标点内容卡：自绘浮层（不走 Leaflet 弹窗，所以不会被地图的点击事件关掉），
+          /* 标点内容卡：自绘浮层（不走引擎自带的弹窗，所以不会被地图的点击事件关掉），
              位置由 JS 跟着标点算，默认浮在标点上方，避免挡住标点本身影响连点两次 */
           .rcCard { position: absolute; left: 0; top: 0; z-index: 900; display: none; width: 224px;
               background: ${c.cardBg}; color: ${c.cardText}; border-radius: 13px; padding: 11px 13px;
@@ -169,7 +199,15 @@ export function buildMapHtml({
               font-size: 13px; line-height: 1; font-family: inherit; }
           .rcCard .m { font-size: 11.5px; color: ${c.cardMeta}; margin-top: 3px; }
           .rcCard .n { font-size: 12.5px; color: ${c.cardNote}; margin-top: 6px; line-height: 1.5; max-height: 54px; overflow: hidden; }
-          .rcCard .go { margin-top: 9px; font-size: 12.5px; font-weight: 600; color: ${c.controlText === '#374151' ? '#007AFF' : '#0A84FF'};
+          /* 底部一行：左边是同一条记录集里的左右切换（1/3），右边是查看详情 */
+          .rcCard .ft { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+          .rcCard .pg { flex: none; width: 26px; height: 26px; border-radius: 13px; border: none; padding: 0;
+              background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; color: ${c.cardText};
+              font-size: 15px; line-height: 1; font-family: inherit; }
+          .rcCard .pg:active { background: ${isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.12)'}; }
+          .rcCard .pi { flex: none; min-width: 30px; text-align: center; font-size: 11.5px; color: ${c.cardMeta};
+              font-variant-numeric: tabular-nums; }
+          .rcCard .go { margin-left: auto; font-size: 12.5px; font-weight: 600; color: ${c.controlText === '#374151' ? '#007AFF' : '#0A84FF'};
               background: none; border: none; padding: 0; font-family: inherit; }
 
           .hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 700;
@@ -186,6 +224,7 @@ export function buildMapHtml({
           <button id="zin" aria-label="放大">+</button>
           <button id="zout" aria-label="缩小">−</button>
           <button id="zfit" aria-label="全览">⤢</button>
+          <button id="zfull" aria-label="全屏">${ICON_EXPAND}</button>
       </div>
       <div class="tools">
           <button id="tTraj" class="tool on" aria-label="出行轨迹">
@@ -202,25 +241,39 @@ export function buildMapHtml({
       <div class="rcCard" id="rcCard"></div>
 
       ${hasLeaflet ? `<script>${leafletJs}</script>` : ''}
+      ${useJsApi ? `<script>
+        // 安全密钥必须在 SDK 脚本之前设置（高德 2021-12 之后新建的 JS API key 都要配）
+        window._AMapSecurityConfig = { securityJsCode: ${safeJson(security)} };
+      </script>
+      <script src="${AMAP_JS_BASE}${encodeURIComponent(apiKey)}"
+        onerror="window.__rcAmapScriptError = '脚本加载失败'"></script>` : ''}
       <script>
           var POINTS = ${safeJson(shiftedPoints)};
           var SEGS = ${safeJson(shiftedSegs)};
           var TK = ${safeJson(tdtKey || '')};
           var PROVIDER = ${safeJson(provider)};
+          var IS_JSAPI = ${useJsApi ? 'true' : 'false'};
           var USE_AMAP = PROVIDER === 'amap';
-          var NEED_KEY = !USE_AMAP;                    // 高德底图不需要 key
+          var NEED_KEY = !USE_AMAP;                    // 只有天地图底图需要 key
           var COLORS = ${safeJson(TYPE_COLORS)};
           var LOC_COLOR = ${safeJson(LOCATION_COLOR)};
           var DOT_BORDER = ${safeJson(c.dotBorder)};
           var MISSING_BG = ${safeJson(c.bg)};
+          var TYPE_LABELS = ${safeJson(TYPE_LABELS)};
+          var EXPAND_ICON = ${safeJson(ICON_EXPAND)};
+          var COLLAPSE_ICON = ${safeJson(ICON_COLLAPSE)};
+          var NOTICE = ${safeJson(notice || '')};
+          var DARK = ${isDark ? 'true' : 'false'};
+          var fullscreen = false;
+          // 用户动过地图（拖/缩）之后不再自动全览
+          var mapTouched = false;
 
           /* ------------------------------------------------------------------
            * 坐标兜底（1.6.6「放大缩小失效 + 没有标点」的根因就在这）
            *
-           * Leaflet 的 LatLng 遇到 NaN/undefined 会直接抛 "Invalid LatLng object"。
-           * 一旦某条记录的坐标缺失（例如只有 latitude、longitude 被 JSON 丢掉），
-           * 抛错会把后面所有语句一起打断——于是瓦片还在（早就加好了），
-           * 但标点画不出来，连缩放按钮的 onclick 都没绑上，表现就是"地图在、按钮点了没反应"。
+           * 引擎的 LatLng 遇到 NaN/undefined 会直接抛错（Leaflet 是
+           * "Invalid LatLng object"），一旦某条记录的坐标缺失，抛错会把后面所有语句
+           * 一起打断——于是瓦片还在，但标点画不出来，连缩放按钮的 onclick 都没绑上。
            * 所以：先把脏坐标滤掉，每个图层各自 try，控件绑定放在绘制之前。
            * ------------------------------------------------------------------ */
           function num(v) {
@@ -246,14 +299,18 @@ export function buildMapHtml({
           SEGS = SEGS.map(cleanSeg).filter(Boolean);
           var DROPPED = RAW - (POINTS.length + SEGS.length);
 
-          function safe(fn) { try { return fn(); } catch (e) { return null; } }
-
+          function safe(fn) { try { return fn(); } catch (e) { if (window.__rcDebug) console.log('rc-safe: ' + (e && e.message)); return null; } }
           function esc(s) {
               return String(s == null ? '' : s)
                   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
           }
           function $(id) { return document.getElementById(id); }
+          function postMsg(msg) {
+              try {
+                  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+              } catch (e) {}
+          }
           function showBanner(text) {
               var b = $('banner'); if (!b) return;
               b.textContent = text; b.style.display = 'block';
@@ -274,11 +331,8 @@ export function buildMapHtml({
           }
           // 桥接：弹窗「查看详情」→ postMessage → 应用侧跳转详情页
           window.openDetail = function (id) {
-              var msg = JSON.stringify({ type: 'openDetail', id: id });
-              if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+              postMsg({ type: 'openDetail', id: id });
           };
-
-          // 内容卡片里的「查看详情」用事件委托绑定，避免把 id 拼进 onclick 属性
           document.addEventListener('click', function (e) {
               var el = e.target && e.target.closest ? e.target.closest('.rc-open') : null;
               if (!el) return;
@@ -287,58 +341,145 @@ export function buildMapHtml({
               window.openDetail(el.getAttribute('data-detail'));
           });
 
-          function boot() {
-          if (!window.L) {
-              // 库没起来时给明确提示，不留一块无法解释的空白
-              if (NEED_KEY && !TK) showBanner('未配置天地图 Key，可在侧边栏「地图服务」中填写');
-              showHint('地图组件未能加载<br/><span style="font-size:11.5px">请检查网络后重新进入地图页</span>');
-              return;
+          /* ---------------- 标点聚合 ----------------
+             同一个地点往往有好几条记录（同一个机场飞过很多次、同一个地方去过很多回）。
+             以前是一条记录一根针，针一模一样地叠在一起，点到的永远是最后一根，
+             前面的记录等于看不见。现在按坐标合并：一个地点一根针，
+             右上角角标写「这个点有几条记录」，点开后用卡片里的左右箭头翻。 */
+          function groupKey(p) {
+              // 4 位小数 ≈ 11 米：同一个地点因检索/录入产生的微小差异也算同一个点
+              return p.lat.toFixed(4) + ',' + p.lng.toFixed(4);
           }
-
-          // closePopupOnClick: false —— 评论什么时候关由我们自己决定（默认行为会把
-          // 标点刚弹出的评论立刻关掉，表现就是"单击标点没反应"）
-          var map = L.map('map', { zoomControl: false, attributionControl: true, closePopupOnClick: false }).setView([34.0, 108.0], 4);
-          map.attributionControl.setPrefix('');
-          // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级，
-          // 而我们要的是双击直接飞到该标点（缩放靠右下角/右上角控件就够了）
-          if (map.doubleClickZoom) map.doubleClickZoom.disable();
-          // 点地图空白处收起内容卡（标点的点击用 bubblingMouseEvents:false 拦住了，不会走到这里）
-          map.on('click', function () { hideCard(); });
-          // 手机端 Leaflet 默认 updateWhenIdle=true：放大过程中不加载新瓦片，
-          // 等动画结束才开始拉，看起来就是"放大很慢"。改成边放大边加载（false），
-          // 并把 keepBuffer 调大，平移/缩放时少出现空白和闪烁。
-          var tileOpts = { maxZoom: 18, updateWhenIdle: false, keepBuffer: 4 };
-          if (USE_AMAP) {
-              // 高德街道（矢量 + 注记一起出图），不需要 key
-              L.tileLayer(${safeJson(AMAP_TILE)}, Object.assign({ subdomains: '1234' }, tileOpts)).addTo(map);
-          } else if (TK) {
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
-              L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
+          function groupColor(records) {
+              for (var i = 0; i < records.length; i++) {
+                  if (records[i].kind === 'location') return LOC_COLOR;   // 有地点记录就按地点（红）画
+              }
+              return COLORS[records[0].subType] || '#2F7BF6';
           }
+          function buildGroups() {
+              var buckets = {}, groups = [];
+              POINTS.forEach(function (p) {
+                  var key = groupKey(p);
+                  var g = buckets[key];
+                  if (!g) {
+                      g = { id: 'g' + (groups.length + 1), lat: p.lat, lng: p.lng, records: [] };
+                      buckets[key] = g;
+                      groups.push(g);
+                  }
+                  g.records.push(p);
+              });
+              groups.forEach(function (g) {
+                  // 有地点记录的归「标点」层，纯旅票的归「轨迹」层（两层各有开关）
+                  g.onLoc = g.records.some(function (r) { return r.kind === 'location'; });
+                  g.color = groupColor(g.records);
+              });
+              return groups;
+          }
+          var GROUPS = [];
 
-          var locLayer = L.layerGroup().addTo(map);
-          var trajLayer = L.layerGroup().addTo(map);
-          var trajOn = true, locOn = true;
-          var allMarkers = [];
-
-          // 标点：内联 SVG 画水滴型定位标，不依赖任何外部样式类
-          function pinIcon(color) {
-              var svg = '<svg width="22" height="28" viewBox="0 0 22 28" xmlns="http://www.w3.org/2000/svg">'
+          // 标点：内联 SVG 画水滴型定位标，不依赖任何外部样式类。
+          // 记录数 > 1 时在右上角加一个数字角标（同一个 SVG 里画，不额外堆 DOM 节点）。
+          function pinIcon(color, count) {
+              var badge = '';
+              if (count > 1) {
+                  badge = '<circle cx="31" cy="8" r="7" fill="' + color + '" stroke="' + DOT_BORDER + '" stroke-width="1.6"/>'
+                      + '<text x="31" y="11.4" text-anchor="middle" font-size="9" font-weight="700" fill="#FFF"'
+                      + ' font-family="-apple-system, system-ui, sans-serif">' + (count > 99 ? '99+' : count) + '</text>';
+              }
+              return '<svg width="40" height="28" viewBox="0 0 40 28" xmlns="http://www.w3.org/2000/svg">'
                   + '<path d="M11 26.4C11 26.4 19.4 17.2 19.4 10.6A8.4 8.4 0 1 0 2.6 10.6C2.6 17.2 11 26.4 11 26.4Z" fill="' + color + '" stroke="' + DOT_BORDER + '" stroke-width="1.8"/>'
-                  + '<circle cx="11" cy="10.5" r="3.2" fill="' + DOT_BORDER + '"/></svg>';
-              return L.divIcon({ className: 'rc-pin', html: svg, iconSize: [22, 28], iconAnchor: [11, 26], popupAnchor: [0, -22] });
+                  + '<circle cx="11" cy="10.5" r="3.2" fill="' + DOT_BORDER + '"/>'
+                  + badge
+                  + '</svg>';
           }
           function badgeIcon(count, color) {
-              var html = '<div style="min-width:22px;height:22px;padding:0 4px;border-radius:11px;background:' + DOT_BORDER
+              return '<div style="min-width:22px;height:22px;padding:0 4px;border-radius:11px;background:' + DOT_BORDER
                   + ';border:2px solid ' + color + ';color:' + color + ';font-size:11px;font-weight:700;'
                   + 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;">×' + count + '</div>';
-              return L.divIcon({ className: 'rc-badge', html: html, iconSize: [22, 22], iconAnchor: [11, 11] });
+          }
+
+          /* ---------------- 标点手势 ----------------
+             单击 = 显示/收起内容卡（不移动地图）；连点两次 = 放大飞到该标点。
+
+             这里不依赖引擎的 click 合成：Android WebView 上 click 的时机和次数都不太一样
+             （有的要等 ~300ms，有的还会多给一次），之前就出现过"单击没反应、双击才冒评论"。
+             现在直接绑在标点 DOM 元素上，用 pointerup / touchend / click 里最先到的那个处理，
+             并拦在自己这里不让它冒泡到地图（否则地图会立刻把刚打开的评论关掉）。
+             引擎自己的 click 只当兜底，且用 TAP_GATE 去重。 */
+          var TAP_GATE = { lastDomTapAt: 0 };
+          function attachPinTap(el, onTap) {
+              if (!el || !el.addEventListener || el.__rcTapBound) return;
+              el.__rcTapBound = true;
+              var downAt = 0, downX = 0, downY = 0, lastEnd = 0;
+              function pointOf(ev) {
+                  var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
+                  return { x: t.clientX || 0, y: t.clientY || 0 };
+              }
+              function consume(ev) {
+                  if (ev) {
+                      if (ev.stopPropagation) ev.stopPropagation();
+                      if (ev.cancelable && ev.preventDefault) ev.preventDefault();
+                  }
+                  TAP_GATE.lastDomTapAt = Date.now();
+                  onTap();
+              }
+              function onDown(ev) {
+                  var p = pointOf(ev);
+                  downAt = Date.now(); downX = p.x; downY = p.y;
+              }
+              function onEnd(ev) {
+                  var now = Date.now();
+                  if (now - lastEnd < 40) return;            // pointerup / touchend 同一拍只算一次
+                  lastEnd = now;
+                  var p = pointOf(ev);
+                  var moved = Math.abs(p.x - downX) + Math.abs(p.y - downY);
+                  // 长按或拖动过（多半是在拖地图）不算点击
+                  if (moved > 14 || (downAt && now - downAt > 800)) return;
+                  consume(ev);
+              }
+              el.addEventListener('pointerdown', onDown, true);
+              el.addEventListener('touchstart', onDown, true);
+              el.addEventListener('pointerup', onEnd, true);
+              el.addEventListener('touchend', onEnd, true);
+              el.addEventListener('click', function (ev) {
+                  if (Date.now() - lastEnd < 600) return;    // 上面已经处理过这一下
+                  consume(ev);
+              }, true);
+          }
+          // 引擎 click 的兜底入口：DOM 那层刚处理过就跳过，避免一次点击算两下
+          function fallbackTap(onTap) {
+              return function () {
+                  if (Date.now() - TAP_GATE.lastDomTapAt < 600) return;
+                  onTap();
+              };
+          }
+          var DOUBLE_TAP_MS = 320;
+          function makeTapHandler(g) {
+              var lastTapId = null, lastTapAt = 0;
+              return function () {
+                  var now = Date.now();
+                  if (lastTapId === g.id && (now - lastTapAt) < DOUBLE_TAP_MS) {
+                      // 连点两次：收掉单击弹出来的内容卡，然后飞过去
+                      lastTapId = null; lastTapAt = 0;
+                      hideCard();
+                      focusPoint(g);
+                      return;
+                  }
+                  lastTapId = g.id; lastTapAt = now;
+                  // 单击：这个点没开卡片就弹出来（从最新一条记录开始），已经开着就收起。
+                  // 不走引擎自带的弹窗，所以不会被地图的点击事件顺手关掉
+                  safe(function () {
+                      if (cardGroup && cardGroup.id === g.id) hideCard();
+                      else showCard(g, 0);
+                  });
+              };
           }
 
           /* ---------------- 标点内容卡 ----------------
-             不再用 Leaflet 弹窗：弹窗会被地图自身的点击事件关掉（单击"没反应"的根源），
-             而且弹窗还带 autoPan，会出现"点一下地图动了但看不到内容"。 */
-          var cardPointId = null;
+             一个标点上有多条记录时，卡片底部给「‹ 2/3 ›」左右切换（也可以左右滑卡片），
+             标题 / 日期 / 类型 / 备注 / 查看详情 都跟着当前这一条走。 */
+          var cardGroup = null;
+          var cardIndex = 0;
           var cardLatLng = null;
 
           // 把内容卡摆到标点上方（贴近时自动翻到下方），并留出 34px 让标点本身露出来，
@@ -346,8 +487,8 @@ export function buildMapHtml({
           function positionCard() {
               var card = $('rcCard');
               if (!card || !cardLatLng || card.style.display === 'none') return;
-              var pt = map.latLngToContainerPoint(cardLatLng);
-              var size = map.getSize();
+              var pt = Engine.toPoint(cardLatLng);
+              var size = mapSize();
               var w = card.offsetWidth || 224;
               var h = card.offsetHeight || 90;
               var left = Math.round(pt.x - w / 2);
@@ -364,186 +505,410 @@ export function buildMapHtml({
               if (cardRaf) return;
               cardRaf = requestAnimationFrame(function () { cardRaf = 0; positionCard(); });
           }
-
-          function showCard(p) {
+          function mapSize() {
+              var el = $('map');
+              return el ? { x: el.clientWidth || 1, y: el.clientHeight || 1 } : { x: 1, y: 1 };
+          }
+          function typeLabel(p) {
+              return TYPE_LABELS[p.kind === 'location' ? 'location' : p.subType] || '';
+          }
+          function renderCard() {
               var card = $('rcCard');
-              if (!card) return;
-              cardPointId = p.id;
-              cardLatLng = [p.lat, p.lng];
+              if (!card || !cardGroup) return;
+              var list = cardGroup.records;
+              var n = list.length;
+              if (cardIndex >= n) cardIndex = 0;
+              var p = list[cardIndex];
+              var meta = [p.date, typeLabel(p)].filter(Boolean).join(' · ');
               card.innerHTML =
                   '<div class="row"><span class="t">' + esc(p.title) + '</span>' +
                   '<button class="x" id="rcCardClose">✕</button></div>' +
-                  '<div class="m">' + esc(p.date) + '</div>' +
+                  '<div class="m">' + esc(meta) + '</div>' +
                   (p.note ? '<div class="n">' + esc(p.note) + '</div>' : '') +
-                  '<button class="go rc-open" data-detail="' + esc(String(p.id)) + '">查看详情 ›</button>';
+                  '<div class="ft">' +
+                  (n > 1
+                      ? '<button class="pg" id="rcPrev" aria-label="上一条记录">‹</button>' +
+                        '<span class="pi">' + (cardIndex + 1) + '/' + n + '</span>' +
+                        '<button class="pg" id="rcNext" aria-label="下一条记录">›</button>'
+                      : '') +
+                  '<button class="go rc-open" data-detail="' + esc(String(p.id)) + '">查看详情 ›</button>' +
+                  '</div>';
+              var close = $('rcCardClose');
+              if (close) close.onclick = function (ev) { if (ev) ev.stopPropagation(); hideCard(); };
+              function bind(btnId, delta) {
+                  var b = $(btnId);
+                  if (b) b.onclick = function (ev) { if (ev) ev.stopPropagation(); stepCard(delta); };
+              }
+              bind('rcPrev', -1);
+              bind('rcNext', 1);
+          }
+          function stepCard(delta) {
+              if (!cardGroup) return;
+              var n = cardGroup.records.length;
+              if (n < 2) return;
+              cardIndex = (cardIndex + delta + n) % n;   // 首尾循环，左右都能一直翻
+              renderCard();
+              positionCard();
+              setTimeout(positionCard, 0);
+          }
+          function showCard(g, index) {
+              var card = $('rcCard');
+              if (!card || !g || !g.records.length) return;
+              cardGroup = g;
+              cardIndex = Math.max(0, Math.min(g.records.length - 1, index || 0));
+              cardLatLng = { lat: g.lat, lng: g.lng };
+              renderCard();
               card.style.display = 'block';
               positionCard();          // 先按标点位置摆好，再等布局稳定后校正一次
               setTimeout(positionCard, 0);
-              var close = $('rcCardClose');
-              if (close) close.onclick = hideCard;
           }
           function hideCard() {
-              cardPointId = null;
+              cardGroup = null;
+              cardIndex = 0;
               cardLatLng = null;
               var card = $('rcCard');
               if (card) card.style.display = 'none';
           }
-          // 地图一动，卡片跟着标点走
-          map.on('move zoom viewreset resize', schedulePosition);
+          // 卡片上左右滑也能翻记录（和底部箭头等价）；没有明显横向位移的轻点不拦，
+          // 按钮照常工作
+          (function bindCardSwipe() {
+              var card = $('rcCard');
+              if (!card || !card.addEventListener) return;
+              var sx = 0, sy = 0, tracking = false;
+              function start(ev) {
+                  var t = (ev.touches && ev.touches[0]) || ev;
+                  sx = t.clientX || 0; sy = t.clientY || 0; tracking = true;
+              }
+              function end(ev) {
+                  if (!tracking) return;
+                  tracking = false;
+                  var t = (ev.changedTouches && ev.changedTouches[0]) || ev;
+                  var dx = (t.clientX || 0) - sx, dy = (t.clientY || 0) - sy;
+                  if (Math.abs(dx) > 34 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+                      if (ev.stopPropagation) ev.stopPropagation();
+                      stepCard(dx < 0 ? 1 : -1);
+                  }
+              }
+              card.addEventListener('touchstart', start, true);
+              card.addEventListener('touchend', end, true);
+              card.addEventListener('pointerdown', start, true);
+              card.addEventListener('pointerup', end, true);
+          })();
 
-          // 双击标点：飞到该点并适度放大（原来直接跳到 13 级，观感太冲）
-          function focusPoint(p, marker) {
-              var z = map.getZoom();
-              var target = z >= 12 ? z : Math.min(12, Math.max(z + 3, 9));
-              map.flyTo([p.lat, p.lng], target, { duration: 0.55, easeLinearity: 0.28 });
-              setTimeout(function () { showCard(p); }, 60);
+          /* ==================================================================
+           * 引擎适配层：上面那套核心逻辑只认这几个方法，
+           * 下面分别用「高德 JS API 2.0」和「Leaflet」实现。
+           * 坐标统一用 { lat, lng }，引擎内部自己转成各自的形式。
+           * ================================================================== */
+          var Engine = null;
+
+          // 地图形变（平移/缩放中）→ 卡片跟着标点走；形变结束 → 记"用户动过地图"
+          function createAmapEngine() {
+              var map = new AMap.Map('map', {
+                  center: [108, 34],
+                  zoom: 4,
+                  viewMode: '2D',
+                  zooms: [3, 18],
+                  resizeEnable: true,
+                  doubleClickZoom: false,     // 双击留给"飞到标点"
+                  showLabel: true,
+                  mapStyle: DARK ? 'amap://styles/dark' : 'amap://styles/normal',
+                  features: ['bg', 'road', 'building', 'point'],
+              });
+              function group() {
+                  var items = [];
+                  return {
+                      add: function (o) { items.push(o); safe(function () { map.add(o); }); return o; },
+                      clear: function () { if (items.length) { safe(function () { map.remove(items); }); items = []; } },
+                  };
+              }
+              return {
+                  kind: 'amap',
+                  group: group,
+                 pin: function (ll, html, o) {
+                      var wrap = document.createElement('div');
+                      wrap.className = 'rc-pin';
+                      wrap.style.cssText = 'width:40px;height:28px;';
+                      wrap.innerHTML = html;
+                      var m = new AMap.Marker({
+                          position: [ll.lng, ll.lat],
+                          content: wrap,
+                          anchor: 'bottom-left',
+                          // 水滴尖在 (11, 26)，相对左下角是往左 11、往下 2
+                          offset: new AMap.Pixel(-11, 2),
+                          zIndex: o && o.z ? o.z : 100,
+                          bubble: false,
+                      });
+                      if (o && o.onTap) {
+                          attachPinTap(wrap, o.onTap);
+                          m.on('click', fallbackTap(o.onTap));
+                      }
+                      return m;
+                  },
+                  badge: function (ll, html) {
+                      var el = document.createElement('div');
+                      el.style.cssText = 'pointer-events:none;';
+                      el.innerHTML = html;
+                      var m = new AMap.Marker({
+                          position: [ll.lng, ll.lat],
+                          content: el,
+                          anchor: 'center',
+                          zIndex: 90,
+                          clickable: false,
+                          bubble: false,
+                      });
+                      return m;
+                  },
+                  polyline: function (path, o) {
+                      return new AMap.Polyline({
+                          path: path.map(function (p) { return [p[1], p[0]]; }),   // [[lat,lng]] → [[lng,lat]]
+                          strokeColor: o.color,
+                          strokeWeight: o.weight,
+                          strokeOpacity: o.opacity,
+                          lineCap: 'round',
+                          lineJoin: 'round',
+                          zIndex: 50,
+                          bubble: false,
+                      });
+                  },
+                  fitView: function (lls, pad, maxZoom) {
+                      map.setFitView(null, false, [pad, pad, pad, pad], maxZoom);
+                  },
+                  flyTo: function (ll, zoom, duration) {
+                      map.setZoomAndCenter(zoom, [ll.lng, ll.lat], false, Math.round(duration * 1000));
+                  },
+                  zoomIn: function () { map.zoomIn(); },
+                  zoomOut: function () { map.zoomOut(); },
+                  zoom: function () { return map.getZoom(); },
+                  toPoint: function (ll) {
+                      var p = map.lngLatToContainer(new AMap.LngLat(ll.lng, ll.lat));
+                      return { x: p.getX(), y: p.getY() };
+                  },
+                  invalidateSize: function () {
+                      // 2.0 开了 resizeEnable，容器变化一般自己会跟；这里再补一次强制重算
+                      if (typeof map.resize === 'function') { map.resize(); return; }
+                      safe(function () { map.setZoomAndCenter(map.getZoom(), map.getCenter(), true); });
+                  },
+                  onViewChange: function (fn) { map.on('mapmove', fn); map.on('zoomchange', fn); },
+                  onViewStart: function (fn) { map.on('zoomstart', fn); },
+                  onViewEnd: function (fn) { map.on('moveend', fn); map.on('zoomend', fn); },
+                  onMapClick: function (fn) {
+                      map.on('click', function () {
+                          // 标点刚处理过点击时，地图这一次点击忽略掉（不同版本冒泡行为不一致）
+                          if (Date.now() - TAP_GATE.lastDomTapAt < 600) return;
+                          fn();
+                      });
+                  },
+                  onReady: function (fn) { map.on('complete', fn); },
+                  prefetch: function () {},   // 矢量瓦片由 SDK 自己管，不用预热
+                  raw: function () { return map; },   // 预览页 / 调试用
+              };
           }
 
-          /* ------------------------------------------------------------------
-           * 标点手势：单击 = 显示/收起评论（不移动地图）；连点两次 = 放大飞到该标点。
-           *
-           * 这里不依赖 Leaflet 的 click：Android WebView 上 click 的合成时机和次数
-           * 都不太一样（有的要等 ~300ms，有的还会多给一次），之前就出现过
-           * "单击没反应、双击才冒评论"。现在直接绑在标点 DOM 元素上，用
-           * pointerup / touchend / click 三种里最先到的那个来处理，并且拦在自己这里
-           * 不让它冒泡到地图（地图默认会因为一次 click 把刚打开的评论关掉）。
-           * ------------------------------------------------------------------ */
-          var lastDomTapAt = 0;
-          var DOUBLE_TAP_MS = 320;
-          function bindTapGesture(p, marker) {
-              var lastTapId = null, lastTapAt = 0;
+          function createLeafletEngine() {
+              // closePopupOnClick: false —— 评论什么时候关由我们自己决定（默认行为会把
+              // 标点刚弹出的评论立刻关掉，表现就是"单击标点没反应"）
+              var map = L.map('map', { zoomControl: false, attributionControl: true, closePopupOnClick: false }).setView([34.0, 108.0], 4);
+              map.attributionControl.setPrefix('');
+              // 关掉 Leaflet 自带的双击放大：它会把"在标点上连点两次"吃掉，变成只放大一级
+              if (map.doubleClickZoom) map.doubleClickZoom.disable();
 
-              function handleTap() {
-                  var now = Date.now();
-                  lastDomTapAt = now;
-                  if (lastTapId === p.id && (now - lastTapAt) < DOUBLE_TAP_MS) {
-                      // 连点两次：收掉单击弹出来的内容卡，然后飞过去
-                      lastTapId = null; lastTapAt = 0;
-                      hideCard();
-                      focusPoint(p, marker);
-                      return;
-                  }
-                  lastTapId = p.id; lastTapAt = now;
-                  // 单击：立刻显示 / 收起这个标点的评论（不走 Leaflet 弹窗，关不掉）
-                  safe(function () {
-                      if (cardPointId === p.id) hideCard();
-                      else showCard(p);
+              // 手机端默认 updateWhenIdle=true：放大过程中不加载新瓦片，等动画结束才开始拉，
+              // 看起来就是"放大很慢"。改成边放大边加载（false）。
+              // updateWhenZooming: false —— 缩放动画期间不再每一帧重算瓦片网格（默认 true）：
+              // 动画里用已有的瓦片缩放顶住，更跟手，也不会在每个中间帧发一堆无用请求。
+              // keepBuffer 3：屏幕外少留一圈瓦片，DOM/合成层更轻。
+              var tileOpts = { maxZoom: 18, updateWhenIdle: false, updateWhenZooming: false, keepBuffer: 3 };
+              if (USE_AMAP) {
+                  // 高德栅格街道图（矢量 + 注记一起出图），不需要 key
+                  L.tileLayer(${safeJson(AMAP_TILE)}, Object.assign({ subdomains: '1234' }, tileOpts)).addTo(map);
+              } else if (TK) {
+                  L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
+                  L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=' + TK, Object.assign({ subdomains: '01234567' }, tileOpts)).addTo(map);
+              }
+
+              /* ---------------- 瓦片预热 ----------------
+                 地图停稳后 / 刚开始缩放时，把下一级的瓦片先拉进 WebView 缓存，
+                 真正放大时就大多命中缓存，不会一格一格慢慢冒出来。
+                 注意：高德底图不需要 key，所以这里不能再看 TK，
+                 否则高德用户等于一张都不预热（旧版就是这么被挡住的）。 */
+              var prefetchKey = '';
+              var prefetchTimer = null;
+              function tileXY(lat, lng, z) {
+                  var n = Math.pow(2, z);
+                  var latRad = lat * Math.PI / 180;
+                  return {
+                      x: Math.floor((lng + 180) / 360 * n),
+                      y: Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n),
+                  };
+              }
+              function amapTileUrl(z, x, y) {
+                  // 四个子域轮着来，避免单域名并发排队
+                  return 'https://webrd0' + (1 + Math.abs(x + y) % 4) +
+                      '.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=' + x + '&y=' + y + '&z=' + z;
+              }
+              function tdtTileUrl(z, x, y, lyr) {
+                  var s = '01234567'.charAt(Math.abs(x + y) % 8);
+                  return 'https://t' + s + '.tianditu.gov.cn/DataServer?T=' + lyr +
+                      '&x=' + x + '&y=' + y + '&l=' + z + '&tk=' + TK;
+              }
+              // 逐张错开 40ms 下发：预热是"抢跑"，不能反过来把当前真正需要的那批瓦片挤在后面
+              function grabTile(url, delay) {
+                  setTimeout(function () {
+                      safe(function () { var img = new Image(); img.decoding = 'async'; img.src = url; });
+                  }, delay || 0);
+              }
+              function prefetchTiles() {
+                  if (typeof Image === 'undefined') return;
+                  if (!USE_AMAP && !TK) return;         // 天地图没 key 时连底图都没有，不用预热
+                  var base = Math.round(map.getZoom());
+                  var c = map.getCenter();
+                  var t1 = tileXY(c.lat, c.lng, Math.min(18, base + 1));
+                  var key = base + ':' + t1.x + ':' + t1.y;
+                  if (key === prefetchKey) return;      // 同一格同一级已经预热过
+                  prefetchKey = key;
+                  var jobs = [];
+                  [1, 2].forEach(function (dz) {
+                      var z = base + dz;
+                      if (z > 18) return;
+                      var t = tileXY(c.lat, c.lng, z);
+                      var r = dz === 1 ? 1 : 0;         // +1 级铺 3×3，+2 级只要中心那张
+                      for (var dx = -r; dx <= r; dx++) {
+                          for (var dy = -r; dy <= r; dy++) jobs.push([z, t.x + dx, t.y + dy]);
+                      }
+                  });
+                  jobs.forEach(function (job, i) {
+                      var z = job[0], x = job[1], y = job[2];
+                      var max = Math.pow(2, z);
+                      if (x < 0 || y < 0 || x >= max || y >= max) return;
+                      var delay = i * 40;
+                      if (USE_AMAP) grabTile(amapTileUrl(z, x, y), delay);
+                      else {
+                          grabTile(tdtTileUrl(z, x, y, 'vec_w'), delay);
+                          grabTile(tdtTileUrl(z, x, y, 'cva_w'), delay);
+                      }
                   });
               }
 
-              function consume(ev) {
-                  if (ev) {
-                      if (ev.stopPropagation) ev.stopPropagation();
-                      if (ev.cancelable && ev.preventDefault) ev.preventDefault();
-                  }
-                  handleTap();
-              }
-
-              function bindElement() {
-                  var el = marker.getElement && marker.getElement();
-                  if (!el || el.__rcTapBound) return;
-                  el.__rcTapBound = true;
-                  var downAt = 0, downX = 0, downY = 0, lastEnd = 0;
-
-                  function pointOf(ev) {
-                      var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
-                      return { x: t.clientX || 0, y: t.clientY || 0 };
-                  }
-                  function onDown(ev) {
-                      var pnt = pointOf(ev);
-                      downAt = Date.now(); downX = pnt.x; downY = pnt.y;
-                  }
-                  function onEnd(ev) {
-                      var now = Date.now();
-                      if (now - lastEnd < 40) return;            // pointerup / touchend 同一拍只算一次
-                      lastEnd = now;
-                      var pnt = pointOf(ev);
-                      var moved = Math.abs(pnt.x - downX) + Math.abs(pnt.y - downY);
-                      // 长按或拖动过（多半是在拖地图）不算点击
-                      if (moved > 14 || (downAt && now - downAt > 800)) return;
-                      consume(ev);
-                  }
-
-                  el.addEventListener('pointerdown', onDown, true);
-                  el.addEventListener('touchstart', onDown, true);
-                  el.addEventListener('pointerup', onEnd, true);
-                  el.addEventListener('touchend', onEnd, true);
-                  el.addEventListener('click', function (ev) {
-                      if (Date.now() - lastEnd < 600) return;    // 上面已经处理过这一下
-                      consume(ev);
-                  }, true);
-              }
-
-              marker.on('add', bindElement);
-              bindElement();
-              // 兜底：万一拿不到 DOM 元素（很老的 WebView），仍走 Leaflet 的 click
-              marker.on('click', function (e) {
-                  if (e && e.originalEvent && L.DomEvent && L.DomEvent.stopPropagation) {
-                      L.DomEvent.stopPropagation(e.originalEvent);
-                  }
-                  if (Date.now() - lastDomTapAt < 600) return;
-                  handleTap();
-              });
+              return {
+                  kind: 'leaflet',
+                  group: function () {
+                      var g = L.layerGroup().addTo(map);
+                      return {
+                          add: function (o) { g.addLayer(o); return o; },
+                          clear: function () { g.clearLayers(); },
+                      };
+                  },
+                  pin: function (ll, html, o) {
+                      var m = L.marker([ll.lat, ll.lng], {
+                          icon: L.divIcon({ className: 'rc-pin', html: html, iconSize: [40, 28], iconAnchor: [11, 26], popupAnchor: [0, -22] }),
+                          riseOnHover: true,
+                          // 关键：标点的点击不传给地图，否则地图会立刻把评论关掉
+                          bubblingMouseEvents: false,
+                          zIndexOffset: o && o.z ? o.z : 100,
+                      });
+                      if (o && o.onTap) {
+                          var bind = function () { attachPinTap(m.getElement && m.getElement(), o.onTap); };
+                          m.on('add', bind);
+                          bind();
+                          m.on('click', fallbackTap(o.onTap));
+                      }
+                      return m;
+                  },
+                  badge: function (ll, html) {
+                      return L.marker([ll.lat, ll.lng], {
+                          icon: L.divIcon({ className: 'rc-badge', html: html, iconSize: [22, 22], iconAnchor: [11, 11] }),
+                          interactive: false,
+                      });
+                  },
+                  polyline: function (path, o) {
+                      return L.polyline(path, {
+                          color: o.color, weight: o.weight, opacity: o.opacity,
+                          lineCap: 'round', lineJoin: 'round',
+                      });
+                  },
+                  fitView: function (lls, pad, maxZoom) {
+                      map.fitBounds(lls.map(function (p) { return [p.lat, p.lng]; }), { padding: [pad, pad], maxZoom: maxZoom });
+                  },
+                  flyTo: function (ll, zoom, duration) {
+                      map.flyTo([ll.lat, ll.lng], zoom, { duration: duration, easeLinearity: 0.28 });
+                  },
+                  zoomIn: function () { map.zoomIn(); },
+                  zoomOut: function () { map.zoomOut(); },
+                  zoom: function () { return map.getZoom(); },
+                  toPoint: function (ll) { var p = map.latLngToContainerPoint([ll.lat, ll.lng]); return { x: p.x, y: p.y }; },
+                  invalidateSize: function () { map.invalidateSize(); },
+                  onViewChange: function (fn) { map.on('move zoom viewreset resize', fn); },
+                  onViewStart: function (fn) { map.on('zoomstart', fn); },
+                  onViewEnd: function (fn) { map.on('moveend zoomend', fn); },
+                  onMapClick: function (fn) { map.on('click', fn); },
+                  onReady: function (fn) { map.whenReady(fn); },
+                  prefetch: prefetchTiles,
+                  raw: function () { return map; },   // 预览页 / 调试用
+              };
           }
 
-          function makeMarker(p) {
-              var color = p.kind === 'location' ? LOC_COLOR : (COLORS[p.subType] || '#2F7BF6');
+          function createEngine() {
+              return IS_JSAPI ? createAmapEngine() : createLeafletEngine();
+          }
+
+          // 双击标点：飞到该点并适度放大（原来直接跳到 13 级，观感太冲）
+          function focusPoint(g) {
+              var z = Engine.zoom();
+              var target = z >= 12 ? z : Math.min(12, Math.max(z + 3, 9));
+              Engine.flyTo({ lat: g.lat, lng: g.lng }, target, 0.55);
+              setTimeout(function () { showCard(g, 0); }, 60);
+          }
+
+          function makeMarker(g) {
               // 地点标点压在旅票标点之上：全览时同一个城市里两类点经常重叠，
-              // 按默认的「纬度决定层级」会让红色地点点被蓝色的起终点盖住
-              var marker = L.marker([p.lat, p.lng], {
-                  icon: pinIcon(color),
-                  riseOnHover: true,
-                  // 关键：标点的点击不传给地图，否则地图会立刻把评论关掉（单击"没反应"的根因）
-                  bubblingMouseEvents: false,
-                  zIndexOffset: p.kind === 'location' ? 400 : 100,
-              });
-              bindTapGesture(p, marker);
-              marker.__point = p;
-              allMarkers.push(marker);
-              return marker;
+              // 按默认层级会让红色地点点被蓝色的起终点盖住。
+              // 记录越多的点再往上一层，免得被邻居的单条记录挡住。
+              var z = (g.onLoc ? 400 : 100) + Math.min(80, g.records.length * 4);
+              return Engine.pin({ lat: g.lat, lng: g.lng }, pinIcon(g.color, g.records.length), { z: z, onTap: makeTapHandler(g) });
           }
           function renderLoc() {
-              locLayer.clearLayers();
+              locLayer.clear();
               if (!locOn) return;
-              POINTS.forEach(function (p) {
-                  if (p.kind !== 'location') return;
+              GROUPS.forEach(function (g) {
+                  if (!g.onLoc) return;
                   // 单条数据出问题只丢这一个标点，不影响其它标点、轨迹和按钮
-                  var m = safe(function () { return makeMarker(p); });
-                  if (m) m.addTo(locLayer);
+                  safe(function () { locLayer.add(makeMarker(g)); });
               });
           }
           function drawTraj() {
-              trajLayer.clearLayers();
+              trajLayer.clear();
               if (!trajOn) return;
-              POINTS.forEach(function (p) {
-                  if (p.kind !== 'ticket') return;
-                  var m = safe(function () { return makeMarker(p); });
-                  if (m) m.addTo(trajLayer);
+              GROUPS.forEach(function (g) {
+                  if (g.onLoc) return;
+                  safe(function () { trajLayer.add(makeMarker(g)); });
               });
-              SEGS.forEach(function (seg) {
-                  safe(function () { drawSeg(seg); });
-              });
+              SEGS.forEach(function (seg) { safe(function () { drawSeg(seg); }); });
           }
           function drawSeg(seg) {
-                  var color = COLORS[seg.subType] || '#007AFF';
-                  var A = [seg.from.longitude, seg.from.latitude], B = [seg.to.longitude, seg.to.latitude];
-                  var dx = B[0] - A[0], dy = B[1] - A[1], len = Math.sqrt(dx * dx + dy * dy) || 1;
-                  var bend = Math.min(1.6, Math.max(0.12, len * 0.14));
-                  var C = [(A[0] + B[0]) / 2 + dy / len * bend, (A[1] + B[1]) / 2 - dx / len * bend];
-                  var path = [];
-                  for (var i = 0; i <= 28; i++) {
-                      var t = i / 28, u = 1 - t;
-                      path.push([u * u * A[1] + 2 * u * t * C[1] + t * t * B[1], u * u * A[0] + 2 * u * t * C[0] + t * t * B[0]]);
-                  }
-                  L.polyline(path, { color: color, weight: Math.min(9, 3 + (seg.count - 1) * 1.8), opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(trajLayer);
-                  if (seg.count > 1) {
-                      L.marker(path[14], { icon: badgeIcon(seg.count, color), interactive: false }).addTo(trajLayer);
-                  }
+              var color = COLORS[seg.subType] || '#007AFF';
+              var A = [seg.from.longitude, seg.from.latitude], B = [seg.to.longitude, seg.to.latitude];
+              var dx = B[0] - A[0], dy = B[1] - A[1], len = Math.sqrt(dx * dx + dy * dy) || 1;
+              var bend = Math.min(1.6, Math.max(0.12, len * 0.14));
+              var C = [(A[0] + B[0]) / 2 + dy / len * bend, (A[1] + B[1]) / 2 - dx / len * bend];
+              var path = [];
+              for (var i = 0; i <= 28; i++) {
+                  var t = i / 28, u = 1 - t;
+                  path.push([u * u * A[1] + 2 * u * t * C[1] + t * t * B[1], u * u * A[0] + 2 * u * t * C[0] + t * t * B[0]]);
+              }
+              trajLayer.add(Engine.polyline(path, {
+                  color: color,
+                  weight: Math.min(9, 3 + (seg.count - 1) * 1.8),
+                  opacity: 0.85,
+              }));
+              if (seg.count > 1) {
+                  trajLayer.add(Engine.badge({ lat: path[14][0], lng: path[14][1] }, badgeIcon(seg.count, color)));
+              }
           }
           function redraw() {
               try {
-                  allMarkers = [];
-                  hideCard();          // 重新绘制标点时把内容卡收掉，避免指向已经不存在的点
+                  hideCard();               // 重新绘制标点时把内容卡收掉，避免指向已经不存在的点
+                  GROUPS = buildGroups();   // 按坐标把同一个地点的多条记录并成一个标点
                   renderLoc();
                   drawTraj();
               } catch (e) {
@@ -561,6 +926,7 @@ export function buildMapHtml({
                   hideHint();
               }
               var msgs = [];
+              if (NOTICE) msgs.push(NOTICE);
               if (DROPPED > 0) msgs.push(DROPPED + ' 条记录的坐标不完整，已跳过（不影响其它标点）');
               if (NEED_KEY && !TK) msgs.push('未配置天地图 Key，可在侧边栏「地图服务」中填写');
               if (msgs.length) showBanner(msgs.join(' · ')); else hideBanner();
@@ -570,107 +936,119 @@ export function buildMapHtml({
           var programmatic = false;
           function fitAll() {
               var lls = [];
-              if (locOn) POINTS.forEach(function (p) { if (p.kind === 'location') lls.push([p.lat, p.lng]); });
+              if (locOn) GROUPS.forEach(function (g) { if (g.onLoc) lls.push({ lat: g.lat, lng: g.lng }); });
               if (trajOn) {
-                  POINTS.forEach(function (p) { if (p.kind === 'ticket') lls.push([p.lat, p.lng]); });
-                  SEGS.forEach(function (s) { lls.push([s.from.latitude, s.from.longitude], [s.to.latitude, s.to.longitude]); });
+                  GROUPS.forEach(function (g) { if (!g.onLoc) lls.push({ lat: g.lat, lng: g.lng }); });
+                  SEGS.forEach(function (s) {
+                      lls.push({ lat: s.from.latitude, lng: s.from.longitude }, { lat: s.to.latitude, lng: s.to.longitude });
+                  });
               }
               if (!lls.length) return;
               programmatic = true;
-              map.fitBounds(lls, { padding: [34, 34], maxZoom: 12 });
+              Engine.fitView(lls, 34, 12);
               setTimeout(function () { programmatic = false; }, 600);
           }
-          map.on('zoomend dragend', function () { if (!programmatic) map.__touched = true; });
+
+          var locLayer = null, trajLayer = null;
+          var trajOn = true, locOn = true;
 
           function setToggle(btn, on) {
               if (!btn) return;
               btn.className = 'tool ' + (on ? 'on' : 'off');
           }
           function on(id, fn) { var el = $(id); if (el) el.onclick = fn; }
-          var btnTraj = $('tTraj'), btnLoc = $('tLoc');
-          setToggle(btnTraj, trajOn);
-          setToggle(btnLoc, locOn);
-          on('tTraj', function () {
-              trajOn = !trajOn; setToggle(btnTraj, trajOn);
-              drawTraj(); syncHints(); toast('出行轨迹：' + (trajOn ? '开' : '关'));
-          });
-          on('tLoc', function () {
-              locOn = !locOn; setToggle(btnLoc, locOn);
-              renderLoc(); syncHints(); toast('地点标点：' + (locOn ? '开' : '关'));
-          });
-          // 控件先绑定、再画数据：就算后面绘图出问题，缩放/开关也一定是活的
-          on('zin', function () { map.zoomIn(); });
-          on('zout', function () { map.zoomOut(); });
-          on('zfit', function () { safe(fitAll); });
 
-          redraw();
-          if (POINTS.length || SEGS.length) setTimeout(function () { safe(fitAll); }, 350);
-          window.onresize = function () { map.invalidateSize(); };
-
-          /* ---------------- 瓦片预热 ----------------
-             地图停稳后，顺手把"当前视野中心 +1 级（3×3）和 +2 级（1 张）"的瓦片拉到
-             WebView 缓存里。这样下一次放大时大多命中缓存，不会一格一格慢慢冒出来。 */
-          var prefetchKey = '';
-          var prefetchTimer = null;
-          function tileXY(lat, lng, z) {
-              var n = Math.pow(2, z);
-              var latRad = lat * Math.PI / 180;
-              return {
-                  x: Math.floor((lng + 180) / 360 * n),
-                  y: Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n),
-              };
-          }
-          function prefetchTiles() {
-              if (!TK || typeof Image === 'undefined') return;
-              var z = Math.round(map.getZoom()) + 1;
-              if (z > 18) return;
-              var c = map.getCenter();
-              var t = tileXY(c.lat, c.lng, z);
-              var key = z + ':' + t.x + ':' + t.y;
-              if (key === prefetchKey) return;
-              prefetchKey = key;
-              if (USE_AMAP) {
-                  // 高德：只预热中心那张 +1 级（够用，也不多费流量）
-                  var aImg = new Image();
-                  aImg.src = 'https://webrd0' + (1 + Math.abs(t.x + t.y) % 4) +
-                      '.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=' + t.x + '&y=' + t.y + '&z=' + z;
+          function boot() {
+              // ① 引擎没起来：高德 JS API 交给 RN 切回栅格底图，天地图/栅格给明确提示
+              if (IS_JSAPI && !window.AMap) {
+                  postMsg({ type: 'jsApiFailed', reason: window.__rcAmapScriptError || '高德 JS API 未就绪（key / 安全密钥 / 网络）' });
+                  showHint('高德 JS API 未能加载<br/><span style="font-size:11.5px">正在切回栅格底图…</span>');
                   return;
               }
-              var subs = '01234567';
-              var want = [];
-              var i, dx, dy;
-              for (dx = -1; dx <= 1; dx++) { for (dy = -1; dy <= 1; dy++) want.push([z, dx, dy]); }
-              want.push([z + 1, 0, 0]);                       // 再上一级只要中心那张
-              for (i = 0; i < want.length; i++) {
-                  var zz = want[i][0];
-                  if (zz > 18) continue;
-                  var tt = tileXY(c.lat, c.lng, zz);
-                  var x = tt.x + want[i][1], y = tt.y + want[i][2];
-                  var s = subs.charAt(Math.abs(x + y) % 8);
-                  ['vec_w', 'cva_w'].forEach(function (lyr) {
-                      var img = new Image();
-                      img.decoding = 'async';
-                      img.src = 'https://t' + s + '.tianditu.gov.cn/DataServer?T=' + lyr +
-                          '&x=' + x + '&y=' + y + '&l=' + zz + '&tk=' + TK;
-                  });
+              if (!IS_JSAPI && !window.L) {
+                  if (NEED_KEY && !TK) showBanner('未配置天地图 Key，可在侧边栏「地图服务」中填写');
+                  showHint('地图组件未能加载<br/><span style="font-size:11.5px">请检查网络后重新进入地图页</span>');
+                  return;
               }
-          }
-          map.on('moveend zoomend', function () {
-              clearTimeout(prefetchTimer);
-              prefetchTimer = setTimeout(function () { safe(prefetchTiles); }, 900);
-          });
 
-          window.__rcMap = {
-              map: map,          // 预览页 / 调试用
-              redraw: redraw,
-              fit: fitAll,
-              // 从列表切回地图：地图层是保活的（尺寸没变），这里只做一次兜底重算，
-              // 不再重新全览——避免把用户上次的位置冲掉，也不会让瓦片白下载一轮
-              markDirty: function () {
-                  map.invalidateSize();
+              Engine = safe(createEngine);
+              if (!Engine) {
+                  if (IS_JSAPI) {
+                      postMsg({ type: 'jsApiFailed', reason: '高德地图初始化失败' });
+                      showHint('高德地图初始化失败<br/><span style="font-size:11.5px">正在切回栅格底图…</span>');
+                  } else {
+                      showHint('地图初始化失败');
+                  }
+                  return;
               }
-          };
+
+              locLayer = Engine.group();
+              trajLayer = Engine.group();
+
+              // 地图一动，卡片跟着标点走；点空白处收起卡片
+              Engine.onViewChange(schedulePosition);
+              Engine.onMapClick(function () { hideCard(); });
+              Engine.onViewEnd(function () { if (!programmatic) mapTouched = true; });
+              Engine.onViewStart(function () { safe(function () { Engine.prefetch(); }); });
+              Engine.onViewEnd(function () { safe(function () { Engine.prefetch(); }); });
+
+              // 控件先绑定、再画数据：就算后面绘图出问题，缩放/开关也一定是活的
+              var btnTraj = $('tTraj'), btnLoc = $('tLoc');
+              setToggle(btnTraj, trajOn);
+              setToggle(btnLoc, locOn);
+              on('tTraj', function () {
+                  trajOn = !trajOn; setToggle(btnTraj, trajOn);
+                  drawTraj(); syncHints(); toast('出行轨迹：' + (trajOn ? '开' : '关'));
+              });
+              on('tLoc', function () {
+                  locOn = !locOn; setToggle(btnLoc, locOn);
+                  renderLoc(); syncHints(); toast('地点标点：' + (locOn ? '开' : '关'));
+              });
+              on('zin', function () { Engine.zoomIn(); });
+              on('zout', function () { Engine.zoomOut(); });
+              on('zfit', function () { safe(fitAll); });
+              // 全屏：真正把 WebView 铺满屏幕 + 锁横屏是 RN 侧做的（WebView 不重建，
+              // 视角和已打开的卡片都保住），这里只负责发消息和按状态换图标
+              on('zfull', function () {
+                  postMsg({ type: 'mapFullscreen', on: !fullscreen });
+              });
+
+              redraw();
+              if (POINTS.length || SEGS.length) setTimeout(function () { safe(fitAll); }, 350);
+              window.onresize = function () { safe(function () { Engine.invalidateSize(); }); };
+
+              // 矢量模式：SDK 加载成功 ≠ 地图画出来了（key 过期、安全密钥错、WebGL 不可用
+              // 都可能停在"complete 一直不来"）。等不到首帧就交给 RN 切回栅格底图。
+              if (IS_JSAPI) {
+                  var ready = false;
+                  Engine.onReady(function () { ready = true; });
+                  setTimeout(function () {
+                      if (!ready) postMsg({ type: 'jsApiFailed', reason: '高德地图长时间没有出图（key / 安全密钥 / WebGL）' });
+                  }, 8000);
+              }
+
+              window.__rcMap = {
+                  kind: Engine.kind,   // 'amap' | 'leaflet'：预览页 / 调试用
+                  map: Engine.raw(),   // 原生地图对象：预览页挂 OSM 兜底底图要用
+                  redraw: redraw,
+                  fit: fitAll,
+                  // RN 侧进了 / 退了全屏后回调：换按钮图标 + 按新尺寸重算
+                  setFullscreen: function (on) {
+                      fullscreen = !!on;
+                      var b = $('zfull');
+                      if (b) b.innerHTML = fullscreen ? COLLAPSE_ICON : EXPAND_ICON;
+                      if (b) b.setAttribute('aria-label', fullscreen ? '退出全屏' : '全屏');
+                      safe(function () { Engine.invalidateSize(); });
+                      setTimeout(function () { safe(function () { Engine.invalidateSize(); }); }, 260);
+                  },
+                  // 从列表切回地图：地图层是保活的（尺寸没变），这里只做一次兜底重算，
+                  // 不再重新全览——避免把用户上次的位置冲掉，也不会让瓦片白下载一轮
+                  markDirty: function () {
+                      safe(function () { Engine.invalidateSize(); });
+                  },
+              };
           }
+
           boot();
       </script>
   </body>
