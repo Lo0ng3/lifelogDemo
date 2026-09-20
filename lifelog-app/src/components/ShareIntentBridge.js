@@ -39,6 +39,9 @@ async function importSharedFiles(files) {
       const exist = await FileSystem.getInfoAsync(to);
       if (exist.exists) to = `${MEDIA_DIR}/${Date.now()}_${i}_${name}`;
       await FileSystem.copyAsync({ from, to });
+      // 复制完就把系统缓存里那份删掉：记录用的是 media/ 里这份，
+      // 缓存那份只服务于"这一次分享"，留着纯属白占空间（缓存目录 App 不会自己扫）
+      await FileSystem.deleteAsync(from, { idempotent: true }).catch(() => {});
     } catch (e) {
       console.warn('[share] 复制分享的影像失败', from, e?.message || e);
       continue;
@@ -46,7 +49,9 @@ async function importSharedFiles(files) {
     entries.push({
       uri: to,
       isVideo: video,
-      filename: name,
+      // filename 记"相册原名"（不是落盘时可能加了时间戳的那个），
+      // 这样：① 重链回相册时按名字匹配更容易命中；② 同一张图重复分享能被识别成重复
+      filename: String(f.fileName || '').trim() || name,
       size: typeof f.size === 'number' ? f.size : undefined,
     });
   }

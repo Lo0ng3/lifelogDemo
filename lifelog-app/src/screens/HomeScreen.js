@@ -232,13 +232,24 @@ export default function HomeScreen({ navigation }) {
     );
   };
   
-  // 清理缓存：封面帧/实况提取/浏览缓存都是可再生内容，清掉立刻释放空间
+  // 清理缓存：封面帧/实况提取/浏览缓存/地图瓦片都是可再生内容，清掉立刻释放空间
+  // （地图瓦片在 WebView 的 HTTP 缓存里：栅格模式的图片、矢量模式的 SDK 与矢量数据都算）
   const handleCleanCache = async () => {
     toggleSidebar(false);
     try {
       const freed = await cleanupMediaCaches();
+      try {
+        // clearCache(true) 连磁盘里的地图缓存一起清；地图还活着也没关系，
+        // 只是下次平移/缩放要重新下载瓦片。clearHistory 只清前进后退记录
+        mapRef.current?.clearCache?.(true);
+      } catch {}
       const mb = Math.round((freed / 1024 / 1024) * 10) / 10;
-      Alert.alert('清理完成', `已释放 ${mb} MB 缓存空间。封面帧等会在使用中自动重建。`);
+      Alert.alert(
+        '清理完成',
+        `已释放 ${mb} MB 缓存空间，地图缓存也已清空。\n\n`
+        + '清掉的都是可再生的内容：封面帧会在使用中自动重建，地图下次打开会重新下载瓦片，'
+        + '记录、照片引用、地图 Key 都不受影响。'
+      );
     } catch (e) {
       Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
     }

@@ -39,6 +39,16 @@ const normKey = (s) => String(s || '')
   .replace(/[（）()·・,，.。:：;；\-—_/|、]/g, '')
   .toLowerCase();
 
+// 媒体条目的"身份"：有相册引用就用 assetId，没有（分享进来的副本、旧数据副本）
+// 就用 文件名 + 大小 认人——只按 assetId 去重会让没有 assetId 的条目无限重复添加
+const mediaKey = (raw) => {
+  const e = normalizeMediaEntry(raw) || {};
+  if (e.assetId) return `a:${e.assetId}`;
+  const name = String(e.filename || e.uri || '').split('/').pop().toLowerCase();
+  if (!name) return null;
+  return `f:${name}${e.size ? ':' + e.size : ''}`;
+};
+
 // 联想词条：标题 + 作者/年份，自然换行展示
 function SuggestionRow({ title, meta, onPress, textStyle, metaStyle }) {
   return (
@@ -109,10 +119,26 @@ export default function AddScreen({ navigation, route }) {
   const shareToken = route?.params?.shareToken;
   useEffect(() => {
     if (!Array.isArray(sharedMedia) || sharedMedia.length === 0) return;
-    setSelectedImages((prev) => [...prev, ...sharedMedia]);
+    let added = 0;
+    setSelectedImages((prev) => {
+      // 同一批分享（或表单里已经有这张）不重复添加
+      const have = new Set(prev.map(mediaKey).filter(Boolean));
+      const fresh = [];
+      for (const m of sharedMedia) {
+        const k = mediaKey(m);
+        if (!k || have.has(k)) continue;
+        have.add(k);
+        fresh.push(m);
+      }
+      added = fresh.length;
+      return fresh.length ? [...prev, ...fresh] : prev;
+    });
     setShowSearchAuto(false);
     if (Platform.OS === 'android') {
-      ToastAndroid.show(`已加入 ${sharedMedia.length} 个分享进来的影像`, ToastAndroid.SHORT);
+      ToastAndroid.show(
+        added > 0 ? `已加入 ${added} 个分享进来的影像` : '这些影像已经在表单里了',
+        ToastAndroid.SHORT
+      );
     }
     navigation.setParams({ sharedMedia: null, shareToken: undefined });
   }, [sharedMedia, shareToken, navigation]);
@@ -348,9 +374,16 @@ export default function AddScreen({ navigation, route }) {
           if (editId && log.id === editId) return;
           (log.localImages || []).forEach(e => { if (typeof e !== 'string' && e?.assetId) usedElsewhere.add(e.assetId); });
         });
-        const existing = new Set(selectedImages.map(e => e?.assetId).filter(Boolean));
         const list = Array.isArray(picked) ? picked : [];
-        const fresh = list.filter(p => p?.assetId && !existing.has(p.assetId) && !usedElsewhere.has(p.assetId));
+        const existing = new Set(selectedImages.map(mediaKey).filter(Boolean));
+        const seen = new Set();
+        const fresh = list.filter((p) => {
+          const k = mediaKey(p);
+          if (!k || existing.has(k) || seen.has(k)) return false;   // 已经在表单里 / 这一批里重复
+          if (p?.assetId && usedElsewhere.has(p.assetId)) return false;
+          seen.add(k);
+          return true;
+        });
         const skipped = list.length - fresh.length;
         if (skipped > 0 && Platform.OS === 'android') {
           ToastAndroid.show(`已跳过 ${skipped} 个重复添加的影像`, ToastAndroid.SHORT);

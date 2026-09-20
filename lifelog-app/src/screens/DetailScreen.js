@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   Dimensions, Modal, Alert, ActivityIndicator
@@ -10,7 +10,7 @@ import {
   Star, StarHalf, X, PlayCircle, ChevronLeft
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   FadeInDown, useSharedValue, useAnimatedStyle, withTiming, runOnJS,
 } from 'react-native-reanimated';
@@ -25,6 +25,185 @@ import { shortTicketTitle } from '../utils/format';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+/* ---------------- 影像九宫格：长按拖动排序 ----------------
+   交互约定（和"长按设为封面"共存，不靠任何角标/把手）：
+     · 长按 260ms 后**移动** → 拖动换顺序（被拖的那张跟手，滑到哪一格就和那一格互换）；
+     · 长按 260ms 后**原地松手** → 还是原来的「设为封面」菜单；
+     · 轻点 → 打开全屏查看器（手势没达到长按时长就结束了，不会干扰点击）。
+   拖动过程中只改本地顺序（order），松手才写回记录，避免拖一次写几十遍存储。 */
+const GRID_COLS = 3;
+
+function MediaGridCell({
+  entry, displayIndex, originalIndex, coverOn, total,
+  gx, gy, cw, ch, onSwap, onOpen, onIdleLongPress, onDragState, onMeasure,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const tx = useSharedValue(0);
+  const ty = useSharedValue(0);
+  const active = useSharedValue(0);
+  const started = useSharedValue(0);
+  const moved = useSharedValue(0);
+  const cur = useSharedValue(displayIndex);
+  useEffect(() => { cur.value = displayIndex; }, [displayIndex, cur]);
+
+  // 回调走 ref：拖动过程中父组件每次交换顺序都会重渲染，
+  // 若把这些回调放进 useMemo 依赖里，手势会被反复重建、正在拖的那一下会断
+  const cbRef = useRef({});
+  cbRef.current = { onSwap, onIdleLongPress, onDragState, onOpen, onMeasure };
+
+  const pan = useMemo(() => {
+    // 手指落点 → 目标格子的显示下标
+    const targetOf = (ax, ay) => {
+      'worklet';
+      const col = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((ax - gx.value) / cw.value)));
+      const row = Math.max(0, Math.floor((ay - gy.value) / ch.value));
+      return Math.max(0, Math.min(total.value - 1, row * GRID_COLS + col));
+    };
+    return Gesture.Pan()
+      .activateAfterLongPress(260)
+      .onStart(() => {
+        started.value = 1;
+        active.value = 1;
+        moved.value = 0;
+        // 拖动开始这一刻重新量一次九宫格位置：列表滚动过之后，布局时的坐标就不准了。
+        // 量一次是一帧级的事，前面一两帧用旧值也只是落点算得略偏，不影响松手后的结果
+        runOnJS(cbRef.current.onMeasure)?.();
+        runOnJS(cbRef.current.onDragState)(true);
+      })
+      .onUpdate((e) => {
+        // 14px 以内当作"手抖"，仍然算原地长按（弹封面菜单），避免误判成拖动
+        if (Math.abs(e.translationX) > 14 || Math.abs(e.translationY) > 14) moved.value = 1;
+        const target = targetOf(e.absoluteX, e.absoluteY);
+        if (target !== cur.value) {
+          runOnJS(cbRef.current.onSwap)(cur.value, target);
+          cur.value = target;
+        }
+        // 让被拖的这张始终贴在手指下（位置按"当前所在格子的中心"算）
+        const col = cur.value % GRID_COLS;
+        const row = Math.floor(cur.value / GRID_COLS);
+        tx.value = e.absoluteX - (gx.value + (col + 0.5) * cw.value);
+        ty.value = e.absoluteY - (gy.value + (row + 0.5) * ch.value);
+      })
+      .onFinalize(() => {
+        const didStart = started.value;
+        const didMove = moved.value;
+        started.value = 0;
+        active.value = 0;
+        moved.value = 0;
+        tx.value = withTiming(0, { duration: 160 });
+        ty.value = withTiming(0, { duration: 160 });
+        if (!didStart) return;                      // 轻点/滚动：手势没激活，什么都不做
+        runOnJS(cbRef.current.onDragState)(false);
+        // 只有"确实长按到了、但没有移动"才算原来的长按（弹封面菜单）
+        if (!didMove) runOnJS(cbRef.current.onIdleLongPress)();
+      });
+  }, [active, ch, cur, cw, gx, gy, moved, started, total, tx, ty]);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: tx.value },
+      { translateY: ty.value },
+      { scale: 1 + active.value * 0.06 },
+    ],
+    zIndex: active.value ? 20 : 0,
+    opacity: active.value ? 0.92 : 1,
+  }));
+
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View style={[styles.gridItem, animStyle]}>
+        <TouchableOpacity activeOpacity={0.85} onPress={() => onOpen(originalIndex)}>
+          {isVideoEntry(entry) ? (
+            <View style={styles.videoThumbnailBox}>
+              <VideoThumb entry={entry} style={styles.gridImage} />
+              <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
+            </View>
+          ) : (
+            <>
+              <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
+              <LiveGridBadge entry={entry} />
+            </>
+          )}
+          {coverOn && <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>}
+        </TouchableOpacity>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder }) {
+  const styles = useThemedStyles(makeStyles);
+  const [order, setOrder] = useState(null);          // 原始下标数组；null = 自然顺序
+  const orderRef = useRef(null);
+  useEffect(() => { orderRef.current = order; }, [order]);
+
+  const gridRef = useRef(null);
+  const gx = useSharedValue(0);
+  const gy = useSharedValue(0);
+  const cw = useSharedValue(1);
+  const ch = useSharedValue(1);
+  const total = useSharedValue(entries.length);
+  useEffect(() => { total.value = entries.length; }, [entries.length, total]);
+
+  // 量九宫格在窗口里的位置：拖动时要用它把手指坐标换算成格子下标
+  const measureGrid = useCallback(() => {
+    const node = gridRef.current;
+    if (!node || typeof node.measureInWindow !== 'function') return;
+    node.measureInWindow((x, y, w) => {
+      gx.value = x;
+      gy.value = y;
+      cw.value = w / GRID_COLS;
+      ch.value = w / GRID_COLS;     // 每格是正方形（padding 4 + 1:1 图）
+    });
+  }, [ch, cw, gx, gy]);
+
+  const display = order || entries.map((_, i) => i);
+  // 影像被删掉时，之前那份拖动顺序就失效了，回到自然顺序
+  useEffect(() => { orderRef.current = null; setOrder(null); }, [entries.length]);
+
+  const swap = useCallback((from, to) => {
+    setOrder((prev) => {
+      const cur = prev ? [...prev] : entries.map((_, i) => i);
+      if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return prev || cur;
+      const [it] = cur.splice(from, 1);
+      cur.splice(to, 0, it);
+      return cur;
+    });
+  }, [entries]);
+
+  const handleDrop = useCallback(() => {
+    const next = orderRef.current;
+    if (next) {
+      orderRef.current = null;
+      setOrder(null);
+      onReorder?.(next);
+    }
+  }, [onReorder]);
+
+  return (
+    <View style={styles.imageGrid} ref={gridRef} collapsable={false} onLayout={measureGrid}>
+      {display.map((originalIndex, pos) => (
+        entries[originalIndex] ? (
+          <MediaGridCell
+            key={originalIndex}
+            entry={entries[originalIndex]}
+            displayIndex={pos}
+            originalIndex={originalIndex}
+            coverOn={coverIndex === originalIndex}
+            total={total}
+            gx={gx} gy={gy} cw={cw} ch={ch}
+            onSwap={swap}
+            onOpen={onOpen}
+            onMeasure={measureGrid}
+            onIdleLongPress={() => onIdleLongPress(originalIndex)}
+            onDragState={(on) => { if (!on) handleDrop(); }}
+          />
+        ) : null
+      ))}
+    </View>
+  );
+}
 
 // 详情查看器里的图片：捏合缩放 / 双击放大 / 放大后拖动。
 // 视频仍走原生播放控件（全屏播放本身就是"放大看"），这里只管图片。
@@ -280,6 +459,20 @@ export default function DetailScreen({ route, navigation }) {
     ]);
   };
 
+  // 拖动排序写回：把 localImages 按新顺序重排，并把"封面是哪一张"跟着搬到新下标
+  // （封面小图文件对应的是同一张影像，所以 coverThumbUrl 不用动）
+  const handleMediaReorder = (permutation) => {
+    const raw = item.localImages || [];
+    const nextImages = permutation.map((i) => raw[i]).filter(Boolean);
+    if (!nextImages.length) return;
+    const patch = { ...item, localImages: nextImages };
+    if (typeof item.coverIndex === 'number') {
+      const moved = permutation.indexOf(item.coverIndex);
+      patch.coverIndex = moved >= 0 ? moved : null;
+    }
+    updateLog(patch);
+  };
+
   if (!item) {
     return (
       <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
@@ -355,33 +548,14 @@ export default function DetailScreen({ route, navigation }) {
         {/* 相关影像九宫格 */}
         {resolvedMedia.length > 0 && (
           <Animated.View entering={FadeInDown.duration(300).delay(120)} style={{ marginTop: 16 }}>
-            <Text style={styles.sectionTitle}>相关影像（长按可设为封面）</Text>
-            <View style={styles.imageGrid}>
-              {resolvedMedia.map((entry, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  activeOpacity={0.8}
-                  onPress={() => { setViewerIndex(idx); setCurrentViewIndex(idx); }}
-                  onLongPress={() => handleGridLongPress(idx)}
-                  style={styles.gridItem}
-                >
-                  {isVideoEntry(entry) ? (
-                    <View style={styles.videoThumbnailBox}>
-                      <VideoThumb entry={entry} style={styles.gridImage} />
-                      <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
-                    </View>
-                  ) : (
-                    <>
-                      <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
-                      <LiveGridBadge entry={entry} />
-                    </>
-                  )}
-                  {item.coverIndex === idx && (
-                    <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
+            <Text style={styles.sectionTitle}>相关影像（长按拖动可调整顺序 · 长按不动设为封面）</Text>
+            <MediaGrid
+              entries={resolvedMedia}
+              coverIndex={item.coverIndex}
+              onOpen={(idx) => { setViewerIndex(idx); setCurrentViewIndex(idx); }}
+              onIdleLongPress={handleGridLongPress}
+              onReorder={handleMediaReorder}
+            />
           </Animated.View>
         )}
       </ScrollView>
@@ -394,6 +568,9 @@ export default function DetailScreen({ route, navigation }) {
         statusBarTranslucent={true}
         onRequestClose={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}
       >
+        {/* RN 的 Modal 在 Android 上是独立窗口，手势库的根上下文不会自动继承，
+            里面必须自己再包一层 GestureHandlerRootView，否则捏合缩放/双击放大根本不生效 */}
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.viewerContainer}>
           <TouchableOpacity style={[styles.viewerCloseBtn, { top: insets.top + 10 }]} onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}>
             <X size={28} color="#FFF" />
@@ -439,6 +616,7 @@ export default function DetailScreen({ route, navigation }) {
             )}
           />
         </View>
+        </GestureHandlerRootView>
       </Modal>
     </View>
   );
