@@ -394,8 +394,9 @@ export default function AddScreen({ navigation, route }) {
 
   /* ---------------- 「已经有相关记录」提醒 ----------------
      基本信息填完（类型 / 名称或行程 / 日期，不含评分·评论·影像）之后，
-     如果库里已经有同一个地点、同一条行程、同名作品的记录，就在表单里提示一下。
-     只是提醒：照样能保存（同名重看一部电影、同一个地方再去一次都很正常）。 */
+     如果**同一天**已经有同一个地点、同一条行程、同名作品的记录，就在表单里提示一下。
+     要求日期也相同：同一个地点不同日子再去、同一部电影改天二刷，都不该被当成重复。
+     只是提醒：照样能保存。 */
   const basicsReady = !!year && !!month && !!day && (
     baseType === 'ticket' ? !!(ticketOrigin.trim() && ticketDest.trim())
       : baseType === 'note' ? !!(noteTitle.trim() || comment.trim())
@@ -403,6 +404,8 @@ export default function AddScreen({ navigation, route }) {
   );
   const relatedRecords = useMemo(() => {
     if (!basicsReady) return [];
+    const pad = (v) => String(v).trim().padStart(2, '0');
+    const wantDate = `${String(year).trim()}-${pad(month)}-${pad(day)}`;
     const wantTitle = normKey(baseType === 'note' ? (noteTitle.trim() || comment.trim().split('\n')[0]) : searchQuery);
     const wantFrom = normKey(ticketOrigin);
     const wantTo = normKey(ticketDest);
@@ -416,6 +419,8 @@ export default function AddScreen({ navigation, route }) {
     };
     return logData
       .filter((it) => it && it.id !== editId && it.baseType === baseType)
+      // 日期必须一致（旅票的 date 带时分，这里只比日期部分）
+      .filter((it) => String(it.date || '').slice(0, 10) === wantDate)
       .filter((it) => {
         if (baseType === 'ticket') {
           const sameRoute = !!wantFrom && !!wantTo
@@ -427,7 +432,7 @@ export default function AddScreen({ navigation, route }) {
         return !!wantTitle && normKey(it.title) === wantTitle;
       })
       .slice(0, 5);
-  }, [basicsReady, baseType, noteTitle, comment, searchQuery, ticketOrigin, ticketDest, ticketNo, locationCoords, logData, editId]);
+  }, [basicsReady, year, month, day, baseType, noteTitle, comment, searchQuery, ticketOrigin, ticketDest, ticketNo, locationCoords, logData, editId]);
 
   const handleSave = async () => {
     if (!year || !month || !day) {
@@ -809,16 +814,16 @@ export default function AddScreen({ navigation, route }) {
           </View>
 
           <View style={styles.divider} />
-          {/* 已经记过同一个地方 / 同一段行程 / 同一部作品时提醒一下（不拦保存） */}
+          {/* 同一天已经记过同一个地方 / 同一段行程 / 同一部作品时提醒一下（不拦保存） */}
           {relatedRecords.length > 0 && (
             <TouchableOpacity
               style={styles.dupNote}
               activeOpacity={0.85}
               onPress={() => navigation.navigate('Detail', { item: relatedRecords[0] })}
             >
-              <Text style={styles.dupNoteTitle}>已经有 {relatedRecords.length} 条相关记录</Text>
+              <Text style={styles.dupNoteTitle}>这一天已经有 {relatedRecords.length} 条相关记录</Text>
               <Text style={styles.dupNoteBody} numberOfLines={2}>
-                最近一条：{String(relatedRecords[0].date || '').slice(0, 10)} · {relatedRecords[0].title}
+                最近一条：{relatedRecords[0].title}
                 {'\n'}仍然可以继续保存，点这里先看一眼已有的那条。
               </Text>
             </TouchableOpacity>
