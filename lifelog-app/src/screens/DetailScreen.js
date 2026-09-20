@@ -22,7 +22,6 @@ import { isEssay, labelOf } from '../utils/recordMeta';
 import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
-import { lockPortrait } from '../utils/screenLock';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -222,8 +221,6 @@ export default function DetailScreen({ route, navigation }) {
   // 图片放大后要禁用横向翻页，否则捏合/拖动会和翻页抢手势
   const [viewerZoomed, setViewerZoomed] = useState(false);
 
-  // 详情页一律竖屏：万一从地图全屏（横屏）直接跳过来，这里兜底把屏幕锁回竖屏
-  useEffect(() => { lockPortrait(); }, []);
   const onViewableItemsChanged = useMemo(
     () => ({ viewableItems }) => {
       if (viewableItems.length > 0) {
