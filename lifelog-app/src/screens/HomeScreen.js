@@ -269,8 +269,14 @@ export default function HomeScreen({ navigation }) {
         已经打开的卡片都保住）。地图层是 viewArea 的子节点，用「负的左上 + 负的右下」
         把它顶到窗口四边，偏移量由同一时刻量到的两个矩形算出来，不会留白边。 */
   const [mapFullscreen, setMapFullscreen] = useState(false);
-  const [fsInset, setFsInset] = useState(null);
-  const [fsSize, setFsSize] = useState(null);   // 全屏那块区域的尺寸（宽高要互换给地图）
+  // 地图层挂在「根容器」下面（不是塞在列表那块 viewArea 里）：
+  //   · 平时靠测量把自己摆到 viewArea 的位置上；
+  //   · 全屏时直接摆成"整屏"，于是它的 bounds 就是整屏——不光是看得全，
+  //     触摸也才收得到（父容器不覆盖的地方，手指点下去根本传不到地图）。
+  //   之前塞在 viewArea 里靠负偏移往外撑，被 viewArea 的 overflow 裁掉，
+  //   表现就是"只有下半部分是地图、上半部分还是主界面"。
+  const [mapRect, setMapRect] = useState(null);    // { left, top, width, height }（相对根容器）
+  const [rootSize, setRootSize] = useState(null);  // 根容器尺寸（全屏时用）
   const rootRef = useRef(null);
   const viewAreaRef = useRef(null);
   const { width: winW, height: winH } = useWindowDimensions();
@@ -281,29 +287,24 @@ export default function HomeScreen({ navigation }) {
     node.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
   }), []);
 
-  // 全屏时把地图层撑满「整屏」：同一时刻量「根容器」和「地图所在容器」两个矩形，
-  // 用它们的差值做补偿，算出来的是相对关系，不会因为窗口尺寸和布局不同步而留白边。
-  const applyFullscreenInset = useCallback(() => {
+  // 同一时刻量「根容器」和「地图占位区」两个矩形，差值就是地图层该摆的位置
+  const measureMapRect = useCallback(() => {
     Promise.all([measureRect(rootRef), measureRect(viewAreaRef)]).then(([root, area]) => {
       if (!root || !area) return;
-      setFsInset({
-        left: area.x - root.x,
-        top: area.y - root.y,
-        right: -((root.x + root.width) - (area.x + area.width)),
-        bottom: -((root.y + root.height) - (area.y + area.height)),
-      });
-      setFsSize({ w: root.width, h: root.height });
+      setRootSize((prev) => (prev && prev.w === root.width && prev.h === root.height ? prev : { w: root.width, h: root.height }));
+      const next = { left: area.x - root.x, top: area.y - root.y, width: area.width, height: area.height };
+      setMapRect((prev) => (
+        prev && prev.left === next.left && prev.top === next.top && prev.width === next.width && prev.height === next.height
+          ? prev : next
+      ));
     });
   }, [measureRect]);
 
-  // 进全屏 / 隐藏 TabBar / 窗口尺寸变化都会改布局，多补几拍最稳
+  // 首帧 / 进入地图 / 隐藏 TabBar / 窗口尺寸变化都要重新量，多补几拍最稳
   useEffect(() => {
-    if (!mapFullscreen) { setFsInset(null); setFsSize(null); return undefined; }
-    let alive = true;
-    const run = () => { if (alive) applyFullscreenInset(); };
-    const timers = [60, 260, 700].map((delay) => setTimeout(run, delay));
-    return () => { alive = false; timers.forEach(clearTimeout); };
-  }, [mapFullscreen, winW, winH, applyFullscreenInset]);
+    const timers = [0, 120, 400].map((delay) => setTimeout(measureMapRect, delay));
+    return () => timers.forEach(clearTimeout);
+  }, [measureMapRect, winW, winH, mapFullscreen, viewMode]);
 
   // 尺寸变了要让地图重新量一次容器：全屏、退出、窗口尺寸变化各补一次
   useEffect(() => {
@@ -340,7 +341,7 @@ export default function HomeScreen({ navigation }) {
     navigation.setOptions({ tabBarStyle: HIDDEN_TAB_BAR });
     // 先用当前窗口尺寸给一个初值，随后测量再校正（避免第一帧还是竖的）
     const win = Dimensions.get('window');
-    setFsSize({ w: win.width, h: win.height });
+    setRootSize((prev) => prev || { w: win.width, h: win.height });
     setMapFullscreen(true);
   }, [navigation, toggleSidebar]);
   const exitMapFullscreen = useCallback(() => {
@@ -529,20 +530,55 @@ export default function HomeScreen({ navigation }) {
     transform: [{ translateY: (1 - mapFade.value) * 8 }],
   }));
 
-  // 全屏时地图这一层「横过来」：绕中心转 90°，宽高互换，
-  // 这样铺满整屏的是一张横屏地图，而窗口本身仍然是竖屏
+  /* 全屏时地图「横过来」的几何：
+     · 舞台：边长 = max(屏宽, 屏高) 的正方形，摆在地图层正中间；
+     · 地图：宽高互换（宽 = 屏高、高 = 屏宽），摆进舞台正中间后绕中心转 90°。
+     为什么要多这一层舞台：Android 的 clipChildren 是按子视图的**布局框**裁的，
+     如果直接把"布局框比屏幕还大"的旋转层放在地图层里，会被裁成一条横带
+     ——之前"只有下半部分是地图、上半部分还是主界面"就是这么来的。
+     放进舞台后，布局框和旋转后的实际范围都装得下，谁也不裁它。 */
+  const mapStageBox = useMemo(() => {
+    if (!mapFullscreen || !rootSize) return null;
+    const { w, h } = rootSize;
+    const s = Math.max(w, h);
+    return { left: (w - s) / 2, top: (h - s) / 2, width: s, height: s };
+  }, [mapFullscreen, rootSize]);
+
   const mapBoxRotated = useMemo(() => {
-    if (!fsSize) return null;
-    const { w, h } = fsSize;
+    if (!mapFullscreen || !rootSize) return null;
+    const { w, h } = rootSize;
+    const s = Math.max(w, h);
     return {
       position: 'absolute',
       width: h,
       height: w,
-      left: (w - h) / 2,
-      top: (h - w) / 2,
+      left: (s - h) / 2,
+      top: (s - w) / 2,
       transform: [{ rotate: '90deg' }],
     };
-  }, [fsSize]);
+  }, [mapFullscreen, rootSize]);
+
+  // 地图层的位置：全屏 = 整屏；平时 = 量出来的 viewArea 位置（再收进列表卡片那圈边距，
+  // 和列表/日历的圆角卡片对齐）。还没量到时给一个近似位置兜底，免得 WebView 挂不上。
+  const mapLayerBox = useMemo(() => {
+    if (mapFullscreen) {
+      const w = rootSize?.w || winW;
+      const h = rootSize?.h || winH;
+      return { left: 0, top: 0, width: w, height: h };
+    }
+    const base = mapRect || {
+      left: 0,
+      top: insets.top + 110,
+      width: winW,
+      height: Math.max(0, winH - insets.top - 110 - 20),
+    };
+    return {
+      left: base.left + 16,
+      top: base.top + 4,
+      width: Math.max(0, base.width - 32),
+      height: Math.max(0, base.height - 24),
+    };
+  }, [mapFullscreen, rootSize, winW, winH, insets.top, mapRect]);
 
   // 提前把地图 WebView 挂上（空闲时），这样第一次点「地图」也不用现建，切换更顺
   useEffect(() => {
@@ -599,7 +635,7 @@ export default function HomeScreen({ navigation }) {
         </View>
       </Animated.View>
 
-      <View style={[styles.mainContent, { paddingTop: insets.top }, mapFullscreen && styles.mainContentFullscreen]}>
+      <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.profileBtn} onPress={() => toggleSidebar(true)}><User color={colors.textOnAccent} size={20} /></TouchableOpacity>
           <ViewSwitcher value={pillMode} onChange={changeView} />
@@ -626,10 +662,10 @@ export default function HomeScreen({ navigation }) {
             地图单独一层常驻：尺寸始终有效，切走时只把透明度降到 0，
             这样 Leaflet 不会把瓦片卸掉，切回来是秒开、不用重新下载 */}
         <View
-          style={[styles.viewArea, mapFullscreen && styles.viewAreaFullscreen]}
+          style={styles.viewArea}
           ref={viewAreaRef}
           collapsable={false}
-          onLayout={() => { if (mapFullscreen) setTimeout(applyFullscreenInset, 0); }}
+          onLayout={() => setTimeout(measureMapRect, 0)}
         >
         <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
@@ -652,45 +688,47 @@ export default function HomeScreen({ navigation }) {
           />
         </Reanimated.View>
 
-        {/* 首次进地图才挂载，之后一直保活 */}
-        {mapMounted && (
-        <Reanimated.View
-          pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
-          style={[styles.mapLayer, mapFullscreen && styles.mapLayerFullscreen, fsInset, mapLayerStyle]}
-        >
-          {/* 全屏时这一层绕中心转 90°、宽高互换：铺满整屏的是"横过来的地图"，
-              而不是把整个 App 的界面转成横屏 */}
-          <View style={[styles.mapBox, mapFullscreen && mapBoxRotated]}>
-            <WebView
-              ref={mapRef}
-              originWhitelist={['*']}
-              source={mapSource}
-              style={styles.map}
-              scrollEnabled={false}
-              onMessage={(e) => {
-              // 地图弹窗里点「查看详情」→ 跳转到对应印记的详情页
-              try {
-                const msg = JSON.parse(e.nativeEvent.data);
-                if (msg.type === 'openDetail') {
-                  const item = logData.find(l => String(l.id) === String(msg.id));
-                  openDetailFromMap(item);
-                } else if (msg.type === 'mapFullscreen') {
-                  // 地图上的「全屏」按钮：全屏时地图铺满整屏并横过来，再点一次还原
-                  if (msg.on) enterMapFullscreen();
-                  else exitMapFullscreen();
-                } else if (msg.type === 'jsApiFailed') {
-                  // 高德 JS API 没出图（key / 安全密钥 / 网络 / WebGL）：切回栅格底图，
-                  // 地图照样能用，并在顶部说明原因
-                  setJsApiFailed(true);
-                }
-                } catch {}
-              }}
-            />
-          </View>
-        </Reanimated.View>
-        )}
         </View>
       </View>
+
+      {/* 地图层：根容器的直接子节点（首帧量好位置后才挂 WebView）。
+          全屏 = 整屏铺满 + 内容转 90°；平时 = 量出来的 viewArea 位置 */}
+      {mapMounted && (
+        <Reanimated.View
+          pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
+          style={[styles.mapLayer, mapLayerBox, mapFullscreen && styles.mapLayerFullscreen, mapLayerStyle]}
+        >
+          <View style={[styles.mapStage, mapStageBox]}>
+            <View style={[styles.mapBox, mapBoxRotated]}>
+              <WebView
+                ref={mapRef}
+                originWhitelist={['*']}
+                source={mapSource}
+                style={styles.map}
+                scrollEnabled={false}
+                onMessage={(e) => {
+                  // 地图弹窗里点「查看详情」→ 跳转到对应印记的详情页
+                  try {
+                    const msg = JSON.parse(e.nativeEvent.data);
+                    if (msg.type === 'openDetail') {
+                      const item = logData.find(l => String(l.id) === String(msg.id));
+                      openDetailFromMap(item);
+                    } else if (msg.type === 'mapFullscreen') {
+                      // 地图上的「全屏」按钮：地图铺满整屏并横过来，再点一次还原
+                      if (msg.on) enterMapFullscreen();
+                      else exitMapFullscreen();
+                    } else if (msg.type === 'jsApiFailed') {
+                      // 高德 JS API 没出图（key / 安全密钥 / 网络 / WebGL）：切回栅格底图，
+                      // 地图照样能用，并在顶部说明原因
+                      setJsApiFailed(true);
+                    }
+                  } catch {}
+                }}
+                />
+            </View>
+          </View>
+        </Reanimated.View>
+      )}
 
       <BottomSheetModal
         ref={filterSheetRef}
@@ -810,7 +848,6 @@ const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   mainContent: { flex: 1 },
   // 全屏时让页面主体压过侧边栏（地图铺满整屏后，侧边栏/遮罩还在同一层里）
-  mainContentFullscreen: { zIndex: 300 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, height: 44 },
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
   largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
@@ -833,10 +870,14 @@ const makeStyles = (c) => ({
   viewArea: { flex: 1 },
   // 全屏时把承载地图的容器抬到最上层：地图层靠负的四周补偿撑满整屏，
   // 会盖住头部和标题，所以容器本身也要压过侧边栏（侧边栏 zIndex 100）
-  viewAreaFullscreen: { zIndex: 300 },
-  // 地图层：绝对定位铺在同一块区域，隐藏时只降透明度（尺寸不变 → Leaflet 不会卸载瓦片）
-  mapLayer: { ...StyleSheet.absoluteFillObject, marginTop: 4, marginHorizontal: 16, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
-  mapLayerFullscreen: { marginTop: 0, marginHorizontal: 0, marginBottom: 0, borderRadius: 0 },
+  // 地图层：绝对定位，位置/尺寸由测量给出（全屏时就是整屏）；隐藏时只降透明度，
+  // 尺寸不变 → Leaflet 不会卸载瓦片
+  mapLayer: { position: 'absolute', borderRadius: 14, overflow: 'hidden' },
+  // 全屏：铺满整屏、圆角归零、抬到最上层；overflow 必须放开，
+  // 否则"横过来"的那层（布局框比屏幕大）会被裁成一条带
+  mapLayerFullscreen: { borderRadius: 0, overflow: 'visible', zIndex: 300 },
+  // 舞台：平时就是普通的一层（铺满地图层），全屏时换成居中的正方形（尺寸在 JS 里算）
+  mapStage: { flex: 1 },
   mapBox: { flex: 1 },
   emptyText: { fontSize: 14, color: c.textMuted },
   map: { flex: 1 },
