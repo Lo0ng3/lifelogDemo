@@ -1002,10 +1002,14 @@ export function buildMapHtml({
               on('zin', function () { Engine.zoomIn(); });
               on('zout', function () { Engine.zoomOut(); });
               on('zfit', function () { safe(fitAll); });
-              // 全屏：真正把 WebView 铺满屏幕 + 锁横屏是 RN 侧做的（WebView 不重建，
+              // 全屏：铺满整屏 + 把地图转 90° 是 RN 侧做的（WebView 不重建，
               // 视角和已打开的卡片都保住），这里只负责发消息和按状态换图标
               on('zfull', function () {
-                  postMsg({ type: 'mapFullscreen', on: !fullscreen });
+                  // 本机先把状态翻过来：连点两次时第二次才不会被当成"再进一次全屏"
+                  fullscreen = !fullscreen;
+                  var b = $('zfull');
+                  if (b) b.innerHTML = fullscreen ? COLLAPSE_ICON : EXPAND_ICON;
+                  postMsg({ type: 'mapFullscreen', on: fullscreen });
               });
 
               redraw();

@@ -265,16 +265,23 @@ export default function HomeScreen({ navigation }) {
      ① 只让「地图」横过来，不转整个界面：窗口始终是竖屏（app.json 也是 portrait），
         全屏时把地图这块内容绕中心转 90°，宽高互换铺满整屏——转手机看就是横屏地图，
         列表/日历/添加/详情的排版完全不受影响，也不会出现系统转屏那一套回调；
-     ② 全屏不是换一个 WebView：地图层原地撑到整屏（WebView 不重建 → 瓦片、视角、
-        已经打开的卡片都保住）。地图层是 viewArea 的子节点，用「负的左上 + 负的右下」
-        把它顶到窗口四边，偏移量由同一时刻量到的两个矩形算出来，不会留白边。 */
+     ② 全屏不是换一个 WebView：地图层原地变大（WebView 不重建 → 瓦片、视角、
+        已经打开的卡片都保住）。
+
+     位置怎么摆：地图层是**根容器的直接子节点**，两种状态都写绝对坐标——
+       · 平时：量出 viewArea 相对根容器的矩形，再按列表卡片那圈边距（16/4/20）缩进；
+       · 全屏：直接 { 0, 0, 根容器宽高 }。
+     不塞进 viewArea 里（早期写法是塞进去再用负偏移往外撑），是因为那样坐标要绕一层
+     父容器、符号极易写反，还要担心父容器裁剪；挂在根容器下，"整屏"就是 { 0, 0, 整屏 }，
+     不用换算。 */
   const [mapFullscreen, setMapFullscreen] = useState(false);
   // 地图层挂在「根容器」下面（不是塞在列表那块 viewArea 里）：
   //   · 平时靠测量把自己摆到 viewArea 的位置上；
   //   · 全屏时直接摆成"整屏"，于是它的 bounds 就是整屏——不光是看得全，
   //     触摸也才收得到（父容器不覆盖的地方，手指点下去根本传不到地图）。
-  //   之前塞在 viewArea 里靠负偏移往外撑，被 viewArea 的 overflow 裁掉，
-  //   表现就是"只有下半部分是地图、上半部分还是主界面"。
+  //   （1.7.4 早期版本塞在 viewArea 里、用父容器坐标系写负偏移，top 的符号写反了，
+  //    地图被整体往下推了"头部+标题"的高度，表现就是"只有下半部分是地图、
+  //    上半部分还是主界面"。现在改成根容器坐标系，不存在这种换算。）
   const [mapRect, setMapRect] = useState(null);    // { left, top, width, height }（相对根容器）
   const [rootSize, setRootSize] = useState(null);  // 根容器尺寸（全屏时用）
   const rootRef = useRef(null);
@@ -348,6 +355,15 @@ export default function HomeScreen({ navigation }) {
     setMapFullscreen(false);
     navigation.setOptions({ tabBarStyle: tabBarStyleFor(colors) });
   }, [navigation, colors]);
+
+  // 兜底：万一首页被卸载时还停在全屏，别把 TabBar 永久留在隐藏状态
+  const fullscreenRef = useRef(false);
+  const tabBarStyleRef = useRef(tabBarStyleFor(colors));
+  useEffect(() => { fullscreenRef.current = mapFullscreen; }, [mapFullscreen]);
+  useEffect(() => { tabBarStyleRef.current = tabBarStyleFor(colors); }, [colors]);
+  useEffect(() => () => {
+    if (fullscreenRef.current) navigation.setOptions({ tabBarStyle: tabBarStyleRef.current });
+  }, [navigation]);
 
   // 地图上的「查看详情」：窗口本来就是竖屏、地图只是内容转了 90°，
   // 所以直接跳转即可（不用退全屏、不用等转屏），返回时地图仍是刚才的全屏状态。
@@ -562,8 +578,10 @@ export default function HomeScreen({ navigation }) {
   // 和列表/日历的圆角卡片对齐）。还没量到时给一个近似位置兜底，免得 WebView 挂不上。
   const mapLayerBox = useMemo(() => {
     if (mapFullscreen) {
-      const w = rootSize?.w || winW;
-      const h = rootSize?.h || winH;
+      // 取「根容器」和「窗口」里更大的那个：万一 TabBar 的 display:none 没把高度还回来，
+      // 地图也要盖满整个窗口（根容器更小的话，多出来的部分由下层容器裁，不会露出背景）
+      const w = Math.max(rootSize?.w || 0, winW);
+      const h = Math.max(rootSize?.h || 0, winH);
       return { left: 0, top: 0, width: w, height: h };
     }
     const base = mapRect || {
@@ -698,8 +716,10 @@ export default function HomeScreen({ navigation }) {
           pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
           style={[styles.mapLayer, mapLayerBox, mapFullscreen && styles.mapLayerFullscreen, mapLayerStyle]}
         >
-          <View style={[styles.mapStage, mapStageBox]}>
-            <View style={[styles.mapBox, mapBoxRotated]}>
+          {/* collapsable={false}：这两层的位置/尺寸就是全屏几何本身，
+              必须保证它们在原生侧真实存在，不能被 RN 的视图扁平化优化掉 */}
+          <View style={[styles.mapStage, mapStageBox]} collapsable={false}>
+            <View style={[styles.mapBox, mapBoxRotated]} collapsable={false}>
               <WebView
                 ref={mapRef}
                 originWhitelist={['*']}
