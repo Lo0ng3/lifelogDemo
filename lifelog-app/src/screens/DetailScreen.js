@@ -28,7 +28,8 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 /* ---------------- 影像九宫格：长按拖动排序 ----------------
    交互约定（和"长按设为封面"共存，不靠任何角标/把手）：
-     · 长按 260ms 后**移动** → 拖动换顺序（被拖的那张跟手，滑到哪一格就和那一格互换）；
+     · 长按 260ms 后**移动** → 拖动换顺序：被拖的那张跟手，**滑到哪一格就插到那一格**，
+       中间的影像整体顺延一格（是"插入/搬移"，不是两张互换位置）；
      · 长按 260ms 后**原地松手** → 还是原来的「设为封面」菜单；
      · 轻点 → 打开全屏查看器（手势没达到长按时长就结束了，不会干扰点击）。
    拖动过程中只改本地顺序（order），松手才写回记录，避免拖一次写几十遍存储。 */
@@ -36,7 +37,7 @@ const GRID_COLS = 3;
 
 function MediaGridCell({
   entry, displayIndex, originalIndex, coverOn, total,
-  gx, gy, cw, ch, onSwap, onOpen, onIdleLongPress, onDragState, onMeasure,
+  gx, gy, cw, ch, onMove, onOpen, onIdleLongPress, onDragState, onMeasure,
 }) {
   const styles = useThemedStyles(makeStyles);
   const tx = useSharedValue(0);
@@ -50,7 +51,7 @@ function MediaGridCell({
   // 回调走 ref：拖动过程中父组件每次交换顺序都会重渲染，
   // 若把这些回调放进 useMemo 依赖里，手势会被反复重建、正在拖的那一下会断
   const cbRef = useRef({});
-  cbRef.current = { onSwap, onIdleLongPress, onDragState, onOpen, onMeasure };
+  cbRef.current = { onMove, onIdleLongPress, onDragState, onOpen, onMeasure };
 
   const pan = useMemo(() => {
     // 手指落点 → 目标格子的显示下标
@@ -76,7 +77,7 @@ function MediaGridCell({
         if (Math.abs(e.translationX) > 14 || Math.abs(e.translationY) > 14) moved.value = 1;
         const target = targetOf(e.absoluteX, e.absoluteY);
         if (target !== cur.value) {
-          runOnJS(cbRef.current.onSwap)(cur.value, target);
+          runOnJS(cbRef.current.onMove)(cur.value, target);
           cur.value = target;
         }
         // 让被拖的这张始终贴在手指下（位置按"当前所在格子的中心"算）
@@ -162,7 +163,8 @@ function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder }) 
   // 影像被删掉时，之前那份拖动顺序就失效了，回到自然顺序
   useEffect(() => { orderRef.current = null; setOrder(null); }, [entries.length]);
 
-  const swap = useCallback((from, to) => {
+  // 把 from 位置这张搬去 to：取出后插入，其余顺延（不是交换两张）
+  const moveTo = useCallback((from, to) => {
     setOrder((prev) => {
       const cur = prev ? [...prev] : entries.map((_, i) => i);
       if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return prev || cur;
@@ -193,7 +195,7 @@ function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder }) 
             coverOn={coverIndex === originalIndex}
             total={total}
             gx={gx} gy={gy} cw={cw} ch={ch}
-            onSwap={swap}
+            onMove={moveTo}
             onOpen={onOpen}
             onMeasure={measureGrid}
             onIdleLongPress={() => onIdleLongPress(originalIndex)}
