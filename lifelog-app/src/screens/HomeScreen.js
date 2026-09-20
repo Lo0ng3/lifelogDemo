@@ -344,13 +344,27 @@ export default function HomeScreen({ navigation }) {
     lockPortrait();
   }, [navigation, colors]);
 
+  // 从全屏进详情 → 返回时自动恢复到刚才的全屏（横屏）；详情页自己始终是竖屏
+  const restoreFullscreenRef = useRef(false);
+
   // 从地图打开详情：全屏（横屏）时先退回竖屏再跳，避免详情页在半横屏状态下排版错乱
   const openDetailFromMap = useCallback((item) => {
     if (!item) return;
     if (!mapFullscreen) { navigation.navigate('Detail', { item }); return; }
+    restoreFullscreenRef.current = true;   // 记着"是从全屏进去的"
     exitMapFullscreen();
     waitPortrait().then(() => navigation.navigate('Detail', { item }));
   }, [mapFullscreen, exitMapFullscreen, navigation]);
+
+  // 从详情返回、地图页重新获得焦点时，把刚才的全屏还回去（等详情页的返回动画走完再转屏）
+  useEffect(() => {
+    const sub = navigation.addListener('focus', () => {
+      if (!restoreFullscreenRef.current) return;
+      restoreFullscreenRef.current = false;
+      setTimeout(() => enterMapFullscreen(), 200);
+    });
+    return sub;
+  }, [navigation, enterMapFullscreen]);
   // 兜底：页面万一被卸载（卸载时还停在全屏），把方向和 TabBar 一起还原
   const fullscreenStateRef = useRef({ on: false, tabBar: null });
   useEffect(() => {
