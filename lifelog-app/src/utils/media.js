@@ -26,6 +26,54 @@ export const mediaSignature = (raw) => {
   return e.uri ? `u:${e.uri}` : null;
 };
 
+// 条目里的文件名（小写），跨"分享副本 / 相册引用"比较同一张影像时用
+const entryFileName = (e) => String(e?.filename || e?.uri || '').split('/').pop().split('?')[0].toLowerCase();
+
+/* 一组媒体条目的"同一张影像"索引。
+   为什么必须两套口径一起看：记录里的条目多半是相册引用（只有 assetId），
+   而分享进来的副本只有 文件名 + 大小——只比 assetId 或只比文件名，总有一边对不上，
+   表现就是"已经记过的照片又被加了一遍"。
+   判定顺序（任何一条成立即算同一张）：
+     ① assetId 相同；
+     ② 文件名 + 大小都相同；
+     ③ 文件名相同，且有一边拿不到大小（宁可当同一张，也别重复挂两份）；
+     ④ 完整 uri 相同。
+   add() 用于把"这一批里已经收下的"也并进索引，重复分享的同一张也会被挡住。 */
+export const makeMediaIndex = (entries = []) => {
+  const ids = new Set();       // assetId
+  const exact = new Set();     // 文件名 + 大小
+  const loose = new Set();     // 没有大小的条目的文件名
+  const names = new Set();     // 全部文件名
+  const uris = new Set();
+
+  const add = (raw) => {
+    const e = normalizeMediaEntry(raw) || {};
+    if (e.assetId) ids.add(e.assetId);
+    const name = entryFileName(e);
+    if (name) {
+      names.add(name);
+      if (e.size) exact.add(`${name}:${e.size}`);
+      else loose.add(name);
+    }
+    if (e.uri) uris.add(e.uri);
+  };
+
+  const has = (raw) => {
+    const e = normalizeMediaEntry(raw) || {};
+    if (e.assetId && ids.has(e.assetId)) return true;
+    const name = entryFileName(e);
+    if (name && names.has(name)) {
+      if (!e.size) return true;                       // 这边拿不到大小：只比文件名
+      if (exact.has(`${name}:${e.size}`)) return true;
+      if (loose.has(name)) return true;               // 那份没有大小，不冒险当两张
+    }
+    return !!e.uri && uris.has(e.uri);
+  };
+
+  (entries || []).forEach(add);
+  return { has, add, count: () => names.size };
+};
+
 // 相册里存的是引用时，显示端把 assetId 解析成原始路径；解析不到才回退到条目自带的 uri。
 // 条目里的备用 uri 可能是早已删除的缓存副本（死路径），所以解析失败时不缓存结果，下次再试。
 const resolvedCache = new Map();

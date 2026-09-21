@@ -57,7 +57,8 @@ memo 化的格子、虚拟化窗口收敛到 ±2 屏、滚动/拖动动画全部
   并弹出**「分享到印记」**（[ShareTargetScreen](src/screens/ShareTargetScreen.js)），两种去处：
   **新建印记**（落到「添加」页，影像已经挂在表单的照片区，类型 / 日期 / 评论照常自己填）；
   **添加到已有记录**（在记录列表里搜 / 挑一条，这些影像追加到它的「相关影像」末尾，
-  追加走的是和保存记录同一条流水线：重链回相册原片、副本重链成功即删）。
+  追加走的是和保存记录同一条流水线：**先重链回相册原片**、副本重链成功即删；
+  追加前会做一次去重，同一张已经在这条记录 / 别的记录里的会跳过并如实报数）。
 - 原生入口：`expo-share-intent`（SDK 54 对应 v5）的 config plugin 在 `AndroidManifest` 里
   给 MainActivity 加了 `ACTION_SEND` 与 `ACTION_SEND_MULTIPLE` 的 `image/*` / `video/*`
   过滤条件，并把 launchMode 设为 `singleTask`（App 在前台时走 onNewIntent 而不是重开）。
@@ -71,8 +72,12 @@ memo 化的格子、虚拟化窗口收敛到 ±2 屏、滚动/拖动动画全部
   在「分享到印记」里点取消，`media/` 里的副本也一并删掉。
 - 侧边栏「清理缓存」现在一并调用 WebView 的 `clearCache(true)`，把栅格瓦片/矢量数据/SDK 这些
   **地图缓存**也清掉，并如实显示释放了多少——清的都是可再生内容，记录、照片引用、Key 都不受影响。
-- 添加影像的去重口径从"只认 `assetId`"扩成：有相册引用按 `assetId`，没有的（分享进来的副本、旧数据副本）
-  按 **文件名 + 大小** 认人（`mediaSignature`），所以同一张图不会再被重复加进表单，也不会被重复追加到已有记录。
+- 去重口径统一在 `makeMediaIndex`（`src/utils/media.js`）：记录里的条目多半是**相册引用**
+  （只有 `assetId`），而分享进来的**副本**只有 文件名 + 大小——只比一套永远对不上，
+  "同一张照片又被加了一遍"就是这么来的。现在两套口径一起看（`assetId` → 文件名+大小 →
+  有一边没大小时比文件名 → 完整 uri），并**先重链再比**：分享到已有记录时，先把副本换成
+  相册引用，再和记录里的条目对身份，所以已经记过的照片不会再被追加第二遍。
+  应用内选图器的「已添加」角标同样按这两套口径判断（记录里以副本形式存的那张也能认出来）。
 - 实现位置：`App.js` 最外层挂 `ShareIntentProvider`，`ShareIntentBridge` 收下文件 → 复制 →
   通过 `navigationRef` 跳到 `ShareTarget` 并带上 `params.sharedMedia`；选「新建印记」时再转到
   「Main / Add」（`AddScreen` 收到后追加到 `selectedImages` 并清掉参数，`shareToken` 保证同一批影像

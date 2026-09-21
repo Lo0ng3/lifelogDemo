@@ -313,14 +313,23 @@ export default function MediaPickerScreen({ route, navigation }) {
     return rows;
   }, [assets.length, commonAlbums, otherAlbums, junkAlbums, showMoreAlbums, showAllAlbums, totalCount]);
 
-  // 已被其它记录引用的资产：禁止重复添加（同一张照片/视频只允许挂在一个记录上）
-  const usedElsewhere = useMemo(() => {
-    const used = new Set();
+  // 已被其它记录引用的资产：禁止重复添加（同一张照片/视频只允许挂在一个记录上）。
+  // 两套口径都要看：有相册引用的按 assetId 认，没有引用的（旧数据 / 分享进来的副本）
+  // 按文件名认——只比 assetId 的话，记录里以副本形式存的那张会被当成新的重复加一遍
+  const isUsedElsewhere = useMemo(() => {
+    const ids = new Set();
+    const names = new Set();
     logData.forEach(log => (log.localImages || []).forEach(e => {
-      const id = typeof e === 'string' ? null : e?.assetId;
-      if (id && !ownIds.has(id)) used.add(id);
+      const entry = typeof e === 'string' ? { uri: e } : (e || {});
+      if (entry.assetId) {
+        if (!ownIds.has(entry.assetId)) ids.add(entry.assetId);
+        return;
+      }
+      const name = String(entry.filename || '').toLowerCase();
+      if (name) names.add(name);
     }));
-    return used;
+    return (asset) => !!asset
+      && (ids.has(asset.id) || (!!asset.filename && names.has(String(asset.filename).toLowerCase())));
   }, [logData, ownIds]);
 
   const load = useCallback(async (after, album) => {
@@ -416,13 +425,13 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   const toggle = useCallback((asset) => {
     setSelected(prev => {
-      if (usedElsewhere.has(asset.id)) return prev;
+      if (isUsedElsewhere(asset)) return prev;
       const next = new Set(prev);
       if (next.has(asset.id)) next.delete(asset.id);
       else next.add(asset.id);
       return next;
     });
-  }, [usedElsewhere]);
+  }, [isUsedElsewhere]);
 
   const handleConfirm = async () => {
     if (confirming || selected.size === 0) return;
@@ -586,12 +595,12 @@ export default function MediaPickerScreen({ route, navigation }) {
       asset={item}
       index={index}
       selected={selected.has(item.id)}
-      used={usedElsewhere.has(item.id)}
+      used={isUsedElsewhere(item)}
       isVideo={item.mediaType === 'video'}
       onOpen={openPreview}
       onToggle={toggle}
     />
-  ), [openPreview, selected, toggle, usedElsewhere]);
+  ), [isUsedElsewhere, openPreview, selected, toggle]);
 
   const onEndReached = useCallback(() => {
     if (!loadingRef.current && endCursorRef.current) load(endCursorRef.current, albumIdRef.current);
@@ -749,7 +758,7 @@ export default function MediaPickerScreen({ route, navigation }) {
           const a = previewAssets[imageIndex];
           if (!a) return null;
           const isSel = selected.has(a.id);
-          const isUsed = usedElsewhere.has(a.id);
+          const isUsed = isUsedElsewhere(a);
           return (
             <View style={styles.previewFooter}>
               <TouchableOpacity

@@ -10,19 +10,42 @@ import { Search, Plus, PlayCircle, X } from 'lucide-react-native';
 
 import { LogContext } from '../context/LogContext';
 import CoverIcon from '../components/CoverIcon';
-import { mediaSignature, isVideoEntry, mediaUri } from '../utils/media';
+import { makeMediaIndex, isVideoEntry, mediaUri } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { labelOf, groupColor, groupSoft } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+
+// 应用自己复制出来的副本（documentDirectory/media/）才能删；相册、用户文件绝不动
+const isAppCopy = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.includes('/media/');
+
+const discardUris = async (uris) => {
+  for (const uri of uris) {
+    if (!isAppCopy(uri)) continue;
+    try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+  }
+};
+
+// 重复被跳过的影像：说清楚是在这条记录里，还是记在别的记录里
+const describeSkipped = (ownCount, otherCount) => {
+  const parts = [];
+  if (ownCount) parts.push(`${ownCount} 个这条记录里已经有了`);
+  if (otherCount) parts.push(`${otherCount} 个已经记在别的记录里了`);
+  return parts.length ? `${parts.join('，')}。` : '没有可用的影像。';
+};
 
 /* ------------------------------------------------------------------ *
  * 系统分享的落点：图库选图 → 分享 → 印记
  *
  * 早期只把影像挂到「添加」页（等于只能新建记录）；这里补上另一半：
  * 也可以直接挑一条已有记录，把影像追加到它的「相关影像」末尾。
- * 追加走的是和保存记录完全相同的流水线（重链回相册原片、副本重链成功即删），
- * 所以手动加的影像和分享进来的影像在存储里没有区别。
+ *
+ * 两个容易出错的地方：
+ *  ① 追加走的是和保存记录完全相同的流水线（先重链回相册原片、副本重链成功即删），
+ *     所以分享进来的影像和手动加的在存储里没有区别；
+ *  ② **去重必须"先重链再比"**：分享进来的是 media/ 里的副本（只有 文件名 + 大小），
+ *     记录里存的却是相册引用（只有 assetId），直接比身份永远对不上——这就是
+ *     "同一张照片被重复加进已有记录"的原因。重链后再用两套口径一起比（见 makeMediaIndex）。
  * ------------------------------------------------------------------ */
 export default function ShareTargetScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
@@ -35,14 +58,7 @@ export default function ShareTargetScreen({ route, navigation }) {
   const [busy, setBusy] = useState(false);
 
   // 取消 = 这批影像没人要了：把复制进私有目录的副本删掉，别留在手机里占地方
-  const discardCopies = useCallback(async () => {
-    for (const m of media) {
-      const uri = m?.uri;
-      if (typeof uri !== 'string' || !uri.startsWith('file://')) continue;
-      if (!uri.includes('/media/')) continue;
-      try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
-    }
-  }, [media]);
+  const discardCopies = useCallback(() => discardUris(media.map(mediaUri)), [media]);
 
   const handleCancel = useCallback(() => {
     if (busy) return;
@@ -73,50 +89,44 @@ export default function ShareTargetScreen({ route, navigation }) {
     setBusy(true);
     try {
       const existing = record.localImages || [];
-      const ownKeys = new Set(existing.map((e) => mediaSignature(e)).filter(Boolean));
-      // 别的记录已经引用过的影像（assetId / 文件名+大小）：同一张照片只挂一条记录
-      const usedKeys = new Set();
-      logData.forEach((log) => {
-        if (log.id === record.id) return;
-        (log.localImages || []).forEach((e) => {
-          const k = mediaSignature(e);
-          if (k) usedKeys.add(k);
-        });
-      });
-      const fresh = media.filter((m) => {
-        const k = mediaSignature(m) || `u:${m.uri}`;
-        if (ownKeys.has(k) || usedKeys.has(k)) return false;
-        ownKeys.add(k);        // 同一批里的重复也挡掉
-        return true;
-      });
-      const skipped = media.length - fresh.length;
-      if (fresh.length === 0) {
-        Alert.alert('没有可添加的影像', skipped > 0 ? '这些影像已经记在这条记录（或其它记录）里了。' : '没有可用的影像。');
-        return;
+      // 分享进来的文件还只是 media/ 里的副本（只有 文件名 + 大小），记录里存的却是
+      // 相册引用（assetId）。先按保存记录的同一条流水线重链回相册原片，两边才算得上
+      // 同一张——不然"已经记过的照片"会被当成新的一张再加一遍
+      const relink = await relinkNewEntries(media);
+
+      const ownIndex = makeMediaIndex(existing);
+      const otherIndex = makeMediaIndex(
+        logData.filter((log) => log.id !== record.id).flatMap((log) => log.localImages || [])
+      );
+
+      const accepted = [];
+      const dupOwn = [];
+      const dupOther = [];
+      for (const entry of relink.entries) {
+        if (ownIndex.has(entry)) { dupOwn.push(entry); continue; }        // 这条记录里已经有了
+        if (otherIndex.has(entry)) { dupOther.push(entry); continue; }    // 已经记在别的记录里
+        accepted.push(entry);
+        ownIndex.add(entry);      // 同一批里的重复也挡掉
       }
 
-      // 与保存记录同一条流水线：先把副本重链回相册原片，重链失败的留作本地副本
-      const relink = await relinkNewEntries(fresh);
-      const accepted = [];
-      let blocked = 0;
-      for (const entry of relink.entries) {
-        const k = mediaSignature(entry);
-        if (k && usedKeys.has(k)) { blocked++; continue; }   // 重链后才认出来的重复
-        accepted.push(entry);
-      }
       if (accepted.length === 0) {
-        Alert.alert('没有可添加的影像', '这些影像已经记在其它的记录里了。');
+        // 一张都没收下：这里不删副本——用户可能换一条记录再试，副本还得用；
+        // 真的都不要了他会点取消，那条路径统一删
+        Alert.alert('没有可添加的影像', describeSkipped(dupOwn.length, dupOther.length));
         return;
       }
 
       await updateLog({ ...record, localImages: [...existing, ...accepted] });
-      // 被相册原片接管的副本删掉（应用里不留原件拷贝）
-      for (const uri of relink.replacedUris) {
-        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
-      }
+      // 被相册原片接管的副本删掉（应用里不留原件拷贝）；
+      // 重复被跳过的那些副本也没人引用了，一并清掉（这一页马上就被替换掉，这批分享已消费完）
+      discardUris([
+        ...relink.replacedUris,
+        ...dupOwn.map(mediaUri),
+        ...dupOther.map(mediaUri),
+      ]);
 
       const tips = [`已添加 ${accepted.length} 个影像`];
-      if (skipped + blocked > 0) tips.push(`跳过 ${skipped + blocked} 个已记过的`);
+      if (dupOwn.length + dupOther.length > 0) tips.push(`跳过 ${dupOwn.length + dupOther.length} 个已记过的`);
       if (Platform.OS === 'android') ToastAndroid.show(tips.join('，'), ToastAndroid.SHORT);
       // 直接进这条记录的详情：加完就能看到结果，也能顺手调整影像顺序
       navigation.replace('Detail', { item: record });
