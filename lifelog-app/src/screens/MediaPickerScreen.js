@@ -631,7 +631,6 @@ export default function MediaPickerScreen({ route, navigation }) {
         <View style={styles.deniedBox}>
           <ActivityIndicator size="large" color={colors.accent} />
           <Text style={styles.deniedText}>正在读取相册…</Text>
-          <Text style={styles.hintText}>如果长时间没有反应，请确认是否弹出了相册权限弹窗</Text>
         </View>
       )}
       {status === 'denied' && (
@@ -654,7 +653,7 @@ export default function MediaPickerScreen({ route, navigation }) {
 
       {status === 'granted' && (
         <View style={styles.gridWrap}>
-          {limited && <Text style={styles.limitedHint}>当前仅允许访问部分照片，如需完整相册请在系统设置中开放「所有照片」</Text>}
+          {limited && <Text style={styles.limitedHint}>仅可访问部分照片</Text>}
           <View style={{ flex: 1 }} onLayout={onGridLayout}>
             <Reanimated.FlatList
               ref={listRef}

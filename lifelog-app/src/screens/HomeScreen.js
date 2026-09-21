@@ -7,7 +7,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings
+  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
@@ -26,6 +26,7 @@ import {
 import { LogContext } from '../context/LogContext';
 import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
+import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
 import { cleanupMediaCaches } from '../utils/media';
 import { shortPlaceName } from '../utils/format';
@@ -93,6 +94,8 @@ export default function HomeScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
+  // 侧边栏「说明」：页面上的说明性文字统一收进这里
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // 地图服务设置弹窗：天地图 / 高德二选一，两家的 Key 各自保存
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -186,7 +189,7 @@ export default function HomeScreen({ navigation }) {
     if (result.ok) {
       Alert.alert(
         '导出成功',
-        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}：\n${result.name}\n\n备份文件可在换机后通过"导入备份"恢复。`
+        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}：\n${result.name}`
       );
     } else {
       Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
@@ -244,12 +247,7 @@ export default function HomeScreen({ navigation }) {
         mapRef.current?.clearCache?.(true);
       } catch {}
       const mb = Math.round((freed / 1024 / 1024) * 10) / 10;
-      Alert.alert(
-        '清理完成',
-        `已释放 ${mb} MB 缓存空间，地图缓存也已清空。\n\n`
-        + '清掉的都是可再生的内容：封面帧会在使用中自动重建，地图下次打开会重新下载瓦片，'
-        + '记录、照片引用、地图 Key 都不受影响。'
-      );
+      Alert.alert('清理完成', `已释放 ${mb} MB 缓存空间，地图缓存也已清空。`);
     } catch (e) {
       Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
     }
@@ -639,7 +637,7 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.menuItemSub}>
                   {mapProvider === 'amap'
                     ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 地名检索已配置' : ' · 未配置检索 Key'}`
-                    : (tdtKey ? '天地图已配置（底图 + 地名检索）' : '天地图未配置，地图与联想不可用')}
+                    : (tdtKey ? '天地图已配置' : '天地图未配置')}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -658,6 +656,11 @@ export default function HomeScreen({ navigation }) {
             <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache}>
               <Eraser size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
               <Text style={styles.menuItemText}>清理缓存</Text>
+            </TouchableOpacity>
+            {/* 说明：原先散落在各页面上的提示性文字都集中到这里 */}
+            <TouchableOpacity style={styles.menuItem} onPress={() => { toggleSidebar(false); setHelpOpen(true); }}>
+              <HelpCircle size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>说明</Text>
             </TouchableOpacity>
             {/* 外观：默认跟随系统（白天浅色 / 夜间深色），也可以手动固定 */}
           </View>
@@ -822,7 +825,7 @@ export default function HomeScreen({ navigation }) {
               style={styles.settingsInput}
               value={keyDraft}
               onChangeText={setKeyDraft}
-              placeholder={providerDraft === 'amap' ? '在 lbs.amap.com 控制台申请，类型选「Web 服务」' : '在 lbs.tianditu.gov.cn 免费申请'}
+              placeholder={providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 tk'}
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -834,7 +837,7 @@ export default function HomeScreen({ navigation }) {
                   style={styles.settingsInput}
                   value={jsKeyDraft}
                   onChangeText={setJsKeyDraft}
-                  placeholder="选填：填了就用官方矢量渲染，放大更顺"
+                  placeholder="选填"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -844,21 +847,13 @@ export default function HomeScreen({ navigation }) {
                   style={styles.settingsInput}
                   value={jsCodeDraft}
                   onChangeText={setJsCodeDraft}
-                  placeholder="与上面那把 JS API Key 配对，缺一不可"
+                  placeholder="选填"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
               </>
             )}
-            <Text style={styles.settingsHint}>
-              {providerDraft === 'amap'
-                ? '两把 Key 各管一件事，互不通用：①「Web 服务」Key 只用于地点联想 / 地理编码；'
-                  + '②「Web端(JS API)」Key + 安全密钥用来渲染底图——填了就是官方矢量渲染（缩放跟手、深色用官方深色样式），'
-                  + '不填则自动用高德栅格瓦片（免 Key，但放大是一格一格加载的）。'
-                  + 'JS API 加载失败会自动切回栅格底图，不会白屏。坐标自动做 GCJ-02 纠偏，两家之间切换不会跑偏。'
-                : '天地图 Key 同时用于底图与地点联想（WGS-84 无偏移）。Key 只保存在本机，换机后需重新填写。'}
-            </Text>
             <View style={styles.settingsBtnRow}>
               <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setSettingsOpen(false)}>
                 <Text style={styles.settingsBtnCancelText}>取消</Text>
@@ -870,6 +865,8 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} />
     </View>
   );
 }
@@ -944,7 +941,6 @@ const makeStyles = (c) => ({
   providerChipText: { fontSize: 14, color: c.textSecondary },
   providerChipTextOn: { color: c.accent, fontWeight: '600' },
   settingsInput: { borderWidth: 1, borderColor: c.border, borderRadius: 10, backgroundColor: c.bgSunken, paddingHorizontal: 12, height: 44, fontSize: 14, color: c.text },
-  settingsHint: { fontSize: 12, color: c.textMuted, lineHeight: 18, marginTop: 8 },
   settingsBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
   settingsBtn: { paddingVertical: 9, paddingHorizontal: 18, borderRadius: 8, marginLeft: 10 },
   settingsBtnCancel: { backgroundColor: c.bgSunken },

@@ -74,8 +74,11 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 
   const stars = starsOf(item.rating);
   const essay = isEssay(item);
-  // 列表只显示日期（时分放到详情页）；正文一行，保证每行高度完全一致
-  const dayLabel = String(item.date || '').slice(5, 10);
+  // 日期分两行：上面年份、下面 月-日（缺年份的历史记录就按原样显示）。
+  // 时分只在旅票里有意义，放到详情页看；正文一行，保证每行高度完全一致
+  const dateText = String(item.date || '');
+  const yearLabel = dateText.slice(0, 4);
+  const dayLabel = dateText.slice(5, 10);
   const textLine = [item.subtitle, item.comment].filter(Boolean).join(' · ');
 
   const confirmDelete = () => Alert.alert(
@@ -114,7 +117,10 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
           <View style={styles.itemContent}>
             <View style={styles.itemHeader}>
               <Text style={styles.itemTitle} numberOfLines={1}>{shortTicketTitle(item.title)}</Text>
-              <Text style={styles.itemDate}>{dayLabel}</Text>
+              <View style={styles.itemDateCol}>
+                <Text style={styles.itemDateYear}>{yearLabel}</Text>
+                <Text style={styles.itemDate}>{dayLabel}</Text>
+              </View>
             </View>
             <View style={styles.metaRow}>
               <Text style={[styles.tag, { color: groupColor(item, colors), backgroundColor: groupSoft(item, colors) }]}>
@@ -151,7 +157,10 @@ const makeStyles = (c) => ({
   itemContent: { flex: 1, justifyContent: 'center' },
   itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
   itemTitle: { fontSize: 16, fontWeight: '600', color: c.text, flex: 1, marginRight: 8 },
-  itemDate: { fontSize: 12, color: c.textMuted },
+  // 年份一行、月-日一行，右对齐；两行加起来 ≈ 30pt，行高固定 96 也装得下
+  itemDateCol: { alignItems: 'flex-end', flexShrink: 0 },
+  itemDateYear: { fontSize: 11, color: c.textMuted, lineHeight: 14 },
+  itemDate: { fontSize: 13, color: c.textSecondary, lineHeight: 16, fontWeight: '600' },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   tag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
   moodText: { fontSize: 12, color: c.textMuted },

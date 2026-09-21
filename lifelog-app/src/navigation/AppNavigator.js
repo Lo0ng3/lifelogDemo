@@ -9,6 +9,7 @@ import HomeScreen from '../screens/HomeScreen';
 import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
+import ShareTargetScreen from '../screens/ShareTargetScreen';
 import { useTheme } from '../theme/ThemeProvider';
 import { tabBarStyleFor } from './tabBarStyle';
 
@@ -99,6 +100,9 @@ export default function AppNavigator() {
         <Stack.Screen name="Edit" component={AddScreen} />
         {/* 相册直读选图器：应用内浏览相册，只记录 assetId 全程零复制 */}
         <Stack.Screen name="MediaPicker" component={MediaPickerScreen} />
+        {/* 系统分享的落点：新建印记，或把分享进来的影像追加到某条已有记录 */}
+        {/* 关掉侧滑返回：这一页退出时要把分享进来的副本删掉，只走页面自己的取消/返回 */}
+        <Stack.Screen name="ShareTarget" component={ShareTargetScreen} options={{ gestureEnabled: false }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

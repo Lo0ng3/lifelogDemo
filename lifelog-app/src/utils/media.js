@@ -14,6 +14,18 @@ export const normalizeMediaEntry = (entry) =>
 
 export const mediaUri = (entry) => normalizeMediaEntry(entry)?.uri;
 
+// 一条影像条目的稳定"身份"：相册引用 > 文件名 + 大小 > 完整 uri。
+// 用途是让界面按身份（而不是下标）记住顺序：拖动重排写回存储后，记录里的条目会换成
+// 一批新对象，但身份不变——顺序就不会被应用第二遍，落位后也不会闪回旧排列。
+// 注意：不带 assetId 的条目，解析前后 uri 完全相同（resolveMediaUri 直接返回原 uri），
+// 带 assetId 的走 assetId，所以同一张影像在"记录里"和"解析后"算出的身份一致
+export const mediaSignature = (raw) => {
+  const e = normalizeMediaEntry(raw) || {};
+  if (e.assetId) return `a:${e.assetId}`;
+  if (e.filename) return `f:${e.filename}:${e.size || 0}`;
+  return e.uri ? `u:${e.uri}` : null;
+};
+
 // 相册里存的是引用时，显示端把 assetId 解析成原始路径；解析不到才回退到条目自带的 uri。
 // 条目里的备用 uri 可能是早已删除的缓存副本（死路径），所以解析失败时不缓存结果，下次再试。
 const resolvedCache = new Map();

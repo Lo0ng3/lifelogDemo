@@ -1,13 +1,15 @@
 // 系统分享 → App 选图：在图库/相册里选好照片，分享到「印记」，
-// 这里把分享进来的影像收下来并直接跳到「添加」页挂到表单上。
+// 这里把分享进来的影像收下来，再跳到「分享到印记」：
+// 可以新建一条记录（影像挂到添加表单上），也可以追加到某条已有记录（见 ShareTargetScreen）。
 //
 // 为什么还要复制一份：expo-share-intent 是把分享内容落到**系统缓存目录**的，
 // 缓存随时可能被系统清掉，而且那个路径不在 App 自己的媒体目录里——
 // 保存记录时的"重链回相册原片"逻辑（isAppOwnedMediaPath / relinkNewEntries）
 // 认不出它。所以统一复制进 documentDirectory/media/：
-//   · 与"应用内选图"完全同一条流水线：保存时按 文件名/大小/尺寸 重链回相册原片，
-//     重链成功就把副本删掉，App 长期不持有副本；
-//   · 重链不上（比如原片已删）也能当本地副本正常显示。
+//   · 与"应用内选图"完全同一条流水线：保存（或追加到已有记录）时按 文件名/大小/尺寸
+//     重链回相册原片，重链成功就把副本删掉，App 长期不持有副本；
+//   · 重链不上（比如原片已删）也能当本地副本正常显示；
+//   · 用户在「分享到印记」里取消时，这批副本由 ShareTargetScreen 删掉。
 import { useEffect, useRef } from 'react';
 import { useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -59,13 +61,13 @@ async function importSharedFiles(files) {
 }
 
 // 等导航容器就绪再跳（冷启动分享时导航还没挂好）
-const navigateToAdd = (params, tries = 0) => {
+const navigateWhenReady = (name, params, tries = 0) => {
   if (navigationRef.isReady()) {
-    navigationRef.navigate('Main', { screen: 'Add', params });
+    navigationRef.navigate(name, params);
     return;
   }
   if (tries > 40) return;                       // 约 5 秒还没就绪就放弃，避免死循环
-  setTimeout(() => navigateToAdd(params, tries + 1), 120);
+  setTimeout(() => navigateWhenReady(name, params, tries + 1), 120);
 };
 
 export default function ShareIntentBridge() {
@@ -82,7 +84,7 @@ export default function ShareIntentBridge() {
         resetShareIntent();
         if (entries.length) {
           // shareToken 用时间戳：同一批影像再分享一次也能触发接收端
-          navigateToAdd({ sharedMedia: entries, shareToken: Date.now() });
+          navigateWhenReady('ShareTarget', { sharedMedia: entries, shareToken: Date.now() });
         }
       } catch (e) {
         console.warn('[share] 处理分享内容失败', e?.message || e);

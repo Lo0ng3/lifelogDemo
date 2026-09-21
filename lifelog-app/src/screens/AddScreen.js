@@ -489,7 +489,7 @@ export default function AddScreen({ navigation, route }) {
     // 随笔：心情必填（emoji 预设或自填任一）
     const essayMood = MOOD_OPTIONS.includes(mood) ? mood : (mood || moodDraft.trim());
     if (baseType === 'note' && !essayMood) {
-      Alert.alert('提示', '随笔需要选一个心情（也可以自己填一个 emoji）');
+      Alert.alert('提示', '随笔需要选一个心情');
       return;
     }
 
@@ -685,11 +685,6 @@ export default function AddScreen({ navigation, route }) {
                   ))}
                 </Reanimated.View>
               )}
-              {!hasLocationSearch(loc) && (
-                <Text style={styles.autoCompleteHint}>
-                  提示：在侧边栏「地图服务」里选好服务商并填入 Key（天地图免费 tk / 高德 Web 服务 Key）后，出发地、目的地才能联想定位
-                </Text>
-              )}
               <Text style={[styles.inputLabel, { marginTop: 16 }]}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
               <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketNo} onChangeText={setTicketNo} /></View>
             </View>
@@ -713,12 +708,6 @@ export default function AddScreen({ navigation, route }) {
                   onSubmitEditing={() => setShowSearchAuto(false)}
                 />
               </View>
-
-              {!hasLocationSearch(loc) && (
-                <Text style={styles.autoCompleteHint}>
-                  提示：在侧边栏「地图服务」里选好服务商并填入 Key（天地图免费 tk / 高德 Web 服务 Key）后，可联想地点并自动定位
-                </Text>
-              )}
 
               {hasLocationSearch(loc) && showSearchAuto && searchResults.length > 0 && (
                 <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
@@ -871,7 +860,6 @@ export default function AddScreen({ navigation, route }) {
               <Text style={styles.dupNoteTitle}>这一天已经有 {relatedRecords.length} 条相关记录</Text>
               <Text style={styles.dupNoteBody} numberOfLines={2}>
                 最近一条：{relatedRecords[0].title}
-                {'\n'}仍然可以继续保存，点这里先看一眼已有的那条。
               </Text>
             </TouchableOpacity>
           )}
@@ -901,7 +889,6 @@ export default function AddScreen({ navigation, route }) {
                   maxLength={4}
                 />
               </View>
-              {!mood && <Text style={styles.moodHint}>选一个心情（也可以自己填一个 emoji）</Text>}
             </View>
           ) : renderRating()}
           <View style={[styles.divider, { marginVertical: 12 }]} />
@@ -1025,9 +1012,8 @@ export default function AddScreen({ navigation, route }) {
             ))}
           </View>
 
-          {sheetBase === 'location' ? (
-            <Text style={styles.lv2Hint}>地点不分子类，点上方卡片即可选中</Text>
-          ) : (
+          {/* 地点不分子类：点上方卡片就直接选中并关闭弹层，没有第二级可选 */}
+          {sheetBase !== 'location' && (
             <View style={styles.chipWrap}>
               {SUB_OPTIONS[sheetBase].map(opt => {
                 const active = sheetBase === baseType && subType === opt.id;
@@ -1109,7 +1095,6 @@ const makeStyles = (c) => ({
   chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   chipText: { fontSize: 14, color: c.textSecondary },
   chipTextActive: { color: c.accent, fontWeight: '500' },
-  lv2Hint: { fontSize: 13, color: c.textMuted, paddingVertical: 10 },
   cardSection: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 40 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
@@ -1119,7 +1104,6 @@ const makeStyles = (c) => ({
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
   autoCompleteText: { fontSize: 15, color: c.text },
   autoCompleteMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
-  autoCompleteHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
   divider: { height: 1, backgroundColor: c.borderSoft, marginVertical: 16 },
   dateRow: { flexDirection: 'row', alignItems: 'center' },
   dateBox: { backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: c.text },
@@ -1136,7 +1120,6 @@ const makeStyles = (c) => ({
   moodChipText: { fontSize: 21, lineHeight: 26 },
   moodInput: { width: 88, height: 42, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: c.border,
     backgroundColor: c.bgSunken, textAlign: 'center', fontSize: 18, color: c.text, paddingVertical: 0 },
-  moodHint: { fontSize: 12, color: c.textMuted, marginTop: 8 },
   weatherChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: c.bgSunken,
     borderWidth: 1, borderColor: c.border },
   weatherChipText: { fontSize: 13, color: c.textSecondary },
