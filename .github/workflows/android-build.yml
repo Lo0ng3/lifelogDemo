@@ -103,6 +103,9 @@ jobs:
           echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
           chmod 600 android/app/release.jks
           node scripts/apply-release-signing.mjs android/app/build.gradle android/app/release.jks
+          # 把改写结果的关键片段打到日志：签名配置没生效时一眼能看出来（不含任何密码）
+          grep -n -A 12 "signingConfigs {" android/app/build.gradle || true
+          grep -n -A 6 "buildTypes {" android/app/build.gradle || true
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - name: 打包 Release APK（只打 arm64 / arm 32 位，体积减半）
@@ -117,32 +120,57 @@ jobs:
           ./gradlew assembleRelease --no-daemon -x lint \
             -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: 校验 APK 签名（打印指纹，和 keystore 不一致就直接失败）
+      - name: 校验 APK 签名（拿 APK 的证书指纹和 keystore 逐字符比对）
         id: verify
         env:
           RC_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           RC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          set -e
+          set -eo pipefail
           SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          # runner 上一般都有 ANDROID_HOME；万一没有，按常见安装位置兜一下
+          if [ -z "$SDK_ROOT" ]; then
+            for c in /usr/local/lib/android/sdk "$HOME/Android/Sdk"; do
+              if [ -d "$c" ]; then SDK_ROOT="$c"; break; fi
+            done
+          fi
           APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
-          APKSIGNER=$(ls -1 "$SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
+          APKSIGNER=$(ls -1 "$SDK_ROOT"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
           echo "APK: $APK"
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
-          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr 'A-F' 'a-f')
+          echo "apksigner: $APKSIGNER"
+          # 指纹就两种长相：32 组两位十六进制用冒号连起来，或者 64 位十六进制连在一起。
+          # 直接按这个模式找，不按标签解析、也不先把冒号删掉——否则标签里的字符（SHA256）
+          # 会和指纹粘成一串，64 位的窗口就被截错位了
+          DIGEST_RE="([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{64}"
+          VERIFY_RC=0
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1 | tee /tmp/apk-certs.txt || VERIFY_RC=$?
+          else
+            echo "::warning::没找到 apksigner，改用 keytool 读 APK 里的 v1 证书来比对"
+            : > /tmp/apk-certs.txt
+          fi
+          if [ -n "$APKSIGNER" ] && [ "$VERIFY_RC" != "0" ]; then
+            echo "::error::apksigner verify 没通过（exit $VERIFY_RC），APK 的签名有问题，看上面的原始输出"
+            exit 1
+          fi
+          ACTUAL=$(grep -oE "$DIGEST_RE" /tmp/apk-certs.txt | head -1 | tr -d ":" | tr "A-F" "a-f" || true)
+          if [ -z "$ACTUAL" ]; then
+            # 兜底：v1 签名（构建里开着 enableV1Signing）可以直接从 META-INF 里读证书
+            ACTUAL=$(keytool -printcert -jarfile "$APK" 2>/dev/null | grep -oE "$DIGEST_RE" | head -1 | tr -d ":" | tr "A-F" "a-f" || true)
+          fi
+          echo "APK 证书 SHA-256：${ACTUAL:-（没解析出来，见上面的原始输出）}"
           if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-            EXPECTED=$(keytool -list -v -keystore android/app/release.jks -storepass "$RC_STORE_PASSWORD" -alias "$RC_KEY_ALIAS" \
-              | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+            EXPECTED=$(keytool -list -v -keystore android/app/release.jks -storepass "$RC_STORE_PASSWORD" -alias "$RC_KEY_ALIAS" 2>/dev/null \
+              | grep -oE "$DIGEST_RE" | head -1 | tr -d ":" | tr "A-F" "a-f" || true)
             if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
-              echo "::error::APK 的签名指纹和 keystore 对不上（keystore=$EXPECTED apk=$ACTUAL）"
+              echo "::error::APK 的签名指纹和 keystore 对不上（keystore=${EXPECTED:-解析失败} apk=${ACTUAL:-解析失败}）"
               exit 1
             fi
             echo "✅ 已用你的 keystore 签名，SHA-256：$ACTUAL"
           else
-            echo "::warning::本次用的是模板自带的 debug 签名，SHA-256：$ACTUAL"
+            echo "::warning::本次用的是模板自带的 debug 签名，SHA-256：${ACTUAL:-未知}"
           fi
           echo "fingerprint=$ACTUAL" >> "$GITHUB_OUTPUT"
-
       - name: 上传为该次运行的产物
         uses: actions/upload-artifact@v4
         with:
