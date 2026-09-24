@@ -15,6 +15,7 @@ expo-env.d.ts
 *.jks
 *.keystore
 keystore.b64
+release-keystore-info.txt
 *.p8
 *.p12
 *.key

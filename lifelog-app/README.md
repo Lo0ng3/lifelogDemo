@@ -167,6 +167,21 @@ RC_STORE_PASSWORD=xxx RC_KEY_ALIAS=lifelog RC_KEY_PASSWORD=xxx \
   node scripts/apply-release-signing.mjs android/app/build.gradle android/app/release.jks
 ```
 
+### 之前在 EAS 上打包过？直接用那把 keystore
+
+EAS 把 Android 签名证书托管在 Expo 账号里，**不用另外生成**——而且必须复用同一把，
+之前通过 EAS 发出去的版本才能直接覆盖安装（换了 key 就只能先卸载再装）：
+
+1. Expo 网站 → 项目 → **Credentials** → Android → 包名 `com.jiyin.lifelog` 那一行 →
+   「Download credentials」，得到一个 JSON：里面是 keystore 的 base64、库密码、key 别名、key 密码。
+2. 把 JSON 里的四个值填进上表的四个 Secrets（base64 那一项就是 `keystore`/`keystorePassword` 里的 base64 串）。
+
+也可以用 CLI 取：`npx eas-cli login` 后 `npx eas-cli credentials --platform android`，
+选对应包名 → Keystore → 下载（会打印别名与密码，并把 .jks 存到当前目录）。
+
+同一账号下的凭据是**按包名**分开存的：改了 `app.json` 里的 `android.package` 就等于换了一把钥匙
+（而且不能让旧包覆盖安装），需要重新配一份凭据。
+
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
 ## Get started
