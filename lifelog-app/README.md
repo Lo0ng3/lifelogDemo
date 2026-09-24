@@ -113,6 +113,60 @@ memo 化的格子、虚拟化窗口收敛到 ±2 屏、滚动/拖动动画全部
 
 - `node scripts/preview-calendar.mjs` → `demo/month-note-preview.html`：月示图（日历 + 当月时间线）与记事/日记（列表 + 新建流程）的交互设计稿。
 
+## 发布与签名（GitHub Actions 出 APK）
+
+APK 由仓库根目录的 `.github/workflows/android-build.yml` 构建：Actions → 「构建 Android APK」→ Run workflow，
+产物同时放到该次运行的 Artifacts 和 Releases 的固定标签 `apk-latest`。流程本身不依赖 EAS，
+`expo prebuild + gradlew assembleRelease`，只打 arm64-v8a / armeabi-v7a 两个 ABI。
+
+### 用你自己的 keystore 签名
+
+Expo / RN 模板里 release 构建类型默认是 `signingConfig signingConfigs.debug`，也就是用模板自带、
+**人人相同的公开 debug key** 签名。这样打出来的包能安装，但部分手机的安装器 / 安全扫描会拦，
+而且永远无法覆盖安装用自有 key 签过的包（签名不一致 → 「应用未安装」）。
+把下面的 Secrets 配上，构建流程就会自动换成你的 keystore（[apply-release-signing.mjs](scripts/apply-release-signing.mjs)
+在 prebuild 之后改写 `android/app/build.gradle`，密码走环境变量、不进命令行）。
+
+| Secret | 内容 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | keystore 文件的 base64（单行） |
+| `ANDROID_STORE_PASSWORD` | keystore 库密码 |
+| `ANDROID_KEY_ALIAS` | `keytool` 里的 `-alias`，例如 `lifelog` |
+| `ANDROID_KEY_PASSWORD` | key 密码（与库密码相同就填一样） |
+
+**1）生成 keystore**（JDK 自带 keytool；`release.jks` 是 App 的身份，**别提交进仓库、务必另存备份**，
+丢了就无法再覆盖安装已发布的版本）：
+
+```bash
+keytool -genkeypair -v -keystore release.jks -alias lifelog \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -storepass 你的库密码 -keypass 你的key密码 \
+  -dname "CN=jiyin, OU=lifelog, O=lifelog, L=Beijing, ST=Beijing, C=CN"
+```
+
+**2）转成单行 base64**：
+
+```bash
+node -e "console.log(require('fs').readFileSync('release.jks').toString('base64'))"   # 跨平台，推荐
+# Linux/macOS: base64 -w0 release.jks > keystore.b64
+# Windows:     certutil -encode release.jks keystore.b64   （取中间几行拼成一行）
+```
+
+**3）** 仓库 Settings → Secrets and variables → Actions → New repository secret，把上表四个加进去。
+**4）** 再跑一次「构建 Android APK」。
+
+构建日志里会打印 APK 的证书 SHA-256，并和 keystore 里的指纹逐一比对，**不一致直接失败**，
+Release 说明里也会写上这次用的签名指纹，方便和 `keytool -list -v -keystore release.jks` 对一下。
+没配 Secrets 时不会失败，只会在日志和 Release 说明里标出「本次用的是 debug 签名」。
+
+手机上如果已经装过别的签名版本的旧包（例如之前用 debug 签名发的），第一次装自有签名的包要先卸载，
+之后同签名的更新都能直接覆盖安装。想在本地复用同一套逻辑（例如手动出包）：
+
+```bash
+RC_STORE_PASSWORD=xxx RC_KEY_ALIAS=lifelog RC_KEY_PASSWORD=xxx \
+  node scripts/apply-release-signing.mjs android/app/build.gradle android/app/release.jks
+```
+
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
 ## Get started

@@ -8,7 +8,10 @@
 # - 走 expo prebuild + gradlew，和 EAS 无关，不受 EAS 每月免费额度限制。
 # - 只打 arm64-v8a + armeabi-v7a 两种 ABI，包体积比四种全打小一半左右。
 # - 下载 Gradle / Android SDK / NDK 都发生在 GitHub 的构建机器上（云端）。
-# - 默认用 RN 模板自带的 debug keystore 签名（自己装 / 发给朋友测试都够用）。
+# - **签名**：配好下面四个 Secrets 就用你自己的 keystore 签 release 包；没配则沿用模板自带
+#   的公开 debug key（能装，但部分手机会拦、也无法覆盖安装用你自己 key 签过的包）。
+#   签名配置由 scripts/apply-release-signing.mjs 注入，构建完还会校验指纹是否和 keystore 一致。
+#   配置方法见仓库 README 的「发布与签名」一节。
 name: 构建 Android APK
 
 on:
@@ -79,12 +82,66 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('lifelog-app/android/**/*.gradle*', 'lifelog-app/package-lock.json') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      - name: 写入签名密钥（配了 Secrets 就用你的 keystore，没配沿用模板 debug 签名）
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "::warning::没有配置 ANDROID_KEYSTORE_BASE64，本次仍用模板自带的公开 debug key 签名：能安装，但部分手机的安装器/安全扫描会拦，也无法覆盖安装用你自己 key 签过的包。"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${STORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
+            echo "::error::配了 ANDROID_KEYSTORE_BASE64，但 ANDROID_STORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD 有空值，四个 Secret 要一起配。"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
+          chmod 600 android/app/release.jks
+          node scripts/apply-release-signing.mjs android/app/build.gradle android/app/release.jks
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
       - name: 打包 Release APK（只打 arm64 / arm 32 位，体积减半）
+        env:
+          # build.gradle 里读的就是这三个环境变量：密码不进命令行，免得被打进构建日志
+          RC_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          RC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RC_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon -x lint \
             -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: 校验 APK 签名（打印指纹，和 keystore 不一致就直接失败）
+        id: verify
+        env:
+          RC_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          RC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          APKSIGNER=$(ls -1 "$SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
+          echo "APK: $APK"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr 'A-F' 'a-f')
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            EXPECTED=$(keytool -list -v -keystore android/app/release.jks -storepass "$RC_STORE_PASSWORD" -alias "$RC_KEY_ALIAS" \
+              | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+            if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::APK 的签名指纹和 keystore 对不上（keystore=$EXPECTED apk=$ACTUAL）"
+              exit 1
+            fi
+            echo "✅ 已用你的 keystore 签名，SHA-256：$ACTUAL"
+          else
+            echo "::warning::本次用的是模板自带的 debug 签名，SHA-256：$ACTUAL"
+          fi
+          echo "fingerprint=$ACTUAL" >> "$GITHUB_OUTPUT"
 
       - name: 上传为该次运行的产物
         uses: actions/upload-artifact@v4
@@ -101,29 +158,42 @@ jobs:
           cd ..
           VER=$(node -e "console.log('v'+require('./lifelog-app/app.json').expo.version)")
           CODE=$(node -e "console.log(require('./lifelog-app/app.json').expo.android.versionCode)")
+          SIGNED="${{ steps.signing.outputs.signed }}"
+          FP="${{ steps.verify.outputs.fingerprint }}"
+          if [ "$SIGNED" = "true" ]; then
+            SIGN_NOTE="已用项目自有 keystore 签名（可覆盖安装同签名的旧版本）。签名指纹 SHA-256：$FP"
+          else
+            SIGN_NOTE="⚠️ 本次用的是模板自带的 debug 签名（没有配置签名 Secrets）。部分手机的安装器/安全扫描会拦，也无法覆盖安装用自有 key 签过的包。"
+          fi
           TAG="apk-latest"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
             --title "最新 APK（直接下载安装）" \
             --notes "每次构建自动更新。下载下面的 app-release.apk 装到 Android 手机即可（首次安装需允许「未知来源」）。"
           gh release upload "$TAG" lifelog-app/android/app/build/outputs/apk/release/*.apk --clobber
-          gh release edit "$TAG" --title "最新 APK  $VER (versionCode $CODE)" \
-            --notes "版本 $VER（versionCode $CODE）。下载下面的 app-release.apk 装到 Android 手机即可（首次安装需允许「未知来源」）。"
+          NOTES=$(printf '版本 %s（versionCode %s）。下载下面的 app-release.apk 装到 Android 手机即可（首次安装需允许「未知来源」）。\n\n%s' "$VER" "$CODE" "$SIGN_NOTE")
+          gh release edit "$TAG" --title "最新 APK  $VER (versionCode $CODE)" --notes "$NOTES"
           echo "下载页：https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
 
 # ---------------------------------------------------------------------------
-# 想让新 APK 能"覆盖安装"手机上已装的那个（签名必须一致）：
-# 1. 本机跑 `npx eas credentials`（选 Android → 下载 keystore），或在 Expo 网站项目
-#    的 Credentials 页面下载，拿到 .jks 与别名/密码。
-# 2. keystore 转 base64：`base64 -w0 release.jks > keystore.b64`，然后在仓库
-#    Settings → Secrets and variables → Actions 加：
-#      ANDROID_KEYSTORE_BASE64 / ANDROID_KEY_ALIAS / ANDROID_STORE_PASSWORD / ANDROID_KEY_PASSWORD
-# 3. 在「打包 Release APK」之前加一步：
-#      - name: 写入签名密钥
-#        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.jks
-#    并把打包命令换成：
-#      ./gradlew assembleRelease -x lint \
-#        -Pandroid.injected.signing.store.file=$PWD/app/release.jks \
-#        -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_STORE_PASSWORD }} \
-#        -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
-#        -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+# 换成自己的签名（一次配置，之后每次构建自动生效）
+#
+# 1. 本机生成 keystore（JDK 自带 keytool，别把生成的 .jks 提交进仓库、也别丢，丢了就没法
+#    再覆盖安装已发布的版本）：
+#      keytool -genkeypair -v -keystore release.jks -alias lifelog \
+#        -keyalg RSA -keysize 2048 -validity 10000 \
+#        -storepass 你的库密码 -keypass 你的key密码 \
+#        -dname "CN=jiyin, OU=lifelog, O=lifelog, L=Beijing, ST=Beijing, C=CN"
+# 2. 转成 base64 单行：
+#      Linux/macOS: base64 -w0 release.jks > keystore.b64
+#      Windows:     certutil -encode release.jks keystore.b64  （取中间那几行拼成一行）
+#      Node 跨平台: node -e "console.log(require('fs').readFileSync('release.jks').toString('base64'))"
+# 3. 仓库 Settings → Secrets and variables → Actions → New repository secret，加四个：
+#      ANDROID_KEYSTORE_BASE64   上面那串 base64
+#      ANDROID_STORE_PASSWORD    keystore 库密码
+#      ANDROID_KEY_ALIAS         keytool 里的 -alias（例：lifelog）
+#      ANDROID_KEY_PASSWORD      key 密码（和库密码相同就填一样）
+# 4. 再手动跑一次「构建 Android APK」，日志里会打印 APK 的证书 SHA-256，和 keystore 对不上会直接失败。
+#
+# 注意：手机上如果已经装了「模板 debug 签名」或其它签名版本的旧包，第一次装自有签名的包需要
+# 先卸载旧版（签名不同无法覆盖安装）；之后同签名的更新都能直接覆盖安装。
 # ---------------------------------------------------------------------------
