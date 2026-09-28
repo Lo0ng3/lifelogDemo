@@ -189,13 +189,23 @@ const ensureCoversDir = async () => {
 // 把封面文件缩到长边 360px 并存进 covers 目录，返回新路径。
 // 长边 ≤ 720px（2 倍目标）的视为已是小图，原样挪进 covers 目录；
 // 探测/缩放失败返回 null（调用方回退原路径）
-export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
+// nameKey：封面文件的命名依据（网络海报传原始 URL、自选封面传相册原片路径）。
+// 不传就用 uri 本身。同一个来源永远落到同一个文件名——重复保存同一张封面只会覆盖，
+// 不会像以前那样（时间戳+随机数）越存越多、留下同一张图的多个副本。
+export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE, nameKey = null) => {
   try {
     // 已经在 covers 目录里的小图：直接原样返回，避免每次启动迁移都复制出重复文件
     const dir = await ensureCoversDir();
     if (uri.startsWith(dir + '/')) return uri;
     const stat = await FileSystem.getInfoAsync(uri);
     if (!stat.exists) return null;
+    const dest0 = `${dir}/cover_${hashKey(nameKey || uri)}`;
+    // 已经存过这一张（上一次保存/回填留下的）：直接用现成的，省一次缩放和复制
+    for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
+      if ((await FileSystem.getInfoAsync(`${dest0}.${ext}`).catch(() => ({ exists: false }))).exists) {
+        return `${dest0}.${ext}`;
+      }
+    }
     const dims = await new Promise((resolve) => {
       RNImage.getSize(uri, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
     });
@@ -212,7 +222,7 @@ export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
       }
     }
     const ext = (workUri.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
-    const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+    const dest = `${dest0}.${ext}`;
     await copyFileAsync(workUri, dest);
     if (workUri !== uri) {
       try { await FileSystem.deleteAsync(workUri, { idempotent: true }); } catch {}
@@ -235,13 +245,13 @@ export const downloadRemoteCover = async (url) => {
   try {
     const tmp = `${FileSystem.cacheDirectory}cover_dl_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const { uri: downloaded } = await FileSystem.downloadAsync(url, tmp, { headers: DOWNLOAD_HEADERS });
-    const small = await downscaleCover(downloaded, COVER_MAX_EDGE);
+    const small = await downscaleCover(downloaded, COVER_MAX_EDGE, url);
     if (small) {
       try { await FileSystem.deleteAsync(downloaded, { idempotent: true }); } catch {}
       return small;
     }
     // 缩图失败：原图挪进 covers 目录兜底
-    const moved = await downscaleCover(downloaded, 100000);
+    const moved = await downscaleCover(downloaded, 100000, url);
     return moved || downloaded;
   } catch {
     return url;
@@ -290,8 +300,9 @@ export const enforceCacheCaps = async ({ thumbCapMB = 30, motionCapMB = 50 } = {
   } catch {}
 };
 
-// 手动清理所有可再生缓存（封面帧、实况提取、选图器临时拷贝、图片浏览缓存），返回释放的字节数
-export const cleanupMediaCaches = async () => {
+// 手动清理所有可再生缓存（封面帧、实况提取、选图器临时拷贝、图片浏览缓存），
+// 外加没人引用的封面小图（换封面 / 删记录 / 重复下载留下的孤儿文件），返回释放的字节数
+export const cleanupMediaCaches = async (logs = []) => {
   let freed = 0;
   const dirs = [
     `${FileSystem.documentDirectory}videoThumbs`,
@@ -307,6 +318,25 @@ export const cleanupMediaCaches = async () => {
   thumbCache.clear();
   try {
     await Image.clearDiskCache();
+  } catch {}
+  // 封面小图不是"可再生"的，只删当前没有任何记录引用的那些
+  try {
+    const referenced = new Set();
+    for (const log of logs) {
+      for (const field of ['coverUrl', 'coverThumbUrl']) {
+        const url = log?.[field];
+        if (typeof url === 'string' && url.startsWith('file://')) referenced.add(url.split('/').pop());
+      }
+    }
+    for (const name of await FileSystem.readDirectoryAsync(COVERS_DIR)) {
+      if (referenced.has(name)) continue;
+      const path = `${COVERS_DIR}/${name}`;
+      try {
+        const info = await FileSystem.getInfoAsync(path);
+        if (info.exists && typeof info.size === 'number') freed += info.size;
+        await FileSystem.deleteAsync(path, { idempotent: true });
+      } catch {}
+    }
   } catch {}
   return freed;
 };

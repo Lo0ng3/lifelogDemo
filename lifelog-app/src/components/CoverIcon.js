@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
+import * as FileSystem from 'expo-file-system/legacy';
 import { getIconConfig } from '../utils/icons';
 import { resolveMediaUri, remoteImageSource } from '../utils/media';
 import { useTheme } from '../theme/ThemeProvider';
@@ -15,12 +16,17 @@ export default function CoverIcon({ item, height = 64, style }) {
   const entry = item?.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
   const [uri, setUri] = useState(null);
   // 自选封面的小图文件（coverThumbUrl）直接显示，省去每次重启解析相册；
-  // 没有小图才实时解析 assetId
+  // 没有小图、或小图文件已经不在了（换机导入、被清理、旧版本没写成功）就实时解析
+  // assetId——否则封面会一直空着，看起来像"封面被去掉了"
   useEffect(() => {
     let alive = true;
-    if (entry && !item?.coverThumbUrl) {
-      resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
-    }
+    const thumb = item?.coverThumbUrl;
+    const fromAlbum = () => resolveMediaUri(entry).then(u => { if (alive) setUri(u); });
+    if (!entry) { setUri(null); return () => { alive = false; }; }
+    if (!thumb) { fromAlbum(); return () => { alive = false; }; }
+    FileSystem.getInfoAsync(thumb)
+      .then(info => { if (!info.exists) fromAlbum(); })
+      .catch(() => fromAlbum());
     return () => { alive = false; };
   }, [entry, item?.coverThumbUrl]);
 

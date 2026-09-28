@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal,
+  Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
   useWindowDimensions
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -95,6 +95,9 @@ export default function HomeScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
+  // 同步进度：显示在底部小条上。以前用 ToastAndroid 报进度，但 Toast 会排队，
+  // 最后几条会排在「同步完成」弹窗之后继续弹，看起来像"同步完了还在同步"
+  const [syncProgress, setSyncProgress] = useState(null);
   // 侧边栏「说明」：页面上的说明性文字统一收进这里
   const [helpOpen, setHelpOpen] = useState(false);
 
@@ -141,15 +144,10 @@ export default function HomeScreen({ navigation }) {
   const handleSync = async () => {
     if (syncing) return;
     setSyncing(true);
+    setSyncProgress(null);
     toggleSidebar(false);
-    if (Platform.OS === 'android') ToastAndroid.show('正在扫描相册，同步影像…', ToastAndroid.SHORT);
     try {
-      const report = await syncMedia((done, total) => {
-        // 记录多时整个过程可能要跑一阵子，定期刷一下进度避免看起来像卡死
-        if (Platform.OS === 'android' && total > 20 && done % 20 === 0 && done < total) {
-          ToastAndroid.show(`正在扫描相册，同步影像… ${done}/${total}`, ToastAndroid.SHORT);
-        }
-      });
+      const report = await syncMedia((done, total) => setSyncProgress({ done, total }));
       if (report.permissionDenied) {
         const state = report.permState || {};
         Alert.alert(
@@ -179,6 +177,7 @@ export default function HomeScreen({ navigation }) {
       Alert.alert('同步失败', `扫描相册时出现问题：${e?.message || e}`);
     } finally {
       setSyncing(false);
+      setSyncProgress(null);
     }
   };
 
@@ -265,14 +264,14 @@ export default function HomeScreen({ navigation }) {
   const handleCleanCache = async () => {
     toggleSidebar(false);
     try {
-      const freed = await cleanupMediaCaches();
+      const freed = await cleanupMediaCaches(logData);
       try {
         // clearCache(true) 连磁盘里的地图缓存一起清；地图还活着也没关系，
         // 只是下次平移/缩放要重新下载瓦片。clearHistory 只清前进后退记录
         mapRef.current?.clearCache?.(true);
       } catch {}
       const mb = Math.round((freed / 1024 / 1024) * 10) / 10;
-      Alert.alert('清理完成', `已释放 ${mb} MB 缓存空间，地图缓存也已清空。`);
+      Alert.alert('清理完成', `已释放 ${mb} MB 空间（缓存 + 没人引用的封面小图），地图缓存也已清空。`);
     } catch (e) {
       Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
     }
@@ -794,6 +793,16 @@ export default function HomeScreen({ navigation }) {
         </Reanimated.View>
       )}
 
+      {/* 同步进度条：常驻底部，同步结束就消失，不跟结果弹窗抢屏幕 */}
+      {syncing && (
+        <View style={styles.syncPill} pointerEvents="none">
+          <ActivityIndicator size="small" color="#FFF" />
+          <Text style={styles.syncPillText}>
+            正在同步影像{syncProgress ? ` ${syncProgress.done}/${syncProgress.total}` : ''}
+          </Text>
+        </View>
+      )}
+
       <BottomSheetModal
         ref={filterSheetRef}
         index={0}
@@ -952,6 +961,12 @@ const makeStyles = (c) => ({
   statNum: { fontSize: 20, fontWeight: 'bold', color: c.text },
   statLabel: { fontSize: 12, color: c.textMuted, marginTop: 4 },
   sidebarMenu: { borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  syncPill: {
+    position: 'absolute', left: 40, right: 40, bottom: 28,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.75)',
+  },
+  syncPillText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: c.divider },
   menuItemText: { fontSize: 16, color: c.text },
   menuItemSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
