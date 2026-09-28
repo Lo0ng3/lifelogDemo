@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
@@ -53,7 +53,7 @@ function DayCell({ cell, records, selected, isToday, onPress, colors, styles, co
  * 月示图：上半是日历（圆点按一级类型着色），下半是当月 / 当日时间线。
  * 左右滑动日历换月；点日期只看当天，再点一次回到整月。
  * ------------------------------------------------------------------ */
-export default function MonthView({ records, onPressItem, onEditItem }) {
+export default function MonthView({ records, onPressItem, onEditItem, onDeleteItem }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
@@ -220,9 +220,10 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
         isLast={isLast}
         onPress={onPressItem}
         onEdit={onEditItem}
+        onDelete={onDeleteItem}
       />
     );
-  }, [onPressItem, onEditItem, timeline, styles]);
+  }, [onPressItem, onEditItem, onDeleteItem, timeline, styles]);
 
   return (
     <View style={styles.container}>
@@ -284,6 +285,11 @@ export default function MonthView({ records, onPressItem, onEditItem }) {
           onScroll={onListScroll}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
+          // 同首页列表：收窄虚拟化窗口、Android 裁掉屏外行，切换日历/滑动更稳
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
           contentContainerStyle={styles.tlContent}
           ListHeaderComponent={(

@@ -41,6 +41,12 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const subTypeOptions = { ticket: TICKET_SUB_OPTIONS, media: MEDIA_SUB_OPTIONS };
 
+// 列表行高固定（RecordRow 里 cardItem 就是 96，行与行之间没有分隔线/外边距）。
+// 把这个信息交给 FlatList，滚动时就不用逐行测量、也不会因为测量结果回来而"跳一下"
+const ROW_HEIGHT = 96;
+const rowKeyExtractor = (item) => String(item.id);
+const rowItemLayout = (_, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index });
+
 const VIEWS = [
   { id: 'list', label: '列表' },
   { id: 'month', label: '日历' },
@@ -86,7 +92,7 @@ function ViewSwitcher({ value, onChange }) {
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const {
-    logData, syncMedia, importLogs,
+    logData, syncMedia, importLogs, deleteLog,
     tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
     amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
   } = useContext(LogContext);
@@ -533,6 +539,11 @@ export default function HomeScreen({ navigation }) {
 
   const openDetail = useCallback((item) => navigation.navigate('Detail', { item }), [navigation]);
   const editItem = useCallback((item) => navigation.navigate('Edit', { editItem: item }), [navigation]);
+  // 上下文里的 deleteLog 每次 Provider 重渲染都会换新函数；用 ref 包一层保持引用稳定，
+  // 这样 React.memo 的行组件不会因为"父级随便重渲染一次"就整屏跟着重渲染
+  const deleteLogRef = useRef(deleteLog);
+  deleteLogRef.current = deleteLog;
+  const handleDeleteItem = useCallback((id) => deleteLogRef.current?.(id), []);
 
   const renderItem = useCallback(({ item, index }) => (
     <RecordRow
@@ -540,8 +551,9 @@ export default function HomeScreen({ navigation }) {
       isLast={index === filteredAndSortedData.length - 1}
       onPress={openDetail}
       onEdit={editItem}
+      onDelete={handleDeleteItem}
     />
-  ), [filteredAndSortedData.length, openDetail, editItem]);
+  ), [filteredAndSortedData.length, openDetail, editItem, handleDeleteItem]);
 
   // 切视图时给内容一个很短的淡入上浮，避免"啪"一下换掉
   const viewAnim = useSharedValue(1);
@@ -733,9 +745,19 @@ export default function HomeScreen({ navigation }) {
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
             <FlatList
               data={filteredAndSortedData}
-              keyExtractor={(item) => item.id.toString()}
+              keyExtractor={rowKeyExtractor}
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
+              // 行高固定 → 直接给出布局，省掉逐行测量
+              getItemLayout={rowItemLayout}
+              // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
+              // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
+              // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
+              initialNumToRender={8}
+              maxToRenderPerBatch={8}
+              windowSize={7}
+              updateCellsBatchingPeriod={50}
+              removeClippedSubviews={Platform.OS === 'android'}
             />
           </Reanimated.View>
         </Reanimated.View>
@@ -746,6 +768,7 @@ export default function HomeScreen({ navigation }) {
             records={filteredAndSortedData}
             onPressItem={openDetail}
             onEditItem={editItem}
+            onDeleteItem={handleDeleteItem}
           />
         </Reanimated.View>
 

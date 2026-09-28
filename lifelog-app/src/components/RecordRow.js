@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { Star, StarHalf, Edit3, Trash2 } from 'lucide-react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -6,7 +6,6 @@ import Reanimated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-
 
 import CoverIcon from './CoverIcon';
 import PressableScale from './PressableScale';
-import { LogContext } from '../context/LogContext';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { labelOf, groupColor, groupSoft, isEssay, starsOf } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
@@ -70,7 +69,6 @@ function SwipeActions({ drag, onEdit, onDelete }) {
 const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit, onDelete, style }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { deleteLog } = useContext(LogContext);
 
   const stars = starsOf(item.rating);
   const essay = isEssay(item);
@@ -81,16 +79,18 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
   const dayLabel = dateText.slice(5, 10);
   const textLine = [item.subtitle, item.comment].filter(Boolean).join(' · ');
 
-  const confirmDelete = () => Alert.alert(
+  const confirmDelete = useCallback(() => Alert.alert(
     '删除印记',
     `确定要删除「${item.title}」吗？删除后无法恢复。`,
     [
       { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => deleteLog(item.id) },
+      { text: '删除', style: 'destructive', onPress: () => onDelete?.(item.id) },
     ]
-  );
+  ), [item.id, item.title, onDelete]);
 
-  const renderRightActions = (_progress, drag, swipeable) => (
+  // 用 useCallback 稳住引用：SwipeActions 里是三个 useAnimatedStyle，
+  // 每次无关重渲染都重建一遍纯属白花
+  const renderRightActions = useCallback((_progress, drag, swipeable) => (
     <SwipeActions
       drag={drag}
       onEdit={() => { swipeable.close(); onEdit?.(item); }}
@@ -100,7 +100,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
         setTimeout(confirmDelete, 120);
       }}
     />
-  );
+  ), [confirmDelete, item, onEdit]);
 
   return (
     <ReanimatedSwipeable
