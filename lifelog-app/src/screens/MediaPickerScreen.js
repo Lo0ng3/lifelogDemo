@@ -267,6 +267,8 @@ export default function MediaPickerScreen({ route, navigation }) {
   albumIdRef.current = albumId;
   const endCursorRef = useRef(null);
   endCursorRef.current = endCursor;
+  const totalCountRef = useRef(0);      // 相册总数：滑轨定位按它算"绝对位置"
+  totalCountRef.current = totalCount;
 
   /* -------- 滚动：全部动画量走 UI 线程，滚动过程中不再 setState -------- */
   const listRef = useAnimatedRef();
@@ -479,14 +481,18 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   /* ------------------------- 快速定位（滑块 / 气泡） ------------------------- */
 
-  // 拖动/滚动到某个比例：定位到对应位置，并顺带把目标区域的下一页拉过来
+  // 拖动/滚动到某个比例：定位到对应位置，并顺带把目标区域的下一页拉过来。
+  // 目标行按"相册总数"算（分页时 getAssetsAsync 会给出 totalCount），这样滑轨位置
+  // 对应的是整本相册的绝对位置，而不是"已经加载出来的那一段"
   const emitSeek = useCallback((frac) => {
     const list = assetsRef.current;
-    const total = Math.ceil(Math.max(list.length, 1) / COLS) * CELL;
-    const targetRow = Math.floor(frac * Math.max(0, Math.ceil(total / CELL) - Math.ceil(gridHeight / CELL)));
+    const total = totalCountRef.current || list.length;
+    const totalRows = Math.max(1, Math.ceil(total / COLS));
+    const visibleRows = Math.max(1, Math.ceil(gridHeight / CELL));
+    const targetRow = Math.floor(frac * Math.max(0, totalRows - visibleRows));
     const loadedRows = Math.ceil(list.length / COLS);
     // 目标还没加载到：按住不放会连续补页，直到覆盖目标位置
-    if (endCursorRef.current && targetRow > Math.max(0, loadedRows - Math.ceil(gridHeight / CELL) - 1)) {
+    if (endCursorRef.current && targetRow > Math.max(0, loadedRows - visibleRows - 1)) {
       if (!loadingRef.current) load(endCursorRef.current, albumIdRef.current);
     }
   }, [gridHeight, load]);
@@ -501,11 +507,21 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   useEffect(() => () => clearTimeout(barHideTimer.current), []);
 
-  // 滚动位置的落点：顶部第一张图的月份（只在月份变化时才回 JS 线程一次）
-  const updateBubbleAt = (offsetY) => {
+  // 位置 → 气泡显示的月份（只在月份变化时才回 JS 线程一次）。
+  // 普通滚动看"视口第一行"（现在看的是哪一段就从哪段开始）；
+  // 拖滑轨看"视口最后一行"——拖到底显示的就该是最早那个月，跟肉眼看到的最后一张对齐。
+  // 越界（内容高度是估算值）和拿不到拍摄时间的条目（creationTime=0 → 空文案）
+  // 都往前找最近的有效月份，避免气泡因为拿到 undefined 而卡住不动。
+  const emitMonthAt = (offsetY, useBottomEdge) => {
     'worklet';
-    const idx = Math.floor(Math.max(0, offsetY) / CELL) * COLS;
-    const key = monthKeys.value[idx];
+    const keys = monthKeys.value;
+    const count = keys.length;
+    if (!count) return;
+    const y = useBottomEdge ? offsetY + viewH.value - 1 : offsetY;
+    let idx = Math.floor(Math.max(0, y) / CELL) * COLS;
+    if (idx > count - 1) idx = count - 1;
+    let key = keys[idx];
+    for (let i = idx - 1; !key && i >= 0 && i > idx - 40; i--) key = keys[i];
     if (key && key !== lastMonthKey.value) {
       lastMonthKey.value = key;
       runOnJS(emitBubble)(key);
@@ -518,7 +534,7 @@ export default function MediaPickerScreen({ route, navigation }) {
       scrollY.value = y;
       const max = Math.max(1, contentH.value - viewH.value);
       thumbFrac.value = Math.min(1, Math.max(0, y / max));
-      if (!dragging.value) updateBubbleAt(y);
+      if (!dragging.value) emitMonthAt(y, false);
     },
     onBeginDrag: () => {
       cancelAnimation(barOpacity);
@@ -546,9 +562,11 @@ export default function MediaPickerScreen({ route, navigation }) {
     const travel = Math.max(1, viewH.value - THUMB_H - 20);
     const frac = Math.min(1, Math.max(0, (y - THUMB_H / 2) / travel));
     thumbFrac.value = frac;
-    scrollTo(listRef, 0, frac * Math.max(0, contentH.value - viewH.value), false);
-    updateBubbleAt(frac * Math.max(0, contentH.value - viewH.value));
-    seekTick.value = (seekTick.value + 1) % 4;
+    const target = frac * Math.max(0, contentH.value - viewH.value);
+    scrollTo(listRef, 0, target, false);
+    emitMonthAt(target, true);
+    // 每两次就补一次页（原来是四次）：拖到很后面时加载更跟得上
+    seekTick.value = (seekTick.value + 1) % 2;
     if (seekTick.value === 0) runOnJS(emitSeek)(frac);
   };
 
