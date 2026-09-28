@@ -5,7 +5,8 @@
 // 为什么还要复制一份：expo-share-intent 是把分享内容落到**系统缓存目录**的，
 // 缓存随时可能被系统清掉，而且那个路径不在 App 自己的媒体目录里——
 // 保存记录时的"重链回相册原片"逻辑（isAppOwnedMediaPath / relinkNewEntries）
-// 认不出它。所以统一复制进 documentDirectory/media/：
+// 认不出它。所以统一复制进 MEDIA_DIR（默认内部 documentDirectory/media/，
+// 原生模块 Paths 可用时是 Android/data/<包名>/files/media/）：
 //   · 与"应用内选图"完全同一条流水线：保存（或追加到已有记录）时按 文件名/大小/尺寸
 //     重链回相册原片，重链成功就把副本删掉，App 长期不持有副本；
 //   · 重链不上（比如原片已删）也能当本地副本正常显示；
@@ -15,8 +16,7 @@ import { useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { navigationRef } from '../navigation/AppNavigator';
-
-const MEDIA_DIR = `${FileSystem.documentDirectory}media`;
+import { MEDIA_DIR } from '../utils/storagePaths';
 
 // 文件名里的非法字符换成下划线，其余（含中文）保留，方便和相册原片按名字匹配
 const safeName = (name, index, video) => {

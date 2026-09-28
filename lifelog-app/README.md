@@ -65,11 +65,17 @@ memo 化的格子、虚拟化窗口收敛到 ±2 屏、滚动/拖动动画全部
   **这是原生改动：必须重新构建 APK，也不能用 Expo Go。** iOS 这版显式关掉了（`disableIOS: true`），
   要用的话得另配 share extension（该包在 iOS 上还需要一个 xcode patch）。
 - 分享进来的文件会先被原生模块落到**系统缓存**，缓存随时可能被清、而且不在 App 自己的媒体目录里，
-  所以 [ShareIntentBridge](src/components/ShareIntentBridge.js) 会**复制一份到 `documentDirectory/media/`**：
+  所以 [ShareIntentBridge](src/components/ShareIntentBridge.js) 会**复制一份到 `MEDIA_DIR`**
+  （见下面的「数据落点」）：
   这样就走上了和应用内选图完全相同的流水线——保存记录时按 文件名/大小/尺寸 重链回相册原片，
   重链成功即删掉副本（App 长期不持有副本）；重链不上也能当本地副本正常显示。
   复制完**立刻把缓存里那份删掉**（它只服务于这一次分享，留着白占空间）；
   在「分享到印记」里点取消，`media/` 里的副本也一并删掉。
+- **数据落点**（[storagePaths](src/utils/storagePaths.js)）：`media`（分享副本）和 `covers`（封面小图）
+  写在应用专属外部目录 `/storage/emulated/0/Android/data/<包名>/files/` 下，手机文件管理器能直接翻到、
+  手动拷走；原生模块 [Paths](modules/paths) 拿不到该目录时（未挂载 / iOS）自动回退内部存储的
+  `documentDirectory`，行为不变。`videoThumbs`（视频封面帧）与 `motionVideos`（实况提取的视频）
+  是纯缓存，留在内部目录。这几个目录都随卸载删除，抗卸载只有系统相册和用户自选的公共目录。
 - 侧边栏「清理缓存」现在一并调用 WebView 的 `clearCache(true)`，把栅格瓦片/矢量数据/SDK 这些
   **地图缓存**也清掉，并如实显示释放了多少——清的都是可再生内容，记录、照片引用、Key 都不受影响。
 - 去重口径统一在 `makeMediaIndex`（`src/utils/media.js`）：记录里的条目多半是**相册引用**

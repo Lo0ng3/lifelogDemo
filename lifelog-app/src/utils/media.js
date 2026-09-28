@@ -7,6 +7,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { Image as RNImage } from 'react-native';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { COVERS_DIR, MEDIA_DIR } from './storagePaths';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -181,7 +182,7 @@ export const DOUBAN_POSTER_RATIO = 2 / 3;
 const COVER_MAX_EDGE = 360;
 
 const ensureCoversDir = async () => {
-  const dir = `${FileSystem.documentDirectory}covers`;
+  const dir = COVERS_DIR;
   const info = await FileSystem.getInfoAsync(dir);
   if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
   return dir;
@@ -297,7 +298,6 @@ export const cleanupMediaCaches = async () => {
   const dirs = [
     `${FileSystem.documentDirectory}videoThumbs`,
     `${FileSystem.documentDirectory}motionVideos`,
-    `${FileSystem.cacheDirectory}ImagePicker`,
     `${FileSystem.cacheDirectory}VideoThumbnails`,
   ];
   for (const dir of dirs) {
@@ -314,14 +314,12 @@ export const cleanupMediaCaches = async () => {
 };
 
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损
-// - ImagePicker：旧版系统选择器留在缓存里的媒体拷贝（存储膨胀的历史遗留）
 // - VideoThumbnails：expo-video-thumbnails 的临时输出（正式封面帧在 videoThumbs/，不受影响）
 // 注意：expo-image 的磁盘缓存【不在启动清理范围】——清掉会导致列表封面每次重启都重新加载，
 // 它有系统级自动淘汰，需要手动释放时走侧边栏「清理缓存」
 export const cleanTransientCaches = async () => {
   try {
     const dirs = [
-      `${FileSystem.cacheDirectory}ImagePicker`,
       `${FileSystem.cacheDirectory}VideoThumbnails`,
     ];
     for (const dir of dirs) {
@@ -333,83 +331,7 @@ export const cleanTransientCaches = async () => {
   }
 };
 
-// 读取迁移后文件的指纹（大小 + 图片尺寸），供相册同步时匹配用；
-// 视频拿不到尺寸就只记大小，同步时按大小兜底匹配
-const collectMeta = (uri, video) =>
-  new Promise((resolve) => {
-    (async () => {
-      const meta = {};
-      try {
-        const stat = await FileSystem.getInfoAsync(uri);
-        if (stat.exists && typeof stat.size === 'number' && stat.size >= 0) meta.size = stat.size;
-      } catch {}
-      if (!video) {
-        try {
-          RNImage.getSize(uri, (w, h) => {
-            if (w && h) { meta.w = w; meta.h = h; meta.ratio = w / h; }
-            resolve(meta);
-          }, () => resolve(meta));
-        } catch { resolve(meta); }
-      } else {
-        resolve(meta);
-      }
-    })();
-  });
-
-// 旧记录迁移：早期版本把系统选择器复制进缓存目录的媒体拷贝直接存进了记录里，
-// 而启动清理会删掉整个缓存目录，导致升级后老记录的图/视频全部失效。
-// 这里在清理之前把仍被记录引用、且没有相册引用可用的缓存文件复制到持久目录（最后兜底），
-// 并改写记录中的 URI；迁移出的条目统一为对象形态，并带上大小/尺寸指纹供同步功能匹配。
-// 带相册引用（assetId）的条目不复制——那是纯引用，副本留着只占空间。
-const LEGACY_CACHE_PREFIXES = [
-  `${FileSystem.cacheDirectory}ImagePicker/`,
-  `${FileSystem.cacheDirectory}VideoThumbnails/`,
-];
-
-// 应用私有的媒体副本所在目录：选图器缓存 + 旧数据迁移出的持久副本。
-// 只有这些路径里的文件在重链到相册后可以放心删除（相册/用户文件绝不动）
+// 应用私有的媒体副本目录（MEDIA_DIR，默认内部存储、可用时是 Android/data）。
+// 只有这里的文件在重链到相册原片后可以放心删掉——相册里的、用户自己的文件绝不动。
 export const isAppOwnedMediaPath = (uri) =>
-  !!uri && uri.startsWith('file://') && (
-    LEGACY_CACHE_PREFIXES.some(p => uri.startsWith(p)) ||
-    uri.startsWith(`${FileSystem.documentDirectory}media/`)
-  );
-
-export const migrateLegacyMedia = async (logs) => {
-  try {
-    const dir = `${FileSystem.documentDirectory}media`;
-    let changed = false;
-    const next = await Promise.all((logs || []).map(async (log) => {
-      if (!Array.isArray(log.localImages) || log.localImages.length === 0) return log;
-      let logChanged = false;
-      const entries = await Promise.all(log.localImages.map(async (raw) => {
-        const entry = typeof raw === 'string' ? { uri: raw } : raw;
-        const uri = entry?.uri;
-        if (!uri || !uri.startsWith('file://') || !LEGACY_CACHE_PREFIXES.some(p => uri.startsWith(p))) return raw;
-        // 已带相册引用的条目不复制：显示时按 assetId 实时解析原件；
-        // 缓存副本删掉后若解析失败，同步功能也能把备用路径重新指回相册原片
-        if (entry.assetId) return raw;
-        const info = await FileSystem.getInfoAsync(uri);
-        if (!info.exists) return raw;
-        try {
-          if (!(await FileSystem.getInfoAsync(dir)).exists) {
-            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-          }
-          const ext = (uri.split('?')[0].match(/\.(jpe?g|png|webp|gif|heic|mp4|mov|m4v|3gp)$/i) || [])[1] || 'jpg';
-          const dest = `${dir}/legacy_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-          const { uri: newUri } = await FileSystem.copyAsync({ from: uri, to: dest });
-          const meta = await collectMeta(newUri, isVideoEntry(entry));
-          logChanged = true;
-          return { ...entry, uri: newUri, ...meta };
-        } catch {
-          return raw;
-        }
-      }));
-      if (!logChanged) return log;
-      changed = true;
-      return { ...log, localImages: entries };
-    }));
-    return { logs: changed ? next : logs, changed };
-  } catch {
-    return { logs, changed: false };
-  }
-};
+  !!uri && uri.startsWith('file://') && uri.startsWith(`${MEDIA_DIR}/`);

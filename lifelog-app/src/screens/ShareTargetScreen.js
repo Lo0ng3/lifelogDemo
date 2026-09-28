@@ -14,10 +14,11 @@ import { makeMediaIndex, isVideoEntry, mediaUri } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { labelOf, groupColor, groupSoft } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
+import { MEDIA_DIR } from '../utils/storagePaths';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
-// 应用自己复制出来的副本（documentDirectory/media/）才能删；相册、用户文件绝不动
-const isAppCopy = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.includes('/media/');
+// 应用自己复制出来的副本（MEDIA_DIR 里的）才能删；相册、用户文件绝不动
+const isAppCopy = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.startsWith(`${MEDIA_DIR}/`);
 
 const discardUris = async (uris) => {
   for (const uri of uris) {

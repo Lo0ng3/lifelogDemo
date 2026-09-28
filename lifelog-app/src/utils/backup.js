@@ -5,11 +5,11 @@
 //   老备份没有 covers 字段也能正常导入（缺失封面交给回填机制兜底）
 // 备份里的媒体条目带着相册指纹（文件名/大小/尺寸），换机导入后跑一次"同步相册影像"即可重新关联。
 import * as FileSystem from 'expo-file-system/legacy';
+import { COVERS_DIR } from './storagePaths';
 
 const { StorageAccessFramework } = FileSystem;
 
 const BACKUP_NAME_PREFIX = 'lifelog-backup-';
-const COVERS_DIR = `${FileSystem.documentDirectory}covers`;
 
 const pad = (n) => String(n).padStart(2, '0');
 

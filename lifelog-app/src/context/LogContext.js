@@ -3,10 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions, withTimeout } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, migrateLegacyMedia, enforceCacheCaps, downscaleCover, resolveMediaUri } from '../utils/media';
+import { downloadRemoteCover, cleanTransientCaches, enforceCacheCaps } from '../utils/media';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
 export const LogContext = createContext();
+
+// 记录存储键。带版本号：数据落点/格式有破坏性变化时直接换键，老数据不读也不迁移
+const LOGS_KEY = '@lifelogs_v2';
 
 export const LogProvider = ({ children }) => {
   const [logData, setLogData] = useState([]);
@@ -82,74 +85,30 @@ export const LogProvider = ({ children }) => {
 
   const loadLogs = async () => {
     try {
-      const storedLogs = await AsyncStorage.getItem('@lifelogs');
+      const storedLogs = await AsyncStorage.getItem(LOGS_KEY);
       if (storedLogs) {
         const logs = JSON.parse(storedLogs);
-        // 必须先迁移（把旧记录引用的缓存媒体挪进持久目录），再清理瞬时缓存，顺序不能反
-        const { logs: migrated, changed } = await migrateLegacyMedia(logs);
-        // 换机导入后本地封面文件不存在了，清掉让 backfillCovers 按标题重新联网补海报
-        let pruned = migrated;
-        for (const log of migrated) {
+        // 封面文件不在了（换机导入、手删）就清掉，交给下面的回填按标题重新联网补一张
+        let pruned = logs;
+        for (const log of logs) {
           if (log?.coverUrl?.startsWith('file://')) {
             try {
               if (!(await FileSystem.getInfoAsync(log.coverUrl)).exists) {
-                pruned = (pruned === migrated ? [...migrated] : pruned)
+                pruned = (pruned === logs ? [...logs] : pruned)
                   .map(l => (l.id === log.id ? { ...l, coverUrl: null, coverRatio: null } : l));
               }
             } catch {}
           }
         }
-        const hasChange = changed || pruned !== migrated;
         setLogData(pruned);
-        if (hasChange) {
-          await AsyncStorage.setItem('@lifelogs', JSON.stringify(pruned));
+        if (pruned !== logs) {
+          await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(pruned));
         }
-        // 延后 2 秒错峰启动：① 存量大封面一次性迁移（>720px 重缩成小图）② 封面回填
-        setTimeout(async () => {
-          try {
-            let migrated = null;
-            for (let i = 0; i < pruned.length; i++) {
-              const url = pruned[i]?.coverUrl;
-              if (typeof url !== 'string' || !url.startsWith('file://')) continue;
-              const small = await downscaleCover(url);
-              if (small && small !== url) {
-                migrated = migrated || [...pruned];
-                migrated[i] = { ...migrated[i], coverUrl: small };
-                try { await FileSystem.deleteAsync(url, { idempotent: true }); } catch {}
-              }
-            }
-            let current = pruned;
-            if (migrated) {
-              current = migrated;
-              setLogData(migrated);
-              try { await AsyncStorage.setItem('@lifelogs', JSON.stringify(migrated)); } catch {}
-            }
-            // 自选封面小图补齐：老记录选了相册封面但没有小图文件的，生成一份（一次性，之后走设置时的即时生成）
-            let thumbsAdded = false;
-            for (let i = 0; i < current.length; i++) {
-              const log = current[i];
-              if (log?.coverIndex == null || log.coverThumbUrl) continue;
-              const entry = (log.localImages || [])[log.coverIndex];
-              if (!entry) continue;
-              try {
-                const resolved = await resolveMediaUri(entry);
-                const small = await downscaleCover(resolved || entry.uri || '');
-                if (small) {
-                  current = current.map((l, j) => (j === i ? { ...l, coverThumbUrl: small } : l));
-                  thumbsAdded = true;
-                }
-              } catch {}
-            }
-            if (thumbsAdded) {
-              setLogData(current);
-              try { await AsyncStorage.setItem('@lifelogs', JSON.stringify(current)); } catch {}
-            }
-            backfillCovers(current);
-          } catch {}
-        }, 2000);
+        // 延后 2 秒错峰启动：给缺封面的记录联网补一张海报
+        setTimeout(() => { backfillCovers(pruned); }, 2000);
       } else {
         setLogData(initialLogData);
-        await AsyncStorage.setItem('@lifelogs', JSON.stringify(initialLogData));
+        await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(initialLogData));
       }
     } catch (e) {
       console.error('加载数据失败', e);
@@ -195,7 +154,7 @@ export const LogProvider = ({ children }) => {
     if (updated) {
       setLogData(updated);
       try {
-        await AsyncStorage.setItem('@lifelogs', JSON.stringify(updated));
+        await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updated));
       } catch (e) {
         console.error('保存数据失败', e);
       }
@@ -206,7 +165,7 @@ export const LogProvider = ({ children }) => {
     try {
       const updatedLogs = [newLog, ...logData];
       setLogData(updatedLogs);
-      await AsyncStorage.setItem('@lifelogs', JSON.stringify(updatedLogs));
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
     } catch (e) {
       console.error('保存数据失败', e);
     }
@@ -217,7 +176,7 @@ export const LogProvider = ({ children }) => {
     try {
       const updatedLogs = logData.filter(log => log.id !== id);
       setLogData(updatedLogs);
-      await AsyncStorage.setItem('@lifelogs', JSON.stringify(updatedLogs));
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
     } catch (e) {
       console.error('删除数据失败', e);
     }
@@ -233,7 +192,7 @@ export const LogProvider = ({ children }) => {
       );
       const updatedLogs = logData.map(log => (log.id === updatedLog.id ? { ...log, ...patch } : log));
       setLogData(updatedLogs);
-      await AsyncStorage.setItem('@lifelogs', JSON.stringify(updatedLogs));
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
     } catch (e) {
       console.error('更新数据失败', e);
     }
@@ -245,7 +204,7 @@ export const LogProvider = ({ children }) => {
     if (report.changed) {
       setLogData(report.logs);
       try {
-        await AsyncStorage.setItem('@lifelogs', JSON.stringify(report.logs));
+        await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(report.logs));
       } catch (e) {
         console.error('保存数据失败', e);
       }
@@ -275,7 +234,7 @@ export const LogProvider = ({ children }) => {
     }
     setLogData(next);
     try {
-      await AsyncStorage.setItem('@lifelogs', JSON.stringify(next));
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(next));
     } catch (e) {
       console.error('保存数据失败', e);
     }
