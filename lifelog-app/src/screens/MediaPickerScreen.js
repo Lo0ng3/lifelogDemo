@@ -554,14 +554,18 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   const panGesture = Gesture.Pan()
     .enabled(hasLongContent && barActive)
-    .onBegin((e) => {
+    // 滑轨只有约 20pt 宽、贴在右边缘，正好压着最后一列照片。手指一按下（onBegin）
+    // 就当成拖动的话，"想选最右边那张"会变成"抓到滑轨跳走"。所以：
+    // ① minDistance(6)：轻点不激活；② seekToY 挪到 onStart（真正激活后才触发）
+    .minDistance(6)
+    .onBegin(() => {
       dragging.value = true;
       cancelAnimation(barOpacity);
       barOpacity.value = 1;
       // 拖动期间保持接管状态（手势中途被 disable 会被系统取消）
       runOnJS(showBarFor)(30000);
-      seekToY(e.y);
     })
+    .onStart((e) => { seekToY(e.y); })
     .onUpdate((e) => { seekToY(e.y); })
     .onFinalize(() => {
       dragging.value = false;
@@ -693,7 +697,11 @@ export default function MediaPickerScreen({ route, navigation }) {
           {hasLongContent && (
             <>
               <GestureDetector gesture={panGesture}>
-                <Reanimated.View style={[styles.fastTrack, trackStyle]} />
+                <Reanimated.View
+                  style={[styles.fastTrack, trackStyle]}
+                  // 滑轨没淡入时彻底不吃触摸：点最后一列照片绝不会被它拦下
+                  pointerEvents={barActive ? 'auto' : 'none'}
+                />
               </GestureDetector>
               <Reanimated.View style={[styles.fastThumb, thumbStyle]} pointerEvents="none" />
               <Reanimated.View style={[styles.fastBubble, bubbleStyle]} pointerEvents="none">
@@ -801,9 +809,11 @@ const makeStyles = (c) => ({
   selectBadgeOn: { backgroundColor: c.accent, borderColor: c.accent },
 
   // 快速定位：滑块 = 中空胶囊；轨道平时透明（不挡手），滚动/拖动时由动画控制淡入
-  fastTrack: { position: 'absolute', right: 0, top: 10, bottom: 10, width: 36, zIndex: 5 },
-  fastThumb: { position: 'absolute', right: 13, top: 10, width: 9, height: THUMB_H, borderRadius: THUMB_H / 2, borderWidth: 2.5, borderColor: '#FFF', backgroundColor: 'rgba(120,120,128,0.18)', elevation: 2, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, zIndex: 6 },
-  fastBubble: { position: 'absolute', right: 44, top: 10, minWidth: 72, maxWidth: 150, backgroundColor: c.bgElevated, borderRadius: 9, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, zIndex: 6 },
+  // 触控条比原来（36pt）窄一半：压在最后一列上的死区从三成降到一成半，
+  // 再配合"轻点不算拖动"，最右边那张也能正常点选
+  fastTrack: { position: 'absolute', right: 0, top: 10, bottom: 10, width: 20, zIndex: 5 },
+  fastThumb: { position: 'absolute', right: 5, top: 10, width: 9, height: THUMB_H, borderRadius: THUMB_H / 2, borderWidth: 2.5, borderColor: '#FFF', backgroundColor: 'rgba(120,120,128,0.18)', elevation: 2, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, zIndex: 6 },
+  fastBubble: { position: 'absolute', right: 28, top: 10, minWidth: 72, maxWidth: 150, backgroundColor: c.bgElevated, borderRadius: 9, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, zIndex: 6 },
   fastBubbleText: { color: c.text, fontSize: 12, fontWeight: '600' },
 
   previewFooter: { alignItems: 'center', paddingBottom: 24 },
