@@ -7,7 +7,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { Image as RNImage } from 'react-native';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { COVERS_DIR, MEDIA_DIR } from './storagePaths';
+import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync } from './storagePaths';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -182,10 +182,8 @@ export const DOUBAN_POSTER_RATIO = 2 / 3;
 const COVER_MAX_EDGE = 360;
 
 const ensureCoversDir = async () => {
-  const dir = COVERS_DIR;
-  const info = await FileSystem.getInfoAsync(dir);
-  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-  return dir;
+  await ensureDirAsync(COVERS_DIR);
+  return COVERS_DIR;
 };
 
 // 把封面文件缩到长边 360px 并存进 covers 目录，返回新路径。
@@ -215,7 +213,7 @@ export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE) => {
     }
     const ext = (workUri.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
     const dest = `${dir}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-    await FileSystem.copyAsync({ from: workUri, to: dest });
+    await copyFileAsync(workUri, dest);
     if (workUri !== uri) {
       try { await FileSystem.deleteAsync(workUri, { idempotent: true }); } catch {}
     }

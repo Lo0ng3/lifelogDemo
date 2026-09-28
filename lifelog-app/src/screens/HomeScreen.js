@@ -7,7 +7,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle
+  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
@@ -28,6 +28,7 @@ import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
+import { describeStorageAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches } from '../utils/media';
 import { shortPlaceName } from '../utils/format';
 import { buildMapHtml } from '../utils/mapHtml';
@@ -184,27 +185,51 @@ export default function HomeScreen({ navigation }) {
   // 备份导出：把全部记录写成 JSON 文件到用户选的文件夹
   const handleExportBackup = async () => {
     toggleSidebar(false);
-    const result = await exportBackup(logData);
+    const result = await exportBackup(logData, { tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode });
     if (result.canceled) return;
     if (result.ok) {
       Alert.alert(
         '导出成功',
-        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}：\n${result.name}`
+        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}${result.keys ? '、地图 Key' : ''}：\n${result.name}`
       );
     } else {
       Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
     }
   };
 
+  // 备份里的地图 Key 一并恢复（Key 是整机设置，不挂在记录上）
+  const applyBackupKeys = (keys) => {
+    if (!keys) return false;
+    let applied = false;
+    if (typeof keys.tdtKey === 'string') { setTdtKey(keys.tdtKey); applied = true; }
+    if (keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu') { setMapProvider(keys.mapProvider); applied = true; }
+    if (typeof keys.amapKey === 'string') { setAmapKey(keys.amapKey); applied = true; }
+    if (typeof keys.amapJsKey === 'string') { setAmapJsKey(keys.amapJsKey); applied = true; }
+    if (typeof keys.amapJsCode === 'string') { setAmapJsCode(keys.amapJsCode); applied = true; }
+    return applied;
+  };
+
+  // 数据目录：看副本/封面实际落在哪、各有多少，并现场做一次写入测试
+  const handleShowStorage = async () => {
+    toggleSidebar(false);
+    try {
+      Alert.alert('数据目录', await describeStorageAsync());
+    } catch (e) {
+      Alert.alert('数据目录', e?.message || '读取目录信息失败');
+    }
+  };
+
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
-  const doImport = async (logs, mode, coversRestored) => {
+  const doImport = async (logs, mode, coversRestored, keys) => {
     const report = await importLogs(logs, mode);
+    const keysRestored = applyBackupKeys(keys);
     Alert.alert(
       '导入完成',
       (mode === 'replace'
         ? `已覆盖恢复，当前共 ${report.total} 条记录。`
         : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`)
-        + (coversRestored ? `\n已恢复 ${coversRestored} 张封面文件。` : ''),
+        + (coversRestored ? `\n已恢复 ${coversRestored} 张封面文件。` : '')
+        + (keysRestored ? '\n已恢复备份里的地图 Key。' : ''),
       [
         { text: '稍后', style: 'cancel' },
         { text: '立即同步', onPress: handleSync },
@@ -229,8 +254,8 @@ export default function HomeScreen({ navigation }) {
       `备份文件：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored) },
-        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored) },
+        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored, result.keys) },
+        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored, result.keys) },
       ]
     );
   };
@@ -656,6 +681,11 @@ export default function HomeScreen({ navigation }) {
             <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache}>
               <Eraser size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
               <Text style={styles.menuItemText}>清理缓存</Text>
+            </TouchableOpacity>
+            {/* 数据目录：副本 / 封面实际落在哪、有多少，并现场做一次写入测试 */}
+            <TouchableOpacity style={styles.menuItem} onPress={handleShowStorage}>
+              <FolderOpen size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
+              <Text style={styles.menuItemText}>数据目录</Text>
             </TouchableOpacity>
             {/* 说明：原先散落在各页面上的提示性文字都集中到这里 */}
             <TouchableOpacity style={styles.menuItem} onPress={() => { toggleSidebar(false); setHelpOpen(true); }}>

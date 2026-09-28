@@ -5,13 +5,24 @@
 //   老备份没有 covers 字段也能正常导入（缺失封面交给回填机制兜底）
 // 备份里的媒体条目带着相册指纹（文件名/大小/尺寸），换机导入后跑一次"同步相册影像"即可重新关联。
 import * as FileSystem from 'expo-file-system/legacy';
-import { COVERS_DIR } from './storagePaths';
+import { COVERS_DIR, ensureDirAsync, writeFileBase64Async } from './storagePaths';
 
 const { StorageAccessFramework } = FileSystem;
 
 const BACKUP_NAME_PREFIX = 'lifelog-backup-';
 
 const pad = (n) => String(n).padStart(2, '0');
+
+// 地图 Key 是整机设置，跟着备份走：导出时带上，导入时覆盖本机
+const pickKeys = (keys) => {
+  if (!keys || typeof keys !== 'object') return null;
+  const out = {};
+  for (const k of ['tdtKey', 'amapKey', 'amapJsKey', 'amapJsCode']) {
+    if (typeof keys[k] === 'string' && keys[k]) out[k] = keys[k];
+  }
+  if (keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu') out.mapProvider = keys.mapProvider;
+  return Object.keys(out).length ? out : null;
+};
 
 // 从 SAF 的 content:// URI 里抠出文件名（URI 末段形如 Primary%3ADownload%2Flifelog-backup-x.json）
 const nameFromUri = (uri) => {
@@ -42,7 +53,7 @@ const collectCovers = async (logData) => {
   return covers;
 };
 
-export const exportBackup = async (logData) => {
+export const exportBackup = async (logData, keys = null) => {
   try {
     const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync();
     if (!perms.granted) return { ok: false, canceled: true };
@@ -50,6 +61,7 @@ export const exportBackup = async (logData) => {
     const now = new Date();
     const name = `${BACKUP_NAME_PREFIX}${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
     const covers = await collectCovers(logData);
+    const keyPayload = pickKeys(keys);
     const payload = JSON.stringify({
       app: 'lifelog',
       schema: 2,
@@ -57,13 +69,20 @@ export const exportBackup = async (logData) => {
       count: logData.length,
       logs: logData,
       ...(Object.keys(covers).length ? { covers } : {}),
+      ...(keyPayload ? { keys: keyPayload } : {}),
     });
 
     const fileUri = await StorageAccessFramework.createFileAsync(
       perms.directoryUri, name, 'application/json'
     );
     await FileSystem.writeAsStringAsync(fileUri, payload, { encoding: FileSystem.EncodingType.UTF8 });
-    return { ok: true, count: logData.length, covers: Object.keys(covers).length, name };
+    return {
+      ok: true,
+      count: logData.length,
+      covers: Object.keys(covers).length,
+      keys: !!keyPayload,
+      name,
+    };
   } catch (e) {
     return { ok: false, canceled: false, error: e?.message || String(e) };
   }
@@ -107,12 +126,10 @@ export const importBackup = async () => {
         const b64 = base ? covers[base] : null;
         if (typeof b64 !== 'string' || b64.length === 0) continue;
         try {
-          if (!(await FileSystem.getInfoAsync(COVERS_DIR)).exists) {
-            await FileSystem.makeDirectoryAsync(COVERS_DIR, { intermediates: true });
-          }
+          await ensureDirAsync(COVERS_DIR);
           const ext = (base.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
           const dest = `${COVERS_DIR}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-          await FileSystem.writeAsStringAsync(dest, b64, { encoding: FileSystem.EncodingType.Base64 });
+          await writeFileBase64Async(dest, b64);
           restoredLog[field] = dest;
           coversRestored++;
         } catch {}
@@ -125,6 +142,7 @@ export const importBackup = async () => {
       logs: restoredLogs,
       count: restoredLogs.length,
       coversRestored,
+      keys: pickKeys(payload?.keys),
       name: file.name || nameFromUri(file.uri),
       exportedAt: payload.exportedAt || null,
     };
