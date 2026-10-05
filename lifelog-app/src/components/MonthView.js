@@ -13,6 +13,9 @@ import { groupColor } from '../utils/recordMeta';
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日'];
 const MAX_DOTS = 3;
+// 没有记录的日期共用同一个空数组：否则每次渲染都是新的 []，
+// 会让下面的 memo 化日期格全部判定为"props 变了"而重渲染
+const NO_RECORDS = [];
 
 const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
 const dateKey = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
@@ -21,8 +24,11 @@ const todayKey = () => {
   return dateKey(d.getFullYear(), d.getMonth() + 1, d.getDate());
 };
 
-/* 单个日期格：选中底色 / 今天描边都用动画过渡，点按有轻微缩放 */
-function DayCell({ cell, records, selected, isToday, onPress, colors, styles, compact }) {
+/* 单个日期格：选中底色 / 今天描边都用动画过渡，点按有轻微缩放。
+   memo + 「按格子位置而不是日期做 key」两层一起用：换月时 42 个格子是
+   更新而不是重建（不会重挂 Animated 值 / 手势 / 共享值），只点某天时
+   也只有选中状态真正变了的两个格子重渲染。 */
+const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, onPress, colors, styles, compact }) {
   const on = useSharedValue(selected ? 1 : 0);
   useEffect(() => { on.value = withTiming(selected ? 1 : 0, { duration: 160 }); }, [selected, on]);
   const bg = useAnimatedStyle(() => ({
@@ -32,7 +38,7 @@ function DayCell({ cell, records, selected, isToday, onPress, colors, styles, co
   const more = records.length - dots.length;
 
   return (
-    <PressableScale containerStyle={styles.dayHit} style={styles.dayFill} activeScale={0.9} onPress={onPress}>
+    <PressableScale containerStyle={styles.dayHit} style={styles.dayFill} activeScale={0.9} onPress={() => onPress(cell.date)}>
       <Reanimated.View style={[styles.day, compact && styles.dayCompact, cell.out && styles.dayOut, bg]}>
         {isToday && <View style={[styles.todayRing, compact && styles.todayRingCompact]} pointerEvents="none" />}
         <Text style={[styles.dayNum, compact && styles.dayNumCompact, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
@@ -47,7 +53,7 @@ function DayCell({ cell, records, selected, isToday, onPress, colors, styles, co
       </Reanimated.View>
     </PressableScale>
   );
-}
+});
 
 /* ------------------------------------------------------------------ *
  * 月示图：上半是日历（圆点按一级类型着色），下半是当月 / 当日时间线。
@@ -58,6 +64,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
   const styles = useThemedStyles(makeStyles);
 
   const now = new Date();
+  const today = todayKey();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
   const [selected, setSelected] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -88,6 +95,18 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
     });
     return map;
   }, [records]);
+
+  // 点日期：只有那天有记录才切换选中（点日历格还会把列表滚回顶部展开日历）
+  // 回调保持稳定 + 用 ref 读最新的 byDate，memo 化的日期格才不会因为父级重渲染而集体失效
+  const byDateRef = useRef(byDate);
+  byDateRef.current = byDate;
+  const selectDay = useCallback((date, scrollTop) => {
+    if ((byDateRef.current.get(date) || NO_RECORDS).length === 0) return;
+    setSelected((prev) => (prev === date ? null : date));
+    if (scrollTop) listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+  const pressDayInGrid = useCallback((date) => selectDay(date, true), [selectDay]);
+  const pressDayInStrip = useCallback((date) => selectDay(date, false), [selectDay]);
 
   // 按月预分组：切月时 O(1) 取当月记录，不用每次遍历全部记录（记录多时切月会明显卡顿）
   const byMonth = useMemo(() => {
@@ -254,18 +273,15 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
       {/* 固定的"周条"：展开时是星期表头，日历收起来后变成本周 7 天（照样能点某天） */}
       <View style={styles.weekStrip}>
         {collapsed ? (
-          anchorWeek.map((cell) => (
+          anchorWeek.map((cell, ci) => (
             <DayCell
-              key={cell.date}
+              key={ci}
               cell={cell}
               compact
-              records={byDate.get(cell.date) || []}
+              records={byDate.get(cell.date) || NO_RECORDS}
               selected={selected === cell.date}
-              isToday={cell.date === todayKey()}
-              onPress={() => {
-                if ((byDate.get(cell.date) || []).length === 0) return;
-                setSelected((prev) => (prev === cell.date ? null : cell.date));
-              }}
+              isToday={cell.date === today}
+              onPress={pressDayInStrip}
               colors={colors}
               styles={styles}
             />
@@ -334,18 +350,14 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
                     <View style={styles.grid}>
                       {weeks.map((week, wi) => (
                         <View key={wi} style={styles.week}>
-                          {week.map((cell) => (
+                          {week.map((cell, ci) => (
                             <DayCell
-                              key={cell.date}
+                              key={wi * 7 + ci}
                               cell={cell}
-                              records={cell.out ? [] : (byDate.get(cell.date) || [])}
+                              records={cell.out ? NO_RECORDS : (byDate.get(cell.date) || NO_RECORDS)}
                               selected={selected === cell.date}
-                              isToday={cell.date === todayKey()}
-                              onPress={() => {
-                                if ((byDate.get(cell.date) || []).length === 0) return;
-                                setSelected((prev) => (prev === cell.date ? null : cell.date));
-                                listRef.current?.scrollToOffset({ offset: 0, animated: true });
-                              }}
+                              isToday={cell.date === today}
+                              onPress={pressDayInGrid}
                               colors={colors}
                               styles={styles}
                             />

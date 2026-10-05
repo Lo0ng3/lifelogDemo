@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useRef, useCallback, useMemo } 
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
-  BackHandler, ToastAndroid, Modal
+  BackHandler, ToastAndroid, Modal, Keyboard
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -15,7 +15,7 @@ import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, ge
 import { relinkNewEntries } from '../utils/mediaSync';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
-import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch } from '../utils/search';
+import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
@@ -192,6 +192,130 @@ export default function AddScreen({ navigation, route }) {
     setBaseType(base);
     setSubType(sub);
   };
+
+  /* ---------------- 表单键盘体验 ----------------
+     ① 回车 / 键盘上的「下一项」跳到下一个字段（日期格填满也自动跳）；
+     ② 聚焦的输入框如果被输入法挡住，把它滚到键盘上方。
+     两点都靠「字段 key 表 + 一份滚动容器 ref」实现，字段顺序随类型变化。 */
+  const formScrollRef = useRef(null);
+  const formScrollY = useRef(0);         // 滚动容器当前偏移
+  const keyboardTopY = useRef(null);     // 键盘顶边的屏幕 Y（null = 键盘收起）
+  const focusedField = useRef(null);     // 当前聚焦的字段 key
+  const fieldNodes = useRef({});         // key -> TextInput 实例
+  const fieldSetters = useRef({});       // key -> 稳定的 ref 回调（避免每次渲染重挂 ref）
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const fieldRef = (key) => {
+    if (!fieldSetters.current[key]) {
+      fieldSetters.current[key] = (node) => { fieldNodes.current[key] = node; };
+    }
+    return fieldSetters.current[key];
+  };
+
+  // 可见下沿取「滚动区底部」和「键盘顶边」里更靠上的那个：
+  // 窗口被键盘压缩（adjustResize）和键盘直接盖在窗口上两种模式都能算对
+  const ensureFieldVisible = useCallback((key) => {
+    const run = () => {
+      const node = fieldNodes.current[key];
+      const sv = formScrollRef.current;
+      if (!node || !sv) return;
+      if (typeof node.measureInWindow !== 'function' || typeof sv.measureInWindow !== 'function') return;
+      sv.measureInWindow((sx, sy, sw, sh) => {
+        node.measureInWindow((x, y, w, h) => {
+          if (!h || !sh) return;
+          const kbTop = keyboardTopY.current;
+          const bottomLimit = Math.min(sy + sh, kbTop != null ? kbTop - 16 : Infinity);
+          const topLimit = sy + 12;
+          let delta = 0;
+          if (y + h > bottomLimit) delta = y + h - bottomLimit;
+          else if (y < topLimit) delta = y - topLimit;
+          if (Math.abs(delta) > 1) {
+            sv.scrollTo({ y: Math.max(0, formScrollY.current + delta), animated: true });
+          }
+        });
+      });
+    };
+    // 键盘弹出有动画：先量一次，动画结束后再校正一次（第二次已经可见时是空操作）
+    setTimeout(run, 80);
+    setTimeout(run, 320);
+  }, []);
+
+  const handleFieldFocus = useCallback((key) => {
+    focusedField.current = key;
+    ensureFieldVisible(key);
+  }, [ensureFieldVisible]);
+
+  // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来）
+  const scrollContentStyle = useMemo(
+    () => (keyboardOpen ? { paddingBottom: 280 } : undefined),
+    [keyboardOpen]
+  );
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e) => {
+      const top = e?.endCoordinates?.screenY;
+      keyboardTopY.current = typeof top === 'number' ? top : null;
+      setKeyboardOpen(true);
+      // 键盘动画走完后再校正一次当前字段的位置
+      const key = focusedField.current;
+      if (key) setTimeout(() => ensureFieldVisible(key), 300);
+    };
+    const onHide = () => {
+      keyboardTopY.current = null;
+      setKeyboardOpen(false);
+    };
+    const subs = [
+      Keyboard.addListener(showEvt, onShow),
+      Keyboard.addListener(hideEvt, onHide),
+    ];
+    if (Platform.OS === 'ios') subs.push(Keyboard.addListener('keyboardDidShow', onShow));
+    return () => subs.forEach((s) => s.remove());
+  }, [ensureFieldVisible]);
+
+  // 字段的填写顺序（随类型变化）；评论是多行输入，回车留给换行，所以永远排在最后
+  const fieldOrder = useMemo(() => {
+    const head = baseType === 'ticket' ? ['origin', 'dest', 'no']
+      : baseType === 'note' ? ['noteTitle']
+        : ['search'];
+    const dates = baseType === 'ticket'
+      ? ['year', 'month', 'day', 'hour', 'minute']
+      : ['year', 'month', 'day'];
+    const tail = baseType === 'note' ? ['moodDraft', 'comment'] : ['comment'];
+    return [...head, ...dates, ...tail];
+  }, [baseType]);
+
+  const focusField = useCallback((key) => {
+    const node = fieldNodes.current[key];
+    if (node && typeof node.focus === 'function') node.focus();
+  }, []);
+
+  const focusNext = useCallback((key) => {
+    const i = fieldOrder.indexOf(key);
+    if (i >= 0 && i < fieldOrder.length - 1) focusField(fieldOrder[i + 1]);
+  }, [fieldOrder, focusField]);
+
+  // 单行输入框的统一属性：回车跳下一项、保持键盘不收起
+  const nextFieldProps = (key) => ({
+    ref: fieldRef(key),
+    returnKeyType: 'next',
+    blurOnSubmit: false,
+    onFocus: () => handleFieldFocus(key),
+    onSubmitEditing: () => focusNext(key),
+  });
+
+  // 年/月/日/时/分：只收数字，填满这一格就自动跳到下一格
+  const dateFieldProps = (key, maxLen, value, setValue) => ({
+    ...nextFieldProps(key),
+    value,
+    keyboardType: 'number-pad',
+    maxLength: maxLen,
+    onChangeText: (t) => {
+      const digits = String(t || '').replace(/[^0-9]/g, '').slice(0, maxLen);
+      setValue(digits);
+      if (digits.length === maxLen) focusNext(key);
+    },
+  });
 
   useEffect(() => {
     if (route.params?.editItem) {
@@ -481,20 +605,16 @@ export default function AddScreen({ navigation, route }) {
       .slice(0, 5);
   }, [basicsReady, year, month, day, baseType, noteTitle, comment, searchQuery, ticketOrigin, ticketDest, ticketNo, locationCoords, logData, editId]);
 
-  const handleSave = async () => {
-    if (!year || !month || !day) {
-      Alert.alert('提示', '请至少填写完整的年月日');
-      return;
-    }
+  // 真正落库的那一段（校验在 handleSave 里做完才进来）
+  const performSave = async () => {
     // 随笔：心情必填（emoji 预设或自填任一）
     const essayMood = MOOD_OPTIONS.includes(mood) ? mood : (mood || moodDraft.trim());
-    if (baseType === 'note' && !essayMood) {
-      Alert.alert('提示', '随笔需要选一个心情');
-      return;
-    }
 
-    // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示
-    const savedCoverUrl = baseType === 'media' && coverUrl ? await downloadRemoteCover(coverUrl) : null;
+    // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示。
+    // 限时 8 秒：网络卡住时不能让"保存"一直没反应（超时就先存网络地址，之后还能显示）
+    const savedCoverUrl = baseType === 'media' && coverUrl
+      ? await withTimeout(downloadRemoteCover(coverUrl), 8000).catch(() => coverUrl)
+      : null;
 
     // 只有存在本地副本（旧数据/系统选择器时代）才需要重链；
     // 应用内选图器产物是纯相册引用，保存零扫描零等待
@@ -592,6 +712,35 @@ export default function AddScreen({ navigation, route }) {
     }
   };
 
+  // 点「保存」的入口：必填校验 → 防连点 → 失败兜底。
+  // 以前没有"正在保存"这个状态：重链相册 / 下载封面偶尔卡住时，
+  // 界面看起来就是"点了保存没反应"；连点两次还会存出两条一样的记录。
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const handleSave = async () => {
+    if (savingRef.current) return;
+    if (!year || !month || !day) {
+      Alert.alert('提示', '请至少填写完整的年月日');
+      return;
+    }
+    // 随笔：心情必填（emoji 预设或自填任一）
+    const moodNow = MOOD_OPTIONS.includes(mood) ? mood : (mood || moodDraft.trim());
+    if (baseType === 'note' && !moodNow) {
+      Alert.alert('提示', '随笔需要选一个心情');
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await performSave();
+    } catch (e) {
+      Alert.alert('保存失败', `保存时出现问题：${e?.message || e}\n可以再试一次。`);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
   const renderRating = () => {
     return (
       <View style={styles.ratingSection}>
@@ -617,10 +766,26 @@ export default function AddScreen({ navigation, route }) {
       <View style={styles.header}>
         <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
-        <TouchableOpacity onPress={handleSave}><Text style={styles.saveText}>保存</Text></TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => { Keyboard.dismiss(); handleSave(); }}
+          disabled={saving}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          {saving
+            ? <ActivityIndicator size="small" color={colors.accent} />
+            : <Text style={styles.saveText}>保存</Text>}
+        </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={formScrollRef}
+        style={styles.formScroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={16}
+        onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
+        contentContainerStyle={scrollContentStyle}
+      >
         <View style={styles.cardSection}>
           {/* 类型字段：点开底部弹层做二级选择（大类 → 子类） */}
           <TouchableOpacity
@@ -639,10 +804,12 @@ export default function AddScreen({ navigation, route }) {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
+                  {...nextFieldProps('origin')}
                   value={ticketOrigin}
                   onChangeText={setTicketOrigin}
-                  onFocus={() => { setOriginFocused(true); if (ticketOrigin.trim()) setShowOriginAuto(true); }}
+                  onFocus={() => { setOriginFocused(true); if (ticketOrigin.trim()) setShowOriginAuto(true); handleFieldFocus('origin'); }}
                   onBlur={() => { setOriginFocused(false); setTimeout(() => setShowOriginAuto(false), 200); }}
+                  onSubmitEditing={() => { setShowOriginAuto(false); focusNext('origin'); }}
                 />
               </View>
               {showOriginAuto && originResults.length > 0 && (
@@ -664,10 +831,12 @@ export default function AddScreen({ navigation, route }) {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
+                  {...nextFieldProps('dest')}
                   value={ticketDest}
                   onChangeText={setTicketDest}
-                  onFocus={() => { setDestFocused(true); if (ticketDest.trim()) setShowDestAuto(true); }}
+                  onFocus={() => { setDestFocused(true); if (ticketDest.trim()) setShowDestAuto(true); handleFieldFocus('dest'); }}
                   onBlur={() => { setDestFocused(false); setTimeout(() => setShowDestAuto(false), 200); }}
+                  onSubmitEditing={() => { setShowDestAuto(false); focusNext('dest'); }}
                 />
               </View>
               {showDestAuto && destResults.length > 0 && (
@@ -686,7 +855,14 @@ export default function AddScreen({ navigation, route }) {
                 </Reanimated.View>
               )}
               <Text style={[styles.inputLabel, { marginTop: 16 }]}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
-              <View style={styles.inputWrapper}><TextInput style={styles.input} value={ticketNo} onChangeText={setTicketNo} /></View>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  {...nextFieldProps('no')}
+                  value={ticketNo}
+                  onChangeText={setTicketNo}
+                />
+              </View>
             </View>
           )}
 
@@ -697,15 +873,16 @@ export default function AddScreen({ navigation, route }) {
                 <MapPin size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
                 <TextInput
                   style={styles.input}
+                  {...nextFieldProps('search')}
                   value={searchQuery}
                   onChangeText={(t) => {
                     // 手改名称视为"别名"：坐标跟随选中的地点，改名不影响标点位置
                     setSearchQuery(t);
                     if (t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
                   }}
-                  onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); }}
+                  onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
                   onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
-                  onSubmitEditing={() => setShowSearchAuto(false)}
+                  onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
                 />
               </View>
 
@@ -754,16 +931,16 @@ export default function AddScreen({ navigation, route }) {
                 <Search size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
                 <TextInput 
                   style={styles.input} 
+                  {...nextFieldProps('search')}
                   value={searchQuery} 
-                  returnKeyType="done"
                   onChangeText={(t) => {
                     setSearchQuery(t);
                     setCoverUrl(null); setCoverRatio(null); // 手动改动标题后，之前的网络封面不再匹配
                     if(t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
                   }}
-                  onFocus={() => { setSearchFocused(true); if(searchQuery.trim().length > 0) setShowSearchAuto(true); }}
+                  onFocus={() => { setSearchFocused(true); if(searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
                   onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
-                  onSubmitEditing={() => setShowSearchAuto(false)}
+                  onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
                 />
               </View>
 
@@ -813,6 +990,7 @@ export default function AddScreen({ navigation, route }) {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
+                  {...nextFieldProps('noteTitle')}
                   value={noteTitle}
                   onChangeText={setNoteTitle}
                   placeholder={subType === 'diary' ? '给今天起个名字' : '发生了一件什么事'}
@@ -827,11 +1005,11 @@ export default function AddScreen({ navigation, route }) {
           <View>
             <Text style={styles.inputLabel}>发生日期</Text>
             <View style={styles.dateRow}>
-              <TextInput style={[styles.dateBox, styles.dateBoxYear]} keyboardType="number-pad" maxLength={4} value={year} onChangeText={setYear} />
+              <TextInput style={[styles.dateBox, styles.dateBoxYear]} {...dateFieldProps('year', 4, year, setYear)} />
               <Text style={styles.dateLabelText}>年</Text>
-              <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={month} onChangeText={setMonth} />
+              <TextInput style={styles.dateBox} {...dateFieldProps('month', 2, month, setMonth)} />
               <Text style={styles.dateLabelText}>月</Text>
-              <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={day} onChangeText={setDay} />
+              <TextInput style={styles.dateBox} {...dateFieldProps('day', 2, day, setDay)} />
               <Text style={styles.dateLabelText}>日</Text>
             </View>
 
@@ -840,9 +1018,9 @@ export default function AddScreen({ navigation, route }) {
               <View style={{ marginTop: 12 }}>
                 <Text style={styles.inputLabel}>具体时间（选填）</Text>
                 <View style={styles.dateRow}>
-                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={hour} onChangeText={setHour} />
+                  <TextInput style={styles.dateBox} {...dateFieldProps('hour', 2, hour, setHour)} />
                   <Text style={styles.dateLabelText}>时</Text>
-                  <TextInput style={styles.dateBox} keyboardType="number-pad" maxLength={2} value={minute} onChangeText={setMinute} />
+                  <TextInput style={styles.dateBox} {...dateFieldProps('minute', 2, minute, setMinute)} />
                   <Text style={styles.dateLabelText}>分</Text>
                 </View>
               </View>
@@ -882,6 +1060,7 @@ export default function AddScreen({ navigation, route }) {
                 })}
                 <TextInput
                   style={[styles.moodInput, (moodDraft.trim() && !MOOD_OPTIONS.includes(mood)) && styles.moodChipOn]}
+                  {...nextFieldProps('moodDraft')}
                   value={moodDraft}
                   onChangeText={(t) => { setMoodDraft(t); setMood(t ? t : null); }}
                   placeholder="自填"
@@ -908,9 +1087,11 @@ export default function AddScreen({ navigation, route }) {
             </View>
             <TextInput
               style={styles.commentInput}
+              ref={fieldRef('comment')}
               multiline
               numberOfLines={4}
               textAlignVertical="top"
+              onFocus={() => handleFieldFocus('comment')}
               value={comment}
               onChangeText={setComment}
               placeholder={baseType === 'note' ? '写点什么…' : '写点评论…'}

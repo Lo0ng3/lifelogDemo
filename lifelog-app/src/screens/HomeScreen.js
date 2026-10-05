@@ -643,11 +643,13 @@ export default function HomeScreen({ navigation }) {
     };
   }, [mapFullscreen, rootSize, winW, winH, insets.top, mapRect]);
 
-  // 提前把地图 WebView 挂上（空闲时），这样第一次点「地图」也不用现建，切换更顺
+  // 地图 WebView 只在用户真正切到「地图」时才挂（挂载后保活）。
+  // 之前是启动 1.2 秒就预挂：没进过地图的人，在列表/日历里滚动时也一直在
+  // 为一个常驻 WebView 做合成（掉帧的主要来源）。懒挂之后，列表/日历的滚动
+  // 完全不经过 WebView；第一次点地图只多一次建页，之后照旧保活。
   useEffect(() => {
-    const timer = setTimeout(() => setMapMounted(true), 1200);
-    return () => clearTimeout(timer);
-  }, []);
+    if (viewMode === 'map') setMapMounted(true);
+  }, [viewMode]);
 
   return (
     <View style={styles.container} ref={rootRef} collapsable={false}>
