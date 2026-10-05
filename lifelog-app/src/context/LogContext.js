@@ -117,7 +117,9 @@ export const LogProvider = ({ children }) => {
       // 封面帧/实况提取缓存超限则整体清理，防止长期使用缓存无限膨胀
       enforceCacheCaps();
       // 静默预热相册索引（不弹权限窗）：保存记录时把媒体重链成相册引用可以零等待
-      warmGalleryIndex();
+      // 但不要卡在启动那一刻：首屏渲染和用户开始滑列表都是这几秒，
+      // 一次全量扫相册（分页拉几千条）会把 JS 线程挤得一顿一顿，晚几秒再跑
+      setTimeout(warmGalleryIndex, 6000);
     }
   };
 

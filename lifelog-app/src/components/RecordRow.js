@@ -1,6 +1,6 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
-import { Star, StarHalf, Edit3, Trash2 } from 'lucide-react-native';
+import { StarHalf, Edit3, Trash2 } from 'lucide-react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
@@ -18,6 +18,32 @@ const lightTap = () => { try { Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyl
 // 右滑操作区：固定宽度保证滑动距离可测
 const ACTIONS_WIDTH = 148;
 const BTN_WIDTH = 74;
+
+/* 星级：整星 / 空星直接用字形画，一个 Text 就画完 5 颗——
+   原来 5 个 lucide 图标 = 5 个 Svg + 5 个 Path = 10 个原生 View，是每行最占地方的一块。
+   只有 x.5 分那颗半星（少数）才用 SVG 精确画，外观和以前一致。 */
+function renderStars(stars, colors, styles) {
+  if (!stars) return null;
+  const { full, half } = stars;
+  if (half) {
+    return (
+      <View style={styles.starContainer}>
+        {[1, 2, 3, 4, 5].map((i) => (
+          i === full + 1
+            ? <StarHalf key={i} size={12} color={colors.star} fill={colors.star} style={styles.starIcon} />
+            : <Text key={i} style={[styles.starGlyph, { color: i <= full ? colors.star : colors.starEmpty }]}>{i <= full ? '★' : '☆'}</Text>
+        ))}
+      </View>
+    );
+  }
+  const empty = 5 - full;
+  return (
+    <Text style={styles.starGlyph} numberOfLines={1}>
+      {full > 0 && <Text style={{ color: colors.star }}>{'★'.repeat(full)}</Text>}
+      {empty > 0 && <Text style={{ color: colors.starEmpty }}>{'☆'.repeat(empty)}</Text>}
+    </Text>
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * 展开动画：操作区整体跟着手指走，两个按钮各自再做一次「错位弹入」
@@ -72,6 +98,11 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 
   const stars = starsOf(item.rating);
   const essay = isEssay(item);
+  // 右滑操作区默认不挂：每行省下两个按钮 + 两个图标 + 三个动画 ≈ 14 个原生 View。
+  // 手指一碰到这一行（onPressIn，早于右滑手势 activate 几十毫秒）就补上，
+  // 所以第一次右滑照样跟手——Swipeable 是在手势 activate 时才量操作区宽度的。
+  const [actionsReady, setActionsReady] = useState(false);
+  const armActions = useCallback(() => setActionsReady(true), []);
   // 日期分两行：上面年份、下面 月-日（缺年份的历史记录就按原样显示）。
   // 时分只在旅票里有意义，放到详情页看；正文一行，保证每行高度完全一致
   const dateText = String(item.date || '');
@@ -104,14 +135,14 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 
   return (
     <ReanimatedSwipeable
-      renderRightActions={renderRightActions}
+      renderRightActions={actionsReady ? renderRightActions : undefined}
       overshootRight={false}
       friction={1.7}
       rightThreshold={36}
       onSwipeableWillOpen={lightTap}
       containerStyle={[styles.swipeContainer, style]}
     >
-      <PressableScale style={styles.cardRow} onPress={() => onPress?.(item)}>
+      <PressableScale style={styles.cardRow} onPress={() => onPress?.(item)} onPressIn={armActions}>
         <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
           <CoverIcon item={item} height={64} />
           <View style={styles.itemContent}>
@@ -128,17 +159,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
               </Text>
               {essay ? (
                 <Text style={styles.moodText}>{item.mood}{item.weather ? ` · ${item.weather}` : ''}</Text>
-              ) : (
-                <View style={styles.starContainer}>
-                  {[1, 2, 3, 4, 5].map((i) => {
-                    if (!stars) return null;
-                    const isFull = i <= stars.full;
-                    const isHalf = stars.half && i === stars.full + 1;
-                    if (isHalf) return <StarHalf key={i} size={12} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
-                    return <Star key={i} size={12} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
-                  })}
-                </View>
-              )}
+              ) : renderStars(stars, colors, styles)}
             </View>
             {!!textLine && <Text style={styles.itemSubtitle} numberOfLines={1}>{textLine}</Text>}
           </View>
@@ -165,6 +186,9 @@ const makeStyles = (c) => ({
   tag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
   moodText: { fontSize: 12, color: c.textMuted },
   starContainer: { flexDirection: 'row' },
+  // 星级用字形画：lineHeight 对齐原来图标的 12px 视觉高度
+  starGlyph: { fontSize: 12.5, lineHeight: 16, letterSpacing: 1.2, includeFontPadding: false },
+  starIcon: { marginRight: 2 },
   itemSubtitle: { fontSize: 14, color: c.textSecondary, lineHeight: 18 },
 
   // 右滑操作区

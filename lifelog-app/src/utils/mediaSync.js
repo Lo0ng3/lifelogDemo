@@ -7,7 +7,7 @@
 // 依赖的指纹（filename/size/w/h）在挑选媒体时（AddScreen.pickImage）和旧数据迁移时写入记录。
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
-import { normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess } from './media';
+import { normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess, pruneOrphanMediaCopies } from './media';
 
 const PAGE_SIZE = 500;
 // 单个条目最多核对的候选数量：文件大小要逐个 getAssetInfoAsync 读，候选太多时截断避免卡死。
@@ -47,6 +47,9 @@ const scanGallery = async () => {
       assets.push(...page.assets);
       hasNext = page.hasNextPage;
       after = page.endCursor;
+      // 每页之间让出一拍：一页 500 条会占住 JS 线程一小会儿，
+      // 连续拉几十页就是滚动时那种"一顿一顿"的来源（让出去后动画/手势能插进来）
+      if (hasNext) await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
   return assets;
@@ -332,6 +335,11 @@ export const relinkNewEntries = async (entries) => {
 };
 
 export const syncMediaFromGallery = async (logs, onProgress) => {
+  // 先清掉 media/ 里没有任何记录引用的副本（分享后放弃、保存失败、迁移残留…）。
+  // 这一步只看记录和 App 自己的目录，不需要相册权限，所以放在最前面，
+  // 权限被拒 / 扫描失败时也已经把孤儿文件收干净了
+  const pruned = await pruneOrphanMediaCopies(logs).catch(() => ({ removed: 0, freed: 0 }));
+
   // 权限和扫描各自包一层，失败时把真实原因抛给界面展示，不再只有笼统的"扫描失败"
   let perm;
   try {
@@ -348,6 +356,7 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
         canAskAgain: !!perm?.canAskAgain,
       },
       changed: false, logs, matched: 0, unmatched: [], freedCopies: 0,
+      removedCopies: pruned.removed, freedBytes: pruned.freed,
     };
   }
 
@@ -405,5 +414,7 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     matched,
     unmatched: [...unmatchedLogs],
     freedCopies,
+    removedCopies: pruned.removed,
+    freedBytes: pruned.freed,
   };
 };

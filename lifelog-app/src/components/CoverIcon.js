@@ -39,7 +39,11 @@ export default function CoverIcon({ item, height = 64, style }) {
           style={StyleSheet.absoluteFill}
           contentFit="contain"
           transition={150}
-          cachePolicy="memory"
+          // memory 只走内存缓存：列表来回滑、封面被挤出内存就得重新联网下载，
+          // 滚动时就是一团解码/GC 抖动。memory-disk 是默认档，落盘一次之后不再重下
+          cachePolicy="memory-disk"
+          // 列表回收格子时告诉 expo-image「这是换了内容的新图」，避免闪上一行的封面
+          recyclingKey={item?.id != null ? String(item.id) : undefined}
         />
       ) : (
         <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>

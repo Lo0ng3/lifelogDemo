@@ -177,6 +177,11 @@ export default function HomeScreen({ navigation }) {
       } else {
         message = '所有影像都能正常显示，无需修复。';
       }
+      // 同步顺带清掉的孤儿副本（media/ 里有、记录里没有的影像）也如实报一下
+      if (report.removedCopies > 0) {
+        const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
+        message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的影像副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
+      }
       Alert.alert('同步完成', message);
     } catch (e) {
       console.error('同步相册失败', e);
@@ -756,9 +761,11 @@ export default function HomeScreen({ navigation }) {
               // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
               // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
               initialNumToRender={8}
-              maxToRenderPerBatch={8}
-              windowSize={7}
-              updateCellsBatchingPeriod={50}
+              // 每批 4 行、每 24ms 一批：一帧要挂的原生 View 少了，掉帧就从"一次卡一下"
+              // 变成看不出来。4 行/帧 ≈ 240 行/秒，远快于任何甩动速度，不会露白
+              maxToRenderPerBatch={4}
+              windowSize={6}
+              updateCellsBatchingPeriod={24}
               removeClippedSubviews={Platform.OS === 'android'}
             />
           </Reanimated.View>

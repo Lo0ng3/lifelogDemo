@@ -303,8 +303,9 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           showsVerticalScrollIndicator={false}
           // 同首页列表：收窄虚拟化窗口、Android 裁掉屏外行，切换日历/滑动更稳
           initialNumToRender={6}
-          maxToRenderPerBatch={6}
+          maxToRenderPerBatch={4}
           windowSize={5}
+          updateCellsBatchingPeriod={24}
           removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
           contentContainerStyle={styles.tlContent}
