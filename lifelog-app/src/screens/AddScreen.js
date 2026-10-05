@@ -11,7 +11,7 @@ import {
   Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle, Maximize2
 } from 'lucide-react-native';
 import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
-import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry } from '../utils/media';
+import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
@@ -316,6 +316,11 @@ export default function AddScreen({ navigation, route }) {
       if (digits.length === maxLen) focusNext(key);
     },
   });
+
+  // 把表单草稿里挂着的影像登记出去：侧边栏「同步相册影像」清理孤儿副本时，
+  // 这些还在草稿里、没保存的图要算"被引用"，不能被当成多余的删掉
+  useEffect(() => { setDraftMediaEntries(selectedImages); }, [selectedImages]);
+  useEffect(() => () => setDraftMediaEntries([]), []);
 
   useEffect(() => {
     if (route.params?.editItem) {

@@ -338,7 +338,8 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
   // 先清掉 media/ 里没有任何记录引用的副本（分享后放弃、保存失败、迁移残留…）。
   // 这一步只看记录和 App 自己的目录，不需要相册权限，所以放在最前面，
   // 权限被拒 / 扫描失败时也已经把孤儿文件收干净了
-  const pruned = await pruneOrphanMediaCopies(logs).catch(() => ({ removed: 0, freed: 0 }));
+  const pruned = await pruneOrphanMediaCopies(logs)
+    .catch(() => ({ removed: 0, freed: 0, scanned: 0, errors: [] }));
 
   // 权限和扫描各自包一层，失败时把真实原因抛给界面展示，不再只有笼统的"扫描失败"
   let perm;
@@ -356,7 +357,7 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
         canAskAgain: !!perm?.canAskAgain,
       },
       changed: false, logs, matched: 0, unmatched: [], freedCopies: 0,
-      removedCopies: pruned.removed, freedBytes: pruned.freed,
+      removedCopies: pruned.removed, freedBytes: pruned.freed, mediaScanErrors: pruned.errors,
     };
   }
 
@@ -416,5 +417,6 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     freedCopies,
     removedCopies: pruned.removed,
     freedBytes: pruned.freed,
+    mediaScanErrors: pruned.errors,
   };
 };

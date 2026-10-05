@@ -341,35 +341,75 @@ export const cleanupMediaCaches = async (logs = []) => {
   return freed;
 };
 
+// 刚生成不到 5 分钟的副本一律不动：可能是添加页草稿里刚挑的、或刚分享进来还没保存的
+const ORPHAN_MIN_AGE_MS = 5 * 60 * 1000;
+
+/* media/ 目录有两个候选：
+   ① 当前落点 MEDIA_DIR（原生 Paths 可用时是 Android/data/<包名>/files/media，否则内部 files/media）；
+   ② 1.8.2 之前用的内部 documentDirectory/media。
+   搬目录时老副本不会自己跟着走，只扫"当前"目录的话，旧目录里的残留就永远清不掉
+   ——用户看到的"记录里没有、media 里还在"多半就是这一类。 */
+const mediaDirsToScan = () => {
+  const dirs = [MEDIA_DIR];
+  const legacyInternal = `${FileSystem.documentDirectory}media`;
+  if (legacyInternal !== MEDIA_DIR) dirs.push(legacyInternal);
+  return dirs;
+};
+
+// 表单草稿里挂着的影像（添加/编辑页还没保存的那些）：同步清理孤儿副本时也要当成"被引用"，
+// 否则"挑了照片还没保存、跑去同步相册"就会把草稿里的图删掉。页面每次改动/卸载时同步更新。
+const draftMediaNames = new Set();
+const collectMediaNames = (raw, into) => {
+  const e = normalizeMediaEntry(raw);
+  if (!e || typeof e !== 'object') return;
+  for (const value of Object.values(e)) {
+    if (typeof value !== 'string') continue;
+    const clean = value.split('?')[0];
+    if (!clean.includes('/media/')) continue;
+    const name = clean.split('/').pop();
+    if (name) into.add(name);
+  }
+};
+export const setDraftMediaEntries = (entries = []) => {
+  draftMediaNames.clear();
+  for (const entry of entries) collectMediaNames(entry, draftMediaNames);
+};
+
 /* 清掉 media/ 里没有任何记录引用的影像副本。
    孤儿文件的来源：分享进来又放弃、保存失败、旧数据迁移残留、去重时被换掉的旧副本。
    记录一旦重链成相册原片就不该再留副本，留着既占空间、又会让人以为"这张还在记录里"。
-   只扫 App 自己的 MEDIA_DIR，相册和用户挑的公共目录一律不碰；
-   判定"被引用"是把每条记录里所有指向 media/ 的字符串字段都算上（uri / 实况视频 / 缩略图…），
-   宁可多留也不误删；另外**刚生成不到 5 分钟的一律不动**——那可能是「添加页草稿」里刚挑的、
-   或刚分享进来还没保存的副本，正在用。返回删掉的文件数与释放的字节数。 */
-const ORPHAN_MIN_AGE_MS = 5 * 60 * 1000;
+   只扫上面那两个 App 自己的目录，相册和用户挑的公共目录一律不碰；
+   判定"被引用"按**文件名**比对（记录里所有含 `/media/` 的字段 + 表单草稿都算：原片 / 实况视频 / 缩略图…），
+   这样两个目录都能覆盖，宁可多留也不误删；另外刚生成不到 5 分钟的一律不动。
+   返回删掉的文件数、释放的字节数、扫过的文件数，以及读目录失败的目录（不再静默吞掉）。 */
 export const pruneOrphanMediaCopies = async (logs = []) => {
   const referenced = new Set();
   for (const log of logs) {
     const entries = Array.isArray(log?.localImages) ? log.localImages : [];
-    for (const raw of entries) {
-      const e = normalizeMediaEntry(raw);
-      if (!e || typeof e !== 'object') continue;
-      for (const value of Object.values(e)) {
-        if (typeof value !== 'string') continue;
-        const clean = value.split('?')[0];
-        if (clean.startsWith(`${MEDIA_DIR}/`)) referenced.add(clean.slice(MEDIA_DIR.length + 1));
-      }
-    }
+    for (const raw of entries) collectMediaNames(raw, referenced);
   }
 
   let removed = 0;
   let freed = 0;
-  try {
-    for (const name of await FileSystem.readDirectoryAsync(MEDIA_DIR)) {
-      if (referenced.has(name) || name.startsWith('.')) continue;   // .write-test 之类的探针不碰
-      const path = `${MEDIA_DIR}/${name}`;
+  let scanned = 0;
+  const errors = [];
+  for (const dir of mediaDirsToScan()) {
+    let names;
+    try {
+      names = await FileSystem.readDirectoryAsync(dir);
+    } catch (e) {
+      // 目录不存在是正常的（还没放过副本），只有"存在但读不了"才值得报出来
+      try {
+        const info = await FileSystem.getInfoAsync(dir);
+        if (info.exists) errors.push(`${dir}: ${e?.message || e}`);
+      } catch {}
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue;   // .write-test 之类的探针不碰
+      scanned++;
+      if (referenced.has(name) || draftMediaNames.has(name)) continue;
+      const path = `${dir}/${name}`;
       try {
         const info = await FileSystem.getInfoAsync(path);
         if (!info.exists) continue;
@@ -381,8 +421,8 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
         removed++;
       } catch {}
     }
-  } catch {}
-  return { removed, freed };
+  }
+  return { removed, freed, scanned, errors };
 };
 
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损

@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
-import { StarHalf, Edit3, Trash2 } from 'lucide-react-native';
+import { Edit3, Trash2 } from 'lucide-react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
@@ -19,29 +19,32 @@ const lightTap = () => { try { Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyl
 const ACTIONS_WIDTH = 148;
 const BTN_WIDTH = 74;
 
-/* 星级：整星 / 空星直接用字形画，一个 Text 就画完 5 颗——
-   原来 5 个 lucide 图标 = 5 个 Svg + 5 个 Path = 10 个原生 View，是每行最占地方的一块。
-   只有 x.5 分那颗半星（少数）才用 SVG 精确画，外观和以前一致。 */
+/* 星级：整星 / 空星 / 半星全部用同一个字形、同一个字号画，尺寸完全统一。
+   为什么不用矢量图标：5 个 lucide 图标 = 5 个 Svg + 5 个 Path = 10 个原生 View，
+   是每行最占地方的一块（列表滚动时反复挂载/卸载，就是掉帧的来源）。
+   半星不混用 SVG（那样和字形大小对不上）：把同一颗「★」的右半边裁掉即可——
+   每颗星占固定宽度、字形居中，所以裁到一半正好是半颗星。 */
 function renderStars(stars, colors, styles) {
   if (!stars) return null;
   const { full, half } = stars;
-  if (half) {
-    return (
-      <View style={styles.starContainer}>
-        {[1, 2, 3, 4, 5].map((i) => (
-          i === full + 1
-            ? <StarHalf key={i} size={12} color={colors.star} fill={colors.star} style={styles.starIcon} />
-            : <Text key={i} style={[styles.starGlyph, { color: i <= full ? colors.star : colors.starEmpty }]}>{i <= full ? '★' : '☆'}</Text>
-        ))}
-      </View>
-    );
-  }
-  const empty = 5 - full;
   return (
-    <Text style={styles.starGlyph} numberOfLines={1}>
-      {full > 0 && <Text style={{ color: colors.star }}>{'★'.repeat(full)}</Text>}
-      {empty > 0 && <Text style={{ color: colors.starEmpty }}>{'☆'.repeat(empty)}</Text>}
-    </Text>
+    <View style={styles.starContainer}>
+      {[1, 2, 3, 4, 5].map((i) => {
+        if (half && i === full + 1) {
+          return (
+            <View key={i} style={styles.starHalfClip}>
+              <Text style={[styles.starGlyph, { color: colors.star }]}>★</Text>
+            </View>
+          );
+        }
+        const on = i <= full;
+        return (
+          <Text key={i} style={[styles.starGlyph, { color: on ? colors.star : colors.starEmpty }]}>
+            {on ? '★' : '☆'}
+          </Text>
+        );
+      })}
+    </View>
   );
 }
 
@@ -186,9 +189,10 @@ const makeStyles = (c) => ({
   tag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
   moodText: { fontSize: 12, color: c.textMuted },
   starContainer: { flexDirection: 'row' },
-  // 星级用字形画：lineHeight 对齐原来图标的 12px 视觉高度
-  starGlyph: { fontSize: 12.5, lineHeight: 16, letterSpacing: 1.2, includeFontPadding: false },
-  starIcon: { marginRight: 2 },
+  // 每颗星固定 14pt 宽、字形居中：5 颗 = 70pt，和原来 5 个图标（12 + 2 间距）等宽；
+  // 半星就是把 14pt 的星裁掉右半边（7pt）
+  starGlyph: { width: 14, textAlign: 'center', fontSize: 12.5, lineHeight: 16, includeFontPadding: false },
+  starHalfClip: { width: 7, overflow: 'hidden' },
   itemSubtitle: { fontSize: 14, color: c.textSecondary, lineHeight: 18 },
 
   // 右滑操作区

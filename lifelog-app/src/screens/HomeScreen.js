@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } 
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
-  useWindowDimensions
+  useWindowDimensions, Keyboard
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -177,10 +177,15 @@ export default function HomeScreen({ navigation }) {
       } else {
         message = '所有影像都能正常显示，无需修复。';
       }
-      // 同步顺带清掉的孤儿副本（media/ 里有、记录里没有的影像）也如实报一下
-      if (report.removedCopies > 0) {
+      // 同步顺带清掉的孤儿副本（media/ 里有、记录里没有的影像）：结果一律如实报，
+      // 哪怕是 0 条、哪怕读目录失败——不然用户会以为"点了没生效"
+      if (report.mediaScanErrors?.length) {
+        message += `\n\n⚠️ 影像副本目录没能全部读到：${report.mediaScanErrors.join('；')}`;
+      } else if (report.removedCopies > 0) {
         const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
         message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的影像副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
+      } else {
+        message += '\n\n影像副本目录里没有多余的影像。';
       }
       Alert.alert('同步完成', message);
     } catch (e) {
@@ -373,16 +378,19 @@ export default function HomeScreen({ navigation }) {
 
   const toggleSidebar = useCallback((open) => {
     setIsSidebarOpen(open);
+    // 打开侧边栏先收键盘：列表搜索框还聚焦着的时候，键盘会盖住侧边栏下半部分，
+    // 那几项（导出备份 / 导入备份 / 清理缓存 / 说明…）点了就像没反应，得点好几次
+    if (open) Keyboard.dismiss();
     Animated.spring(sidebarAnim,
       {
         toValue: open ? 0 : -SCREEN_WIDTH * 0.5,
         useNativeDriver: true,
-        stiffness: 150,  // ✨ 增加刚度，让弹出更迅速
-        damping: 20,     // ✨ 增加阻尼，消除回弹的抖动
-        mass: 0.8        // ✨ 减轻质量，让动画看起来更轻盈
+        stiffness: 230,  // 更硬：弹出更快，点了马上有反馈
+        damping: 24,     // 阻尼跟着加，避免快到末端时抖
+        mass: 0.7        // 更轻：整体更跟手
       }
     ).start();
-    Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 200, useNativeDriver: true }).start();
+    Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 150, useNativeDriver: true }).start();
   }, [sidebarAnim, overlayAnim]);
 
   // 进 / 退全屏：地图铺满整屏并横过来（转内容，不转界面）。
@@ -788,7 +796,9 @@ export default function HomeScreen({ navigation }) {
           全屏 = 整屏铺满 + 内容转 90°；平时 = 量出来的 viewArea 位置 */}
       {mapMounted && (
         <Reanimated.View
-          pointerEvents={viewMode === 'map' ? 'auto' : 'none'}
+          // 侧边栏 / 设置 / 说明 打开时，常驻在最上层的地图 WebView 一律不碰触摸：
+          // 它抢触摸的话，侧边栏里那几项就会"点了没反应"
+          pointerEvents={viewMode === 'map' && !isSidebarOpen && !settingsOpen && !helpOpen ? 'auto' : 'none'}
           style={[styles.mapLayer, mapLayerBox, mapFullscreen && styles.mapLayerFullscreen, mapLayerStyle]}
         >
           {/* collapsable={false}：这两层的位置/尺寸就是全屏几何本身，
