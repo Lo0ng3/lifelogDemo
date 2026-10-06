@@ -20,7 +20,8 @@
 //    点圆角外面那块不算点到按钮；
 // 4) 点标点 = 地图飞到该点并放大 + 弹出内容卡片（卡片里可跳详情）；
 // 5) 同一个坐标上的多条记录只画一个标点，卡片里左右切换着看，不再叠成一摞谁也点不准的针；
-//    地名相同但坐标有差异的地点也并成一根针，落点取记录最多的那一簇；
+//    地名相同但坐标有差异的地点也并成一根针（旅票的出发地/目的地一起算），
+//    落点取记录最多的那一簇；
 // 6) 「全屏」按钮通过 postMessage 交给 RN 侧铺满整屏 + 锁横屏（WebView 不重建，
 //    所以视角和已打开的卡片都保住）；
 // 7) 栅格模式下放大顺不顺，主要看「新一级的瓦片什么时候开始下」：缩放动画期间不重算
@@ -374,15 +375,21 @@ export function buildMapHtml({
              点开后用卡片里的左右箭头翻。
 
              另外：地名相同、坐标却有差异的（检索结果和照片 GPS 抖出来的两个点、
-             同一地方手输过两次…）也并成一根针——落点取记录数最多的那一簇，
-             免得同一座机场在图上并排插两根针，点哪根都只看得到一半记录。 */
+             同一地方手输过两次…）也并成一根针——地点印记和旅票的出发地/目的地
+             一起算，落点取记录数最多的那一簇，免得同一座机场在图上并排插两根针、
+             点哪根都只看得到一半记录。 */
           function groupKey(p) {
               // 4 位小数 ≈ 11 米：同一个地点因检索/录入产生的微小差异也算同一个点
               return p.lat.toFixed(4) + ',' + p.lng.toFixed(4);
           }
-          // 地名归一：去掉所有空白 + 小写，避免"外滩"和"外滩 "被当成两个地方
+          // 地名归一：去掉「机场」后缀 + 所有空白、统一小写，免得"外滩"和"外滩 "、
+          // "北京首都"和"北京首都国际机场"被当成两个地方。
+          // 老数据里的「未命名记录」占位不算名字——否则那些没名字的印记会全并到一根针上
+          var NO_NAME_KEYS = { '未命名记录': 1, '未命名': 1 };
           function nameKeyOf(s) {
-              return String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase();
+              var short = String(s == null ? '' : s).replace(/(国际机场|机场)$/, '').trim();
+              var key = short.replace(/\s+/g, '').toLowerCase();
+              return key && !NO_NAME_KEYS[key] ? key : '';
           }
           function groupColor(records) {
               for (var i = 0; i < records.length; i++) {
@@ -405,11 +412,11 @@ export function buildMapHtml({
               groups.forEach(function (g) {
                   // 有地点记录的归「标点」层，纯旅票的归「轨迹」层（两层各有开关）
                   g.onLoc = g.records.some(function (r) { return r.kind === 'location'; });
-                  // 这个坐标簇的"主名字"：簇内地点记录里出现次数最多的那个名字
+                  // 这个坐标簇的"主名字"：簇内所有打点记录（地点印记 + 旅票起终点）
+                  // 里出现次数最多的那个名字
                   var counts = {}, best = 0;
                   g.nameKey = null;
                   g.records.forEach(function (r) {
-                      if (r.kind !== 'location') return;
                       var k = nameKeyOf(r.title);
                       if (!k) return;
                       counts[k] = (counts[k] || 0) + 1;
@@ -417,22 +424,25 @@ export function buildMapHtml({
                   });
                   g.color = groupColor(g.records);
               });
-              // 同名地点的各个坐标簇合成一根针；落点 = 记录最多的那一簇（并列时保持先出现的）
+              // 同名地点的各个坐标簇合成一根针；落点 = 记录最多的那一簇（并列时保持先出现的）。
+              // 合并进来的簇里只要有地点印记，整根针就归「标点」层（和同坐标合并的规则一致）
               var byName = {}, merged = [];
               groups.forEach(function (g) {
-                  var key = g.onLoc ? g.nameKey : null;   // 没名字的地点（或旅票点）不合并
+                  var key = g.nameKey;                    // 没名字的点不合并
                   if (!key) { merged.push(g); return; }
                   var anchor = byName[key];
                   if (!anchor) { byName[key] = g; merged.push(g); return; }
                   if (g.records.length > anchor.records.length) {
                       // 这一簇记录更多 → 由它当落点：旧锚点的记录并进来，位置换成这一簇的
                       g.records = g.records.concat(anchor.records);
+                      g.onLoc = g.onLoc || anchor.onLoc;
                       g.color = groupColor(g.records);
                       var at = merged.indexOf(anchor);
                       if (at >= 0) merged[at] = g; else merged.push(g);
                       byName[key] = g;
                   } else {
                       anchor.records = anchor.records.concat(g.records);
+                      anchor.onLoc = anchor.onLoc || g.onLoc;
                       anchor.color = groupColor(anchor.records);
                   }
               });

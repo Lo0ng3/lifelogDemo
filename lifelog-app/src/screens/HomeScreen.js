@@ -31,6 +31,7 @@ import { exportBackup, importBackup } from '../utils/backup';
 import { describeStorageAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches } from '../utils/media';
 import { shortPlaceName } from '../utils/format';
+import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
 import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
@@ -474,43 +475,42 @@ export default function HomeScreen({ navigation }) {
     return result;
   }, [logData, activeFilters, searchQuery]);
 
+  // 同名地点的落点：地点印记和旅票的出发地/目的地一起算（规则见 utils/mapPlaces.js）。
+  // 用全量 logData 算，切换筛选时同一地点的位置不会跳
+  const placeAnchors = useMemo(() => buildPlaceAnchors(logData), [logData]);
+
   // 地图数据：打点（地点坐标 / 旅票起终点）+ 轨迹段（出发地→目的地聚合）
   const mapData = useMemo(() => {
-    // 坐标统一成有限数字：字符串/缺失/异常值一律当没有坐标处理。
-    // （坐标脏数据会让 Leaflet 直接抛 "Invalid LatLng object"，把后面的绘制和控件全带崩）
-    const coord = (v) => {
-      if (v == null || v === '') return null;
-      const n = typeof v === 'number' ? v : Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-    const latLngOf = (p, latKey = 'latitude', lngKey = 'longitude') => {
-      const lat = coord(p?.[latKey]), lng = coord(p?.[lngKey]);
-      return lat == null || lng == null ? null : { lat, lng };
-    };
+    // 同名地点先归到统一的落点上（见 placeAnchors），拿到名字就优先用它
+    const anchorFor = (name, at) => anchorOf(placeAnchors, name, at);
     // 打点：地点用 coordinates；旅票用 start/end（坐标缺失的记录跳过）
     const points = [];
     filteredAndSortedData.forEach(item => {
       const note = item.comment || item.subtitle || '';
-      const location = latLngOf(item.coordinates);
+      const location = latLngOfPoint(item.coordinates);
       if (location) {
-        points.push({ id: item.id, kind: 'location', title: item.title, date: item.date, note, lat: location.lat, lng: location.lng });
+        const at = anchorFor(item.title, location);
+        points.push({ id: item.id, kind: 'location', title: item.title, date: item.date, note, lat: at.lat, lng: at.lng });
       }
       [item.start, item.end].forEach(p => {
-        const at = latLngOf(p);
+        const at = anchorFor(p?.name, latLngOfPoint(p));
         if (at) {
           points.push({ id: item.id, kind: 'ticket', subType: item.subType, title: shortPlaceName(p.name || item.title), date: item.date, note, lat: at.lat, lng: at.lng });
         }
       });
     });
     // 轨迹段：按 出发地→目的地 聚合（单向），往返分居弧线两侧，粗细 = 次数。
-    // 分段键用坐标而不是名称：同一段被改成不同别名后仍算同一条线
+    // 分段键用（归位后的）坐标而不是名称：同一段被改成不同别名后仍算同一条线；
+    // 两端坐标都用同名落点，弧线才会正好连到针上（同名不同坐标的两条也不再多画一段）
     const segMap = new Map();
     filteredAndSortedData
-      .filter(item => item.baseType === 'ticket' && latLngOf(item.start) && latLngOf(item.end))
+      .filter(item => item.baseType === 'ticket' && latLngOfPoint(item.start) && latLngOfPoint(item.end))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)))
       .forEach(t => {
-        const from = { name: t.start?.name || '', longitude: coord(t.start.longitude), latitude: coord(t.start.latitude) };
-        const to = { name: t.end?.name || '', longitude: coord(t.end.longitude), latitude: coord(t.end.latitude) };
+        const fromAt = anchorFor(t.start?.name, latLngOfPoint(t.start));
+        const toAt = anchorFor(t.end?.name, latLngOfPoint(t.end));
+        const from = { name: t.start?.name || '', longitude: fromAt.lng, latitude: fromAt.lat };
+        const to = { name: t.end?.name || '', longitude: toAt.lng, latitude: toAt.lat };
         const key = [from, to].map(p => p.longitude.toFixed(4) + ',' + p.latitude.toFixed(4)).join('→');
         if (!segMap.has(key)) segMap.set(key, { from, to, count: 0, subType: t.subType });
         const seg = segMap.get(key);
@@ -519,7 +519,7 @@ export default function HomeScreen({ navigation }) {
       });
     const segs = [...segMap.values()];
     return { points, segs };
-  }, [filteredAndSortedData]);
+  }, [filteredAndSortedData, placeAnchors]);
 
   // 矢量渲染（高德官方 JS API 2.0）只在「高德 + 填了 Web端(JS API) key」时启用；
   // 一旦 JS API 没能出图就自动切回栅格底图，改 key / 换服务商会重新试一次

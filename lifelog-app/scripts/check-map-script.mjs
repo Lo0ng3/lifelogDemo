@@ -16,7 +16,7 @@
 // 引擎的 LatLng 遇到 undefined 会抛错，后面的绘制和控件绑定全被打断。
 //
 // 用法：node scripts/check-map-script.mjs
-import { mkdtempSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -30,6 +30,19 @@ const asModule = async (rel) => {
   return import(pathToFileURL(target).href);
 };
 const { buildMapHtml } = await asModule('src/utils/mapHtml.js');
+// 带相对依赖的源码（mapPlaces → format）：复制时补上 .mjs 后缀，node 才解析得了
+const asModuleWithDeps = async (rel, deps = []) => {
+  const copy = (r) => {
+    const code = readFileSync(join(root, r), 'utf8')
+      .replace(/from '\.\/([A-Za-z0-9_-]+)'/g, "from './$1.mjs'");
+    const target = join(scratch, basename(r).replace(/\.js$/, '.mjs'));
+    writeFileSync(target, code);
+    return target;
+  };
+  deps.forEach(copy);
+  return import(pathToFileURL(copy(rel)).href);
+};
+const { buildPlaceAnchors, anchorOf, placeKeyOf, latLngOfPoint } = await asModuleWithDeps('src/utils/mapPlaces.js', ['src/utils/format.js']);
 
 const points = [
   // 正常地点
@@ -51,6 +64,117 @@ const segs = [
 
 const fail = [];
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ================== 地图数据侧的同名落点（HomeScreen 直接用的纯函数） ================== */
+// 同名归一是"一个地方一根针"的源头：地点印记和旅票出发地/目的地一起算，取记录最多的坐标簇；
+// 老数据里的「未命名记录」占位不算名字（否则没名字的印记会全并到一根针上）。
+const anchorLogs = [
+  // 同一个机场：两条地点印记 + 一条航班出发地 → 3 次都落在 40.0723 那一簇
+  { id: 1, baseType: 'location', title: '北京首都国际机场', coordinates: { latitude: 40.0723, longitude: 116.5971 } },
+  { id: 2, baseType: 'location', title: '北京首都', coordinates: { latitude: 40.07231, longitude: 116.59711 } },
+  { id: 3, baseType: 'ticket', subType: 'flight', title: '北京首都 → 上海虹桥',
+    start: { name: '北京首都国际机场', latitude: 40.07232, longitude: 116.59712 },
+    end: { name: '上海虹桥国际机场', latitude: 31.1972, longitude: 121.3363 } },
+  // 同名但坐标差出一大截、记录又少的那一簇：不该抢走落点
+  { id: 4, baseType: 'ticket', subType: 'flight', title: '北京首都 → 上海虹桥',
+    start: { name: '北京首都', latitude: 40.30, longitude: 116.80 },
+    end: { name: '上海虹桥站', latitude: 31.1946, longitude: 121.3205 } },
+  // 没名字的占位（老数据）不参与合并；脏坐标也不参与
+  { id: 5, baseType: 'location', title: '未命名记录', coordinates: { latitude: 1, longitude: 1 } },
+  { id: 6, baseType: 'location', title: '未命名记录', coordinates: { latitude: 30, longitude: 100 } },
+  { id: 7, baseType: 'ticket', subType: 'train', title: 'A → B', start: { name: '坏坐标', latitude: 'N/A', longitude: 'N/A' } },
+];
+let anchorSummary = '';
+{
+  const anchors = buildPlaceAnchors(anchorLogs);
+  const keyBj = placeKeyOf('北京首都国际机场');
+  if (!keyBj) fail.push('地名归一把「北京首都国际机场」判成了没有名字');
+  if (keyBj !== placeKeyOf(' 北京首都 ')) fail.push('「北京首都国际机场」和「北京首都」应当归成同一个地方');
+  if (placeKeyOf('上海虹桥站') === placeKeyOf('上海虹桥国际机场')) {
+    fail.push('「上海虹桥站」和「上海虹桥国际机场」不该被当成同一个地方');
+  }
+  const bj = anchors.get(keyBj);
+  if (!bj) fail.push('同名落点表里没有「北京首都」');
+  else if (Math.abs(bj.lat - 40.0723) > 1e-6 || Math.abs(bj.lng - 116.5971) > 1e-6) {
+    fail.push(`「北京首都」的落点应取记录最多的那一簇（40.0723,116.5971），实际 ${JSON.stringify(bj)}`);
+  }
+  if (!anchors.get(placeKeyOf('上海虹桥国际机场'))) fail.push('旅票的到达地没有参与同名落点计算');
+  if (placeKeyOf('未命名记录') !== '') fail.push('「未命名记录」这种占位不该被当成地名参与合并');
+  if ([...anchors.keys()].some((k) => !k)) fail.push('落点表里不该出现空名字');
+  if (anchors.has(placeKeyOf('坏坐标'))) fail.push('脏坐标的记录不该进落点表');
+  const fallback = anchorOf(anchors, '从没记过的地方', { lat: 5, lng: 6 });
+  if (fallback.lat !== 5 || fallback.lng !== 6) fail.push('没记录过的名字应当退回它自己的坐标');
+  anchorSummary = `${keyBj} → ${JSON.stringify(anchors.get(keyBj))}（落点表 ${anchors.size} 项）`;
+}
+
+/* ===== 端到端：地点印记 + 旅票起终点同名时，图上一根针、弧线正好连到针上 ===== */
+// 复刻 HomeScreen 里那几步（地点用 coordinates、旅票用 start/end，坐标都先过同名落点）
+const buildMapDataLikeHome = (logs) => {
+  const anchors = buildPlaceAnchors(logs);
+  const points = [];
+  const segMap = new Map();
+  const sorted = [...logs].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  for (const item of sorted) {
+    const note = item.comment || item.subtitle || '';
+    const loc = latLngOfPoint(item.coordinates);
+    if (loc) {
+      const at = anchorOf(anchors, item.title, loc);
+      points.push({ id: item.id, kind: 'location', title: item.title, date: item.date, note, lat: at.lat, lng: at.lng });
+    }
+    for (const p of [item.start, item.end]) {
+      const at = anchorOf(anchors, p?.name, latLngOfPoint(p));
+      if (at) points.push({ id: item.id, kind: 'ticket', subType: item.subType, title: String(p.name).replace(/(国际机场|机场)$/, ''), date: item.date, note, lat: at.lat, lng: at.lng });
+    }
+    if (item.baseType === 'ticket' && latLngOfPoint(item.start) && latLngOfPoint(item.end)) {
+      const fromAt = anchorOf(anchors, item.start?.name, latLngOfPoint(item.start));
+      const toAt = anchorOf(anchors, item.end?.name, latLngOfPoint(item.end));
+      const key = `${fromAt.lat.toFixed(4)},${fromAt.lng.toFixed(4)}→${toAt.lat.toFixed(4)},${toAt.lng.toFixed(4)}`;
+      const hit = segMap.get(key);
+      if (hit) hit.count++;
+      else segMap.set(key, {
+        from: { name: item.start.name, latitude: fromAt.lat, longitude: fromAt.lng },
+        to: { name: item.end.name, latitude: toAt.lat, longitude: toAt.lng },
+        count: 1, subType: item.subType,
+      });
+    }
+  }
+  return { points, segs: [...segMap.values()] };
+};
+{
+  // 同一个机场：一条地点印记（40.0723）+ 两条航班出发地（40.0750 / 40.0750…），
+  // 出发地的记录更多 → 落点取出发地那一簇；两条航班是同一段行程 → 只画一条弧线
+  const homeLikeLogs = [
+    { id: 1, baseType: 'location', title: '北京首都国际机场', date: '2023-01-01', coordinates: { latitude: 40.0723, longitude: 116.5971 } },
+    { id: 2, baseType: 'ticket', subType: 'flight', title: '北京首都 → 上海虹桥', date: '2023-02-01',
+      start: { name: '北京首都', latitude: 40.0750, longitude: 116.6000 },
+      end: { name: '上海虹桥国际机场', latitude: 31.1972, longitude: 121.3363 } },
+    { id: 3, baseType: 'ticket', subType: 'flight', title: '北京首都 → 上海虹桥', date: '2023-03-01',
+      start: { name: '北京首都', latitude: 40.07501, longitude: 116.60001 },
+      end: { name: '上海虹桥国际机场', latitude: 31.1972, longitude: 121.3363 } },
+  ];
+  const data = buildMapDataLikeHome(homeLikeLogs);
+  const live = bootMap({ points: data.points, segs: data.segs, tdtKey: 'FAKE_KEY' });
+  if (live.thrown) fail.push(`同名落点这一遍脚本抛错：${live.thrown.message}`);
+  const livePins = live.calls.markers.filter((m) => !m.isBadge);
+  if (livePins.length !== 2) {
+    fail.push(`地点印记 + 旅票起终点同名时应并成 2 根针（北京首都 / 上海虹桥），实际 ${livePins.length}`);
+  }
+  if (live.calls.polylines.length !== 1) {
+    fail.push(`同一段行程的两条记录应聚成 1 条弧线，实际 ${live.calls.polylines.length}`);
+  }
+  const bjPin = livePins.find((m) => Math.abs(m.ll[0] - 40.0750) < 1e-6);
+  if (!bjPin) fail.push('「北京首都」的落点应当取记录更多的出发地那一簇（40.0750）');
+  const seg = data.segs[0];
+  if (!seg) fail.push('没有生成轨迹段');
+  else {
+    // 弧线两端必须正好压在两根针上，否则看起来就是"线没连到点"
+    const onPin = (lat, lng) => livePins.some((m) => Math.abs(m.ll[0] - lat) < 1e-6 && Math.abs(m.ll[1] - lng) < 1e-6);
+    if (!onPin(seg.from.latitude, seg.from.longitude) || !onPin(seg.to.latitude, seg.to.longitude)) {
+      fail.push(`弧线两端没有压在针上：${JSON.stringify(seg.from)} → ${JSON.stringify(seg.to)}`);
+    }
+    if (seg.count !== 2) fail.push(`同一段行程的两条记录应当合并计数（count 应为 2），实际 ${seg.count}`);
+  }
+}
 
 /* ============================ 桩环境 + 跑一遍脚本 ============================ */
 // 每跑一遍都用全新的 DOM / 引擎桩，避免几次之间互相污染
@@ -324,16 +448,25 @@ const nameMerge = bootMap({
     { id: 22, kind: 'location', title: '外滩', date: '2023-02-01', note: '', lat: 31.2304, lng: 121.4737 },
     { id: 23, kind: 'location', title: '外滩', date: '2023-03-01', note: '', lat: 31.23041, lng: 121.47372 },
     { id: 24, kind: 'location', title: ' 外滩 ', date: '2023-04-01', note: '带着空格的名字也算同一个', lat: 31.23042, lng: 121.47373 },
+    // 旅票的出发地/目的地同样按名字合并：两条「北京南」落在近处、一条落在远处
+    { id: 25, kind: 'ticket', subType: 'train', title: '北京南', date: '2023-05-01', note: '', lat: 39.8652, lng: 116.3785 },
+    { id: 26, kind: 'ticket', subType: 'train', title: '北京南', date: '2023-06-01', note: '', lat: 39.86521, lng: 116.37851 },
+    { id: 27, kind: 'ticket', subType: 'train', title: '北京南', date: '2023-07-01', note: '', lat: 39.90, lng: 116.42 },
   ],
   segs: [],
 });
 if (nameMerge.thrown) fail.push(`同名合并那一遍脚本抛错：${nameMerge.thrown.message}`);
 {
   const mPins = nameMerge.calls.markers.filter((m) => !m.isBadge);
-  if (mPins.length !== 1) fail.push(`同名地点应当并成 1 根针，实际 ${mPins.length}`);
+  // 两个名字（外滩 / 北京南）各并成一根针：地点 4 条 + 旅票 3 条
+  if (mPins.length !== 2) fail.push(`同名地点（含旅票起终点）应当并成 2 根针，实际 ${mPins.length}`);
   const at = mPins[0] && mPins[0].ll;
   if (at && (Math.abs(at[0] - 31.2304) > 1e-6 || Math.abs(at[1] - 121.4737) > 1e-6)) {
     fail.push(`同名地点的落点应取记录最多的那一簇（31.2304,121.4737），实际 ${JSON.stringify(at)}`);
+  }
+  const trainPin = mPins[1] && mPins[1].ll;
+  if (trainPin && (Math.abs(trainPin[0] - 39.8652) > 1e-6 || Math.abs(trainPin[1] - 116.3785) > 1e-6)) {
+    fail.push(`旅票同名地点也应按记录最多的那一簇合并（39.8652,116.3785），实际 ${JSON.stringify(trainPin)}`);
   }
   // 点开这根针：4 条同名记录都挂在一起，能左右翻
   const mp = mPins[0];
@@ -509,10 +642,11 @@ console.log(`矢量模式：标点 ${jPins.length} 个 / 轨迹 ${jsapi.calls.po
 console.log(`矢量失败回退：${fMsgs.filter((m) => m.type === 'jsApiFailed').length ? '已通知 RN' : '未通知'}`);
 console.log(`手势自检：单击开评论 / 再点收起 / 连点两次 flyTo（共 ${calls.flyTo} 次飞点）`);
 console.log(`脏坐标提示：${droppedShown ? $('banner').textContent : '（未显示）'}`);
-console.log(`同名合并：${nameMerge.calls.markers.filter((m) => !m.isBadge).length} 根针（4 条同名记录）`);
+console.log(`同名落点（数据侧）：${anchorSummary}`);
+console.log(`同名合并（渲染侧）：${nameMerge.calls.markers.filter((m) => !m.isBadge).length} 根针（外滩 4 条 + 旅票「北京南」3 条）`);
 console.log(`出行方式筛选：关掉火车后只画飞机、四类全关后不画线、开关轨迹后筛选状态保留 / 胶囊圆角外不响应`);
 if (fail.length) {
   console.error('✗ 自检未通过：\n- ' + fail.join('\n- '));
   process.exit(1);
 }
-console.log('✓ 通过：脏坐标被跳过；栅格与矢量两条路都正常绘制；合并标点（同坐标 + 同名）/ 卡片翻页 / 全屏 / 出行方式筛选 / 胶囊命中区 / 失败回退都可用');
+console.log('✓ 通过：脏坐标被跳过；同名落点（地点印记 + 旅票起终点）取记录最多的那一簇；栅格与矢量两条路都正常绘制；合并标点（同坐标 + 同名）/ 卡片翻页 / 全屏 / 出行方式筛选 / 胶囊命中区 / 失败回退都可用');

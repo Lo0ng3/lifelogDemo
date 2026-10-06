@@ -18,9 +18,23 @@ const asModule = async (relPath) => {
   copyFileSync(join(root, relPath), target);
   return import(pathToFileURL(target).href);
 };
+// 带相对依赖的源码（mapPlaces → format）：复制时补上 .mjs 后缀，node 才解析得了
+const asModuleWithDeps = async (relPath, deps = []) => {
+  const copy = (rel) => {
+    const code = readFileSync(join(root, rel), 'utf8')
+      .replace(/from '\.\/([A-Za-z0-9_-]+)'/g, "from './$1.mjs'");
+    const target = join(scratch, basename(rel).replace(/\.js$/, '.mjs'));
+    writeFileSync(target, code);
+    return target;
+  };
+  deps.forEach(copy);
+  return import(pathToFileURL(copy(relPath)).href);
+};
 
 const { buildMapHtml } = await asModule('src/utils/mapHtml.js');
 const { palettes } = await asModule('src/theme/palette.js');
+const { shortPlaceName } = await asModule('src/utils/format.js');
+const { buildPlaceAnchors, anchorOf, latLngOfPoint } = await asModuleWithDeps('src/utils/mapPlaces.js', ['src/utils/format.js']);
 
 // 预览页自带样例数据（App 里的种子数据是空的，分享版不塞示例行程）
 const initialLogData = [
@@ -70,29 +84,38 @@ const osmFallback = (tdtKey || provider === 'amap') ? '' : `
   }
 </script>`;
 
-// 用真实的数据结构拼出打点与轨迹（与 HomeScreen 里的逻辑一致）
-const shortPlaceName = (name) => String(name || '').replace(/(国际)?(机场|站)$/, '');
+// 用真实的数据结构拼出打点与轨迹（与 HomeScreen 里的逻辑一致：同名地点先归到统一的落点）
+const placeAnchors = buildPlaceAnchors(initialLogData);
+const anchorFor = (name, at) => anchorOf(placeAnchors, name, at);
 const points = [];
 initialLogData.forEach((item) => {
   const note = item.comment || item.subtitle || '';
-  if (item.coordinates && item.coordinates.latitude != null) {
-    points.push({ id: item.id, kind: 'location', title: item.title, date: item.date, note, lat: item.coordinates.latitude, lng: item.coordinates.longitude });
+  const location = latLngOfPoint(item.coordinates);
+  if (location) {
+    const at = anchorFor(item.title, location);
+    points.push({ id: item.id, kind: 'location', title: item.title, date: item.date, note, lat: at.lat, lng: at.lng });
   }
   [item.start, item.end].forEach((p) => {
-    if (p && p.latitude != null && p.longitude != null) {
-      points.push({ id: item.id, kind: 'ticket', subType: item.subType, title: shortPlaceName(p.name || item.title), date: item.date, note, lat: p.latitude, lng: p.longitude });
+    const at = anchorFor(p?.name, latLngOfPoint(p));
+    if (at) {
+      points.push({ id: item.id, kind: 'ticket', subType: item.subType, title: shortPlaceName(p.name || item.title), date: item.date, note, lat: at.lat, lng: at.lng });
     }
   });
 });
 const segMap = new Map();
 initialLogData
-  .filter((t) => t.baseType === 'ticket' && t.start && t.end && t.start.latitude != null && t.end.latitude != null)
+  .filter((t) => t.baseType === 'ticket' && latLngOfPoint(t.start) && latLngOfPoint(t.end))
+  .sort((a, b) => String(a.date).localeCompare(String(b.date)))
   .forEach((t) => {
-    const key = [t.start, t.end].map((p) => p.longitude.toFixed(4) + ',' + p.latitude.toFixed(4)).join('→');
-    if (!segMap.has(key)) segMap.set(key, { from: t.start, to: t.end, count: 0, subType: t.subType });
+    const fromAt = anchorFor(t.start?.name, latLngOfPoint(t.start));
+    const toAt = anchorFor(t.end?.name, latLngOfPoint(t.end));
+    const from = { name: t.start?.name || '', longitude: fromAt.lng, latitude: fromAt.lat };
+    const to = { name: t.end?.name || '', longitude: toAt.lng, latitude: toAt.lat };
+    const key = [from, to].map((p) => p.longitude.toFixed(4) + ',' + p.latitude.toFixed(4)).join('→');
+    if (!segMap.has(key)) segMap.set(key, { from, to, count: 0, subType: t.subType });
     const seg = segMap.get(key);
     seg.count++;
-    seg.from = t.start; seg.to = t.end;
+    seg.from = from; seg.to = to;
   });
 const segs = [...segMap.values()];
 
