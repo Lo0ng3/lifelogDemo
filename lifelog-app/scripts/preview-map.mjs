@@ -40,6 +40,9 @@ const initialLogData = [
   // 同一个地点的第二条记录：预览页里应当并成"角标 2"的一个标点，点开后能左右翻
   { id: 20, baseType: 'location', subType: 'location', title: '外滩 · 跨年', subtitle: '人山人海', date: '2024-01-01',
     coordinates: { latitude: 31.2304, longitude: 121.4737 } },
+  // 同名但坐标差出一截（照片 GPS 抖出来的那种）：应当并到上面那根针上，落点取记录多的那一簇
+  { id: 22, baseType: 'location', subType: 'location', title: '外滩', subtitle: '从北边走过来', date: '2024-03-02',
+    coordinates: { latitude: 31.2380, longitude: 121.4900 } },
   // 和上面那条航班的出发机场同一个坐标：旅票起点 + 地点记录也会并到同一个标点上
   { id: 21, baseType: 'location', subType: 'location', title: '首都机场 T3 接机', subtitle: '等了两个小时', date: '2024-02-10',
     coordinates: { latitude: 40.0723, longitude: 116.5971 } },

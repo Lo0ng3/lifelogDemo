@@ -364,6 +364,10 @@ const collectMediaNames = (raw, into) => {
   if (!e || typeof e !== 'object') return;
   for (const value of Object.values(e)) {
     if (typeof value !== 'string') continue;
+    // content://media/external/images/media/<id> 里也带 "/media/"，但那是相册资产的
+    // 数字 id，不是副本文件名；混进来只会把同名文件误判成"还有人用"。
+    // 其余形态（file:// 路径、个别老数据里的裸路径）都照旧参与比对
+    if (value.startsWith('content://')) continue;
     const clean = value.split('?')[0];
     if (!clean.includes('/media/')) continue;
     const name = clean.split('/').pop();
@@ -375,6 +379,27 @@ export const setDraftMediaEntries = (entries = []) => {
   for (const entry of entries) collectMediaNames(entry, draftMediaNames);
 };
 
+// 记录里所有指向 media/ 的文件名：判定副本"还有人用"的统一口径
+// （记录字段都算，原片 / 实况视频 / 缩略图…，宁可多留也不误删）
+export const referencedMediaNames = (logs = []) => {
+  const names = new Set();
+  for (const log of logs) {
+    const entries = Array.isArray(log?.localImages) ? log.localImages : [];
+    for (const raw of entries) collectMediaNames(raw, names);
+  }
+  return names;
+};
+
+// 一批媒体条目（重链后的形态）里仍指向 media/ 的文件名
+export const entriesMediaNames = (entries = []) => {
+  const names = new Set();
+  for (const raw of entries) collectMediaNames(raw, names);
+  return names;
+};
+
+// 文件路径的 basename（去掉 ? 查询串），用于按文件名比对
+export const mediaNameOfUri = (uri) => String(uri || '').split('?')[0].split('/').pop();
+
 /* 清掉 media/ 里没有任何记录引用的影像副本。
    孤儿文件的来源：分享进来又放弃、保存失败、旧数据迁移残留、去重时被换掉的旧副本。
    记录一旦重链成相册原片就不该再留副本，留着既占空间、又会让人以为"这张还在记录里"。
@@ -383,11 +408,7 @@ export const setDraftMediaEntries = (entries = []) => {
    这样两个目录都能覆盖，宁可多留也不误删；另外刚生成不到 5 分钟的一律不动。
    返回删掉的文件数、释放的字节数、扫过的文件数，以及读目录失败的目录（不再静默吞掉）。 */
 export const pruneOrphanMediaCopies = async (logs = []) => {
-  const referenced = new Set();
-  for (const log of logs) {
-    const entries = Array.isArray(log?.localImages) ? log.localImages : [];
-    for (const raw of entries) collectMediaNames(raw, referenced);
-  }
+  const referenced = referencedMediaNames(logs);
 
   let removed = 0;
   let freed = 0;

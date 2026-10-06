@@ -2,7 +2,7 @@
   "expo": {
     "name": "印记",
     "slug": "lifelog-app",
-    "version": "1.8.9",
+    "version": "1.9.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lifelogapp",
@@ -21,7 +21,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.jiyin.lifelog",
-      "versionCode": 33
+      "versionCode": 34
     },
     "web": {
       "output": "static",

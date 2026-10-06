@@ -3,11 +3,14 @@
 //   ① 脏坐标（缺失 / NaN / 字符串异常）不会让整段脚本抛错；
 //   ② 缩放、轨迹/标点开关、全屏按钮的 onclick 一定绑上了；
 //   ③ 合法标点照常创建；
-//   ④ 同一坐标的多条记录合成一个标点（角标写条数），卡片能左右翻记录；
+//   ④ 同一坐标的多条记录合成一个标点、同名但坐标有差异的地点也并成一根针
+//      （落点取记录最多的那一簇），卡片能左右翻记录；
 //   ⑤ 全屏按钮把「进/退全屏」发给 RN，RN 回调后按钮图标会换；
 //   ⑥ 栅格模式：缩放动画期间不重算瓦片网格，高德底图（不需要 key）也会预热下一级瓦片；
 //   ⑦ 矢量模式（高德 JS API 2.0）：按 key/安全密钥正确初始化、深色走官方深色样式、
-//      标点与轨迹用 AMap 的坐标顺序画出来、出图失败会给 RN 发 jsApiFailed 以便回退。
+//      标点与轨迹用 AMap 的坐标顺序画出来、出图失败会给 RN 发 jsApiFailed 以便回退；
+//   ⑧ 出行方式筛选（飞机/火车/汽车/轮船，多选）按类型过滤轨迹，开关状态跨「轨迹」开关保留；
+//      跑道型胶囊的命中区按形状判——点圆角外侧那块不算点到按钮。
 //
 // 背景：1.6.6 的「地图能显示、标点不显示、放大缩小点了没反应」就是 ① 的反面——
 // 引擎的 LatLng 遇到 undefined 会抛错，后面的绘制和控件绑定全被打断。
@@ -312,6 +315,111 @@ if (!calls.tileOptions.every((t) => t.options.keepBuffer <= 3)) {
 if (calls.doubleClickDisabled) fail.push('栅格模式把 Leaflet 的双击放大关掉了（双击空白处应该能放大一级）');
 
 /* ======================= 高德栅格底图（不需要 key）那一遍 ======================= */
+/* ============ 同名地点合并 + 出行方式筛选 + 胶囊命中区（栅格） ============ */
+
+// 同名、坐标差出一大截的地点：应当并成一根针，落点取记录数最多的那一簇
+const nameMerge = bootMap({
+  points: [
+    { id: 21, kind: 'location', title: '外滩', date: '2023-01-01', note: '只来过一次', lat: 31.24, lng: 121.49 },
+    { id: 22, kind: 'location', title: '外滩', date: '2023-02-01', note: '', lat: 31.2304, lng: 121.4737 },
+    { id: 23, kind: 'location', title: '外滩', date: '2023-03-01', note: '', lat: 31.23041, lng: 121.47372 },
+    { id: 24, kind: 'location', title: ' 外滩 ', date: '2023-04-01', note: '带着空格的名字也算同一个', lat: 31.23042, lng: 121.47373 },
+  ],
+  segs: [],
+});
+if (nameMerge.thrown) fail.push(`同名合并那一遍脚本抛错：${nameMerge.thrown.message}`);
+{
+  const mPins = nameMerge.calls.markers.filter((m) => !m.isBadge);
+  if (mPins.length !== 1) fail.push(`同名地点应当并成 1 根针，实际 ${mPins.length}`);
+  const at = mPins[0] && mPins[0].ll;
+  if (at && (Math.abs(at[0] - 31.2304) > 1e-6 || Math.abs(at[1] - 121.4737) > 1e-6)) {
+    fail.push(`同名地点的落点应取记录最多的那一簇（31.2304,121.4737），实际 ${JSON.stringify(at)}`);
+  }
+  // 点开这根针：4 条同名记录都挂在一起，能左右翻
+  const mp = mPins[0];
+  nameMerge.$('rcCard').style.display = 'none';
+  domTap(mp);
+  if (nameMerge.$('rcCard').style.display !== 'block') fail.push('同名合并后的标点单击没有弹出内容卡');
+  if (!/1\/4/.test(nameMerge.$('rcCard').innerHTML)) {
+    fail.push(`同名合并后的卡片应显示 1/4（4 条同名记录都挂在同一根针上），实际：${nameMerge.$('rcCard').innerHTML}`);
+  }
+}
+
+// 出行方式筛选：飞机 / 火车两类各一条轨迹，逐个关掉
+const filt = bootMap({
+  points: [
+    { id: 31, kind: 'ticket', subType: 'flight', title: '虹桥', date: '2023-05-01', note: '', lat: 31.19, lng: 121.32 },
+    { id: 32, kind: 'ticket', subType: 'train', title: '北京南', date: '2023-05-02', note: '', lat: 39.865, lng: 116.378 },
+  ],
+  segs: [
+    { from: { name: 'A', longitude: 116.4, latitude: 39.9 }, to: { name: 'B', longitude: 121.32, latitude: 31.19 }, count: 1, subType: 'flight' },
+    { from: { name: 'A', longitude: 116.4, latitude: 39.9 }, to: { name: 'C', longitude: 113.3, latitude: 23.1 }, count: 1, subType: 'train' },
+  ],
+});
+if (filt.thrown) fail.push(`出行方式筛选那一遍脚本抛错：${filt.thrown.message}`);
+{
+  const fPins = () => filt.calls.markers.filter((m) => !m.isBadge).length;
+  if (filt.calls.polylines.length !== 2 || fPins() !== 2) {
+    fail.push(`默认四类全开时应画 2 条轨迹 / 2 个起终点，实际 ${filt.calls.polylines.length} / ${fPins()}`);
+  }
+  // 轨迹开着时，筛选胶囊那一排要显示出来
+  if (filt.$('trajFilter').style.display !== 'flex') fail.push('轨迹默认开着时出行方式筛选没有显示');
+  // 桩的图层 clear() 不会真的清掉记录，所以按"重画出来几条"的增量来判断
+  const segDelta = (fn) => {
+    const before = filt.calls.polylines.length;
+    const beforePins = fPins();
+    fn();
+    return { lines: filt.calls.polylines.length - before, pins: fPins() - beforePins };
+  };
+  // 关掉「火车」→ 重画时只剩飞机那一类
+  if (typeof filt.$('tf_train').onclick !== 'function') fail.push('出行方式胶囊（火车）没有绑上 onclick');
+  const dTrainOff = segDelta(() => filt.$('tf_train').onclick({ clientX: 20, clientY: 14 }));
+  if (dTrainOff.lines !== 1 || dTrainOff.pins !== 1) {
+    fail.push(`关掉火车后应只重画 1 条飞机轨迹 / 1 个点，实际 ${dTrainOff.lines} / ${dTrainOff.pins}`);
+  }
+  if (!/火车轨迹：隐藏/.test(filt.$('toast').textContent)) {
+    fail.push(`关掉出行方式后没有提示，实际：${filt.$('toast').textContent}`);
+  }
+  // 点胶囊圆角外面那块不算点到按钮（命中区按跑道形状判）
+  const dCorner = segDelta(() => filt.$('tf_flight').onclick({ clientX: 1, clientY: 1 }));
+  if (dCorner.lines !== 0) fail.push('点出行方式胶囊的圆角外侧不该触发筛选');
+  // 把剩下三类也关掉 → 一条轨迹都不画，并给出提示
+  const dAllOff = segDelta(() => {
+    filt.$('tf_flight').onclick({ clientX: 20, clientY: 14 });
+    filt.$('tf_bus').onclick({ clientX: 20, clientY: 14 });
+    filt.$('tf_ship').onclick({ clientX: 20, clientY: 14 });
+  });
+  if (dAllOff.lines !== 0 || dAllOff.pins !== 0) {
+    fail.push(`四类全关掉后不该再画轨迹，实际重画了 ${dAllOff.lines} 条 / ${dAllOff.pins} 个点`);
+  }
+  if (!/四种出行方式都关掉了/.test(filt.$('hint').innerHTML)) {
+    fail.push('四类全关掉后没有给出「都关掉了」的提示');
+  }
+  // 轨迹开关：点跑道圆角外侧不算点到，点中间才算
+  const toastBefore = filt.$('toast').textContent;
+  filt.$('tTraj').onclick({ clientX: 1, clientY: 1 });
+  if (filt.$('toast').textContent !== toastBefore) fail.push('点「轨迹」胶囊的圆角外侧不该触发开关');
+  // 只把「火车」打开（轨迹还开着）→ 重画 1 条
+  const dTrainOn = segDelta(() => filt.$('tf_train').onclick({ clientX: 20, clientY: 14 }));
+  if (dTrainOn.lines !== 1 || dTrainOn.pins !== 1) {
+    fail.push(`只打开火车时应重画 1 条轨迹 / 1 个点，实际 ${dTrainOn.lines} / ${dTrainOn.pins}`);
+  }
+  // 关掉轨迹 → 不画；筛选选择要保留
+  const dTrajOff = segDelta(() => filt.$('tTraj').onclick({ clientX: 20, clientY: 14 }));
+  if (!/出行轨迹：关/.test(filt.$('toast').textContent)) fail.push('点「轨迹」胶囊中间没有关掉轨迹');
+  if (dTrajOff.lines !== 0) fail.push('关掉轨迹后不该再画轨迹');
+  if (filt.$('trajFilter').style.display !== 'none') fail.push('关掉轨迹后出行方式筛选应当收起');
+  // 再点开：面板回来，按保留下来的筛选（只有火车）重画
+  const dTrajBack = segDelta(() => filt.$('tTraj').onclick({ clientX: 20, clientY: 14 }));
+  if (!/出行轨迹：开/.test(filt.$('toast').textContent)) fail.push('再点一次「轨迹」没有重新打开');
+  if (filt.$('trajFilter').style.display !== 'flex') fail.push('重新打开轨迹后出行方式筛选应当再出现');
+  if (dTrajBack.lines !== 1) fail.push(`重开轨迹后应按保留的筛选只画火车，实际 ${dTrajBack.lines} 条`);
+  // 再把「飞机」打开 → 两类都画
+  const dBoth = segDelta(() => filt.$('tf_flight').onclick({ clientX: 20, clientY: 14 }));
+  if (dBoth.lines !== 2) fail.push(`飞机也打开后应重画 2 条轨迹，实际 ${dBoth.lines}`);
+}
+
+/* ======================= 高德栅格底图（不需要 key）那一遍 ======================= */
 // 旧版预热开头就是「没 key 就直接 return」，高德用户没填 key 时等于一张都不预热。
 const amapRaster = bootMap({
   points: [{ id: 1, kind: 'location', title: '外滩', date: '2023-10-02', note: '', lat: 31.2304, lng: 121.4737 }],
@@ -401,8 +509,10 @@ console.log(`矢量模式：标点 ${jPins.length} 个 / 轨迹 ${jsapi.calls.po
 console.log(`矢量失败回退：${fMsgs.filter((m) => m.type === 'jsApiFailed').length ? '已通知 RN' : '未通知'}`);
 console.log(`手势自检：单击开评论 / 再点收起 / 连点两次 flyTo（共 ${calls.flyTo} 次飞点）`);
 console.log(`脏坐标提示：${droppedShown ? $('banner').textContent : '（未显示）'}`);
+console.log(`同名合并：${nameMerge.calls.markers.filter((m) => !m.isBadge).length} 根针（4 条同名记录）`);
+console.log(`出行方式筛选：关掉火车后只画飞机、四类全关后不画线、开关轨迹后筛选状态保留 / 胶囊圆角外不响应`);
 if (fail.length) {
   console.error('✗ 自检未通过：\n- ' + fail.join('\n- '));
   process.exit(1);
 }
-console.log('✓ 通过：脏坐标被跳过；栅格与矢量两条路都正常绘制，合并标点 / 卡片翻页 / 全屏 / 失败回退都可用');
+console.log('✓ 通过：脏坐标被跳过；栅格与矢量两条路都正常绘制；合并标点（同坐标 + 同名）/ 卡片翻页 / 全屏 / 出行方式筛选 / 胶囊命中区 / 失败回退都可用');

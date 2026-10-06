@@ -7,7 +7,10 @@
 // 依赖的指纹（filename/size/w/h）在挑选媒体时（AddScreen.pickImage）和旧数据迁移时写入记录。
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
-import { normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess, pruneOrphanMediaCopies } from './media';
+import {
+  normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess,
+  pruneOrphanMediaCopies, referencedMediaNames, entriesMediaNames, mediaNameOfUri,
+} from './media';
 
 const PAGE_SIZE = 500;
 // 单个条目最多核对的候选数量：文件大小要逐个 getAssetInfoAsync 读，候选太多时截断避免卡死。
@@ -235,6 +238,11 @@ const relinkedEntry = (entry, hit) => ({
   ratio: entry.ratio || (hit.width && hit.height ? hit.width / hit.height : null),
 });
 
+// 条目上所有指向应用私有 media/ 的字符串字段（目前就是主 uri；将来多挂别的
+// 字段时也不会漏删）。重链成功后这些副本都该从磁盘上消失
+const appOwnedUrisOf = (entry) =>
+  Object.values(entry).filter((v) => typeof v === 'string' && isAppOwnedMediaPath(v));
+
 // 对一组媒体条目做重链。
 // 返回 matched（重链成功的条数）、replacedUris（被引用替换掉的应用私有副本，调用方负责删除）、
 // brokenCount（重链失败且确实无法显示的条数，备用路径还活着的不算）
@@ -250,11 +258,23 @@ const relinkEntries = async (rawEntries, index, statCap) => {
       entries.push(raw);
       continue;
     }
+    // ① 相册引用本身还有效（assetId 在相册里查得到）：记录已经能正常显示原片，
+    //    附带的私有副本纯属多余。直接按 assetId 换回相册原片并登记删副本——
+    //    不再要求文件名 / 大小指纹也吻合。指纹对不上（分享进来的副本被改过名、
+    //    原片在相册里被编辑过…）正是"记录能引用相册、副本却一直清不掉"的原因
+    if (entry.assetId && index.byId.has(entry.assetId)) {
+      const asset = index.byId.get(entry.assetId);
+      const stat = await index.statAsset(asset);
+      matched++;
+      replacedUris.push(...appOwnedUrisOf(entry));
+      entries.push(relinkedEntry(entry, { ...asset, localUri: stat?.localUri || asset.uri }));
+      continue;
+    }
     const mediaType = isVideoEntry(entry) ? 'video' : 'photo';
     const hit = await matchAssetForEntry(entry, mediaType, index, statCap);
     if (hit) {
       matched++;
-      if (isAppOwnedMediaPath(entry.uri)) replacedUris.push(entry.uri);
+      replacedUris.push(...appOwnedUrisOf(entry));
       entries.push(relinkedEntry(entry, hit));
       continue;
     }
@@ -315,9 +335,12 @@ export const relinkNewEntries = async (entries) => {
     const keptHint = firstKept
       ? `${firstKept.filename || '无文件名'}，${firstKept.size ? Math.round(firstKept.size / 1024) + 'KB' : '大小未知'}`
       : '';
+    // 删除前最后一道闸：重链后的条目里还有谁指向这个副本就不删（同一张影像被两个
+    // 条目共用时，删掉会让另一个条目断链）
+    const keptNames = entriesMediaNames(result.entries);
     return {
       entries: result.entries,
-      replacedUris: result.replacedUris,
+      replacedUris: result.replacedUris.filter((u) => !keptNames.has(mediaNameOfUri(u))),
       matched: result.matched,
       keptCount,
       reason: keptCount > 0 ? `在相册中找不到对应原片：${keptHint}` : null,
@@ -396,9 +419,12 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     onProgress?.(i + 1, total);
   }
 
-  // 被引用替换掉的本地副本删掉（选图器缓存 / 旧迁移副本，已由相册原片接管）
+  // 被引用替换掉的本地副本删掉（选图器缓存 / 旧迁移副本，已由相册原片接管）。
+  // 删之前再看一眼重链后的记录：同一个文件还被别的条目挂着就不能删
   let freedCopies = 0;
+  const stillReferenced = referencedMediaNames(changed ? next : logs);
   for (const uri of replacedUris) {
+    if (stillReferenced.has(mediaNameOfUri(uri))) continue;
     try {
       const info = await FileSystem.getInfoAsync(uri);
       if (info.exists) {
@@ -408,6 +434,12 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     } catch {}
   }
 
+  // 收尾再扫一遍副本目录：这一轮重链刚腾出来的、以及任何"记录里已经没有、
+  // media/ 里还在"的影像都在这里删掉。放在重链之后，是因为只有重链后的记录
+  // 才不再指向那些副本——开头那一遍看不到这一步的结果
+  const pruned2 = await pruneOrphanMediaCopies(changed ? next : logs)
+    .catch(() => ({ removed: 0, freed: 0, errors: [] }));
+
   return {
     permissionDenied: false,
     changed,
@@ -415,8 +447,8 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     matched,
     unmatched: [...unmatchedLogs],
     freedCopies,
-    removedCopies: pruned.removed,
-    freedBytes: pruned.freed,
-    mediaScanErrors: pruned.errors,
+    removedCopies: pruned.removed + pruned2.removed,
+    freedBytes: pruned.freed + pruned2.freed,
+    mediaScanErrors: [...pruned.errors, ...pruned2.errors],
   };
 };

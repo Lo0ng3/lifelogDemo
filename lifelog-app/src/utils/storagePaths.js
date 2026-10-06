@@ -80,7 +80,56 @@ export const writeFileBase64Async = async (dest, base64) => {
   await FileSystem.writeAsStringAsync(dest, base64, { encoding: FileSystem.EncodingType.Base64 });
 };
 
-// 「数据目录」诊断：根目录、两个目录的文件数与体积、还有一次真实写入测试
+// 目录体积：递归统计文件数与字节数。目录不存在/读不了都返回 0，不抛错。
+// expo-file-system 的 getInfoAsync 对**不存在**的沙盒外路径会先抛权限错，
+// 所以每一层都要自己吞异常；maxEntries 兜底，避免缓存目录里几万个文件把诊断卡住
+const MAX_SCAN_ENTRIES = 4000;
+const dirStatsAsync = async (dir, depth = 3) => {
+  let files = 0;
+  let bytes = 0;
+  let scanned = 0;
+  const walk = async (d, left) => {
+    if (scanned >= MAX_SCAN_ENTRIES) return;
+    let names;
+    try {
+      names = await FileSystem.readDirectoryAsync(d);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      if (scanned >= MAX_SCAN_ENTRIES) return;
+      scanned++;
+      const p = `${d}/${n}`;
+      try {
+        const info = await FileSystem.getInfoAsync(p);
+        if (!info.exists) continue;
+        if (info.isDirectory) {
+          if (left > 0) await walk(p, left - 1);
+          continue;
+        }
+        files++;
+        if (typeof info.size === 'number') bytes += info.size;
+      } catch {}
+    }
+  };
+  await walk(dir, depth);
+  return { files, bytes };
+};
+
+const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+const sizeLine = (label, st) => `${label}：${st.files} 个文件，${mb(st.bytes)}`;
+
+// 系统缓存目录下的具名子目录：图片缓存走 Glide（image_cache），地图瓦片在 WebView 的
+// HTTP 缓存里，临时缩略图是 expo-video-thumbnails 的产物——能认出名字就写清楚用途
+const CACHE_DIR_LABELS = {
+  image_cache: '图片缓存 image_cache（列表封面缩略图）',
+  VideoThumbnails: '临时缩略图 VideoThumbnails',
+  WebView: '地图/网页缓存 WebView',
+  'expo-image': '图片缓存 expo-image',
+};
+
+// 「数据目录」诊断：根目录、副本/封面目录、各类缓存（封面帧 / 实况视频 / 图片 / 地图 /
+// 临时文件）的文件数与体积，最后做一次真实写入测试
 export const describeStorageAsync = async () => {
   const lines = [
     IS_EXTERNAL_STORAGE
@@ -88,25 +137,56 @@ export const describeStorageAsync = async () => {
       : '数据目录：内部存储（没有 root 看不到）',
     STORAGE_ROOT,
   ];
+  // ① 持久目录：影像副本 / 封面小图，这两样删了记录就看不了了，单独列
   for (const [label, dir] of [['副本 media', MEDIA_DIR], ['封面 covers', COVERS_DIR]]) {
     try {
-      const info = await FileSystem.getInfoAsync(dir);
+      const info = await FileSystem.getInfoAsync(dir).catch(() => ({ exists: false }));
       if (!info.exists) {
         lines.push(`${label}：目录还不存在`);
         continue;
       }
-      const names = await FileSystem.readDirectoryAsync(dir);
-      let bytes = 0;
-      for (const n of names) {
-        try {
-          const st = await FileSystem.getInfoAsync(`${dir}/${n}`);
-          if (st.exists && typeof st.size === 'number') bytes += st.size;
-        } catch {}
-      }
-      lines.push(`${label}：${names.length} 个文件，${(bytes / 1024 / 1024).toFixed(2)} MB`);
+      lines.push(sizeLine(label, await dirStatsAsync(dir, 1)));
     } catch (e) {
       lines.push(`${label}：读取失败（${e?.message || e}）`);
     }
+  }
+  // ② 可再生缓存（删了会自动重建，侧边栏「清理缓存」清的也是这些）
+  const cacheDirs = [
+    ['封面帧 videoThumbs（视频封面）', `${FileSystem.documentDirectory}videoThumbs`],
+    ['实况视频 motionVideos（实况照片提取）', `${FileSystem.documentDirectory}motionVideos`],
+  ];
+  for (const [label, dir] of cacheDirs) {
+    try {
+      const st = await dirStatsAsync(dir);
+      lines.push(st.files === 0 ? `${label}：暂无` : sizeLine(label, st));
+    } catch (e) {
+      lines.push(`${label}：读取失败（${e?.message || e}）`);
+    }
+  }
+  // ③ 系统缓存目录：图片缓存（Glide）/ 地图瓦片（WebView HTTP 缓存）/ 临时文件都在这儿，
+  //    按子目录分别列出体积，谁占地方一眼能看出来
+  try {
+    const cacheRoot = FileSystem.cacheDirectory;
+    const names = await FileSystem.readDirectoryAsync(cacheRoot);
+    const parts = [];
+    let total = 0;
+    for (const name of names) {
+      const st = await dirStatsAsync(`${cacheRoot}${name}`);
+      total += st.bytes;
+      if (st.files > 0) parts.push({ name, ...st });
+    }
+    if (parts.length === 0) {
+      lines.push('缓存 cache：空的');
+    } else {
+      parts.sort((a, b) => b.bytes - a.bytes);
+      lines.push(`缓存 cache：合计 ${mb(total)}（「清理缓存」可一键释放）`);
+      for (const p of parts.slice(0, 6)) {
+        lines.push(`  · ${CACHE_DIR_LABELS[p.name] || p.name}：${mb(p.bytes)}（${p.files} 个文件）`);
+      }
+      if (parts.length > 6) lines.push(`  · 其余 ${parts.length - 6} 项小缓存`);
+    }
+  } catch (e) {
+    lines.push(`缓存 cache：读取失败（${e?.message || e}）`);
   }
   // 写入测试最能说明问题：目录不存在也会先建，能写出来才算真的能用
   const probe = `${MEDIA_DIR}/.write-test`;

@@ -14,10 +14,13 @@
 //    jsdelivr/unpkg 经常拉不到，库加载失败时整张地图（连同标点）都会是空白；
 // 2) 标点用内联 SVG 画，不依赖任何外部 CSS 类，避免个别 WebView 上
 //    transform/border-radius 组合渲染异常导致「标点不见了」；
-// 3) 控制条只保留两组小控件：右下角「轨迹 / 标点」两个小胶囊 + 右上角缩放/全览/全屏；
+// 3) 控制条只保留两组小控件：右下角「轨迹 / 标点」两个小胶囊 + 右上角缩放/全览/全屏。
+//    点开「轨迹」会在上面再弹一排「飞机 / 火车 / 汽车 / 轮船」多选胶囊，用来筛选
+//    显示哪几类出行轨迹；这些胶囊是跑道型，命中区按跑道形状判（见 insidePill），
+//    点圆角外面那块不算点到按钮；
 // 4) 点标点 = 地图飞到该点并放大 + 弹出内容卡片（卡片里可跳详情）；
-// 5) 同一个坐标上的多条记录只画一个标点（角标显示条数），卡片里左右切换着看，
-//    不再叠成一摞谁也点不准的针；
+// 5) 同一个坐标上的多条记录只画一个标点，卡片里左右切换着看，不再叠成一摞谁也点不准的针；
+//    地名相同但坐标有差异的地点也并成一根针，落点取记录最多的那一簇；
 // 6) 「全屏」按钮通过 postMessage 交给 RN 侧铺满整屏 + 锁横屏（WebView 不重建，
 //    所以视角和已打开的卡片都保住）；
 // 7) 栅格模式下放大顺不顺，主要看「新一级的瓦片什么时候开始下」：缩放动画期间不重算
@@ -169,7 +172,12 @@ export function buildMapHtml({
           .zoomer button svg { width: 15px; height: 15px; display: block; margin: 0 auto; }
           .zoomer button:active { background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; }
 
-          .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex; gap: 6px; }
+          /* 右下角是一列：上面是「轨迹」开着时才出现的出行方式多选，下面是两个开关。
+             两个开关各自独立成胶囊，行内 gap 6px 就够；列间距留 8px，避免上下两排的
+             命中矩形贴在一起 */
+          .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex;
+              flex-direction: column; align-items: flex-end; gap: 8px; }
+          .toolsRow { display: flex; gap: 6px; }
           .tool { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 8px;
               border-radius: 15px; border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg};
               color: ${c.controlText}; font-size: 12px; font-family: inherit; font-weight: 500;
@@ -178,6 +186,15 @@ export function buildMapHtml({
           .tool svg { width: 14px; height: 14px; display: block; }
           .tool.off { opacity: 0.5; }
           .tool.on { background: #0A84FF; border-color: #0A84FF; color: #FFF; }
+          /* 出行方式筛选（飞机 / 火车 / 汽车 / 轮船）：多选，选中态用该类型的颜色 */
+          .trajFilter { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+              max-width: calc(100vw - 20px); }
+          .tf { height: 26px; padding: 0 10px; border-radius: 13px;
+              border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg}; color: ${c.controlText};
+              font-size: 11.5px; font-family: inherit; font-weight: 600; cursor: pointer;
+              box-shadow: 0 2px 8px rgba(0,0,0,${isDark ? '0.4' : '0.14'});
+              transition: background .15s, color .15s, opacity .15s; }
+          .tf.off { opacity: 0.55; }
           /* 提示挪到顶部居中：底部留给标点内容卡，避免两者叠在一起 */
           .toast { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); z-index: 950; padding: 5px 10px; border-radius: 9px;
               background: ${c.controlBg}; color: ${c.controlText}; font-size: 11.5px; border: 0.5px solid ${c.controlBorder};
@@ -227,14 +244,23 @@ export function buildMapHtml({
           <button id="zfull" aria-label="全屏">${ICON_EXPAND}</button>
       </div>
       <div class="tools">
-          <button id="tTraj" class="tool on" aria-label="出行轨迹">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="5" r="2.2"/><path d="M7 17.5C10.5 14.5 9 9.5 12.5 7.5"/></svg>
-            <span>轨迹</span>
-          </button>
-          <button id="tLoc" class="tool on" aria-label="地点标点">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
-            <span>标点</span>
-          </button>
+          <!-- 出行方式筛选：打开「轨迹」时出现，多选；关掉哪一类就不画哪一类的线/点 -->
+          <div class="trajFilter" id="trajFilter" style="display:none">
+              <button class="tf on" id="tf_flight" aria-label="飞机轨迹">飞机</button>
+              <button class="tf on" id="tf_train" aria-label="火车轨迹">火车</button>
+              <button class="tf on" id="tf_bus" aria-label="汽车轨迹">汽车</button>
+              <button class="tf on" id="tf_ship" aria-label="轮船轨迹">轮船</button>
+          </div>
+          <div class="toolsRow">
+            <button id="tTraj" class="tool on" aria-label="出行轨迹">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="5" r="2.2"/><path d="M7 17.5C10.5 14.5 9 9.5 12.5 7.5"/></svg>
+              <span>轨迹</span>
+            </button>
+            <button id="tLoc" class="tool on" aria-label="地点标点">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+              <span>标点</span>
+            </button>
+          </div>
       </div>
       <div class="toast" id="toast"></div>
       <div class="hint" id="hint" style="display:none"></div>
@@ -345,10 +371,18 @@ export function buildMapHtml({
              同一个地点往往有好几条记录（同一个机场飞过很多次、同一个地方去过很多回）。
              以前是一条记录一根针，针一模一样地叠在一起，点到的永远是最后一根，
              前面的记录等于看不见。现在按坐标合并：一个地点一根针，
-             右上角角标写「这个点有几条记录」，点开后用卡片里的左右箭头翻。 */
+             点开后用卡片里的左右箭头翻。
+
+             另外：地名相同、坐标却有差异的（检索结果和照片 GPS 抖出来的两个点、
+             同一地方手输过两次…）也并成一根针——落点取记录数最多的那一簇，
+             免得同一座机场在图上并排插两根针，点哪根都只看得到一半记录。 */
           function groupKey(p) {
               // 4 位小数 ≈ 11 米：同一个地点因检索/录入产生的微小差异也算同一个点
               return p.lat.toFixed(4) + ',' + p.lng.toFixed(4);
+          }
+          // 地名归一：去掉所有空白 + 小写，避免"外滩"和"外滩 "被当成两个地方
+          function nameKeyOf(s) {
+              return String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase();
           }
           function groupColor(records) {
               for (var i = 0; i < records.length; i++) {
@@ -371,9 +405,38 @@ export function buildMapHtml({
               groups.forEach(function (g) {
                   // 有地点记录的归「标点」层，纯旅票的归「轨迹」层（两层各有开关）
                   g.onLoc = g.records.some(function (r) { return r.kind === 'location'; });
+                  // 这个坐标簇的"主名字"：簇内地点记录里出现次数最多的那个名字
+                  var counts = {}, best = 0;
+                  g.nameKey = null;
+                  g.records.forEach(function (r) {
+                      if (r.kind !== 'location') return;
+                      var k = nameKeyOf(r.title);
+                      if (!k) return;
+                      counts[k] = (counts[k] || 0) + 1;
+                      if (counts[k] > best) { best = counts[k]; g.nameKey = k; }
+                  });
                   g.color = groupColor(g.records);
               });
-              return groups;
+              // 同名地点的各个坐标簇合成一根针；落点 = 记录最多的那一簇（并列时保持先出现的）
+              var byName = {}, merged = [];
+              groups.forEach(function (g) {
+                  var key = g.onLoc ? g.nameKey : null;   // 没名字的地点（或旅票点）不合并
+                  if (!key) { merged.push(g); return; }
+                  var anchor = byName[key];
+                  if (!anchor) { byName[key] = g; merged.push(g); return; }
+                  if (g.records.length > anchor.records.length) {
+                      // 这一簇记录更多 → 由它当落点：旧锚点的记录并进来，位置换成这一簇的
+                      g.records = g.records.concat(anchor.records);
+                      g.color = groupColor(g.records);
+                      var at = merged.indexOf(anchor);
+                      if (at >= 0) merged[at] = g; else merged.push(g);
+                      byName[key] = g;
+                  } else {
+                      anchor.records = anchor.records.concat(g.records);
+                      anchor.color = groupColor(anchor.records);
+                  }
+              });
+              return merged;
           }
           var GROUPS = [];
 
@@ -876,9 +939,13 @@ export function buildMapHtml({
               if (!trajOn) return;
               GROUPS.forEach(function (g) {
                   if (g.onLoc) return;
+                  if (!groupShownInTraj(g)) return;    // 被出行方式筛选关掉的类型不画点
                   safe(function () { trajLayer.add(makeMarker(g)); });
               });
-              SEGS.forEach(function (seg) { safe(function () { drawSeg(seg); }); });
+              SEGS.forEach(function (seg) {
+                  if (!trajTypeOn(seg.subType)) return;
+                  safe(function () { drawSeg(seg); });
+              });
           }
           function drawSeg(seg) {
               var color = COLORS[seg.subType] || '#007AFF';
@@ -913,10 +980,15 @@ export function buildMapHtml({
           }
           function syncHints() {
               var any = POINTS.length > 0 || SEGS.length > 0;
+              var trajVisible = trajOn && trajFilterOn();
+              var locVisible = locOn && GROUPS.some(function (g) { return g.onLoc; });
               if (!any) {
                   showHint('当前筛选下没有可定位的印记<br/><span style="font-size:11.5px">在「地点」或「旅票」里选一个地名即可标点</span>');
-              } else if ((!locOn && !trajOn)) {
-                  showHint('标点与轨迹都已关闭');
+              } else if (!locVisible && !trajVisible) {
+                  // 轨迹开着但四种出行方式全被点掉了：说清楚在哪儿能打开，别让人以为坏了
+                  showHint(trajOn
+                      ? '出行轨迹：四种出行方式都关掉了<br/><span style="font-size:11.5px">点右下角「轨迹」上面那排小胶囊可以重新打开</span>'
+                      : '标点与轨迹都已关闭');
               } else {
                   hideHint();
               }
@@ -933,8 +1005,11 @@ export function buildMapHtml({
               var lls = [];
               if (locOn) GROUPS.forEach(function (g) { if (g.onLoc) lls.push({ lat: g.lat, lng: g.lng }); });
               if (trajOn) {
-                  GROUPS.forEach(function (g) { if (!g.onLoc) lls.push({ lat: g.lat, lng: g.lng }); });
+                  GROUPS.forEach(function (g) {
+                      if (!g.onLoc && groupShownInTraj(g)) lls.push({ lat: g.lat, lng: g.lng });
+                  });
                   SEGS.forEach(function (s) {
+                      if (!trajTypeOn(s.subType)) return;
                       lls.push({ lat: s.from.latitude, lng: s.from.longitude }, { lat: s.to.latitude, lng: s.to.longitude });
                   });
               }
@@ -947,11 +1022,81 @@ export function buildMapHtml({
           var locLayer = null, trajLayer = null;
           var trajOn = true, locOn = true;
 
+          /* ---------------- 出行方式筛选（轨迹开关的二级开关） ----------------
+             点开「轨迹」后出现的一排多选：飞机 / 火车 / 汽车 / 轮船（默认四类全开）。
+             关掉哪一类，那一类的轨迹弧线和起终点标点就都不画；多选，任意组合。
+             subType 缺失的老数据当作"要显示"，不会被筛掉。 */
+          var TRAJ_TYPES = ['flight', 'train', 'bus', 'ship'];
+          // 筛选胶囊上的叫法（和按钮文案一致；TYPE_LABELS 里是"机票/火车票"这种记录类型名）
+          var TRAJ_LABELS = { flight: '飞机', train: '火车', bus: '汽车', ship: '轮船' };
+          var trajFilter = { flight: true, train: true, bus: true, ship: true };
+          function trajTypeOn(t) { return !t || trajFilter[t] !== false; }
+          function trajFilterOn() {
+              for (var i = 0; i < TRAJ_TYPES.length; i++) if (trajFilter[TRAJ_TYPES[i]]) return true;
+              return false;
+          }
+          function groupShownInTraj(g) {
+              return g.records.some(function (r) { return trajTypeOn(r.subType); });
+          }
+          function syncTrajFilter() {
+              var box = $('trajFilter');
+              if (box) box.style.display = trajOn ? 'flex' : 'none';
+              TRAJ_TYPES.forEach(function (t) {
+                  var b = $('tf_' + t);
+                  if (!b) return;
+                  var on = !!trajFilter[t];
+                  var color = COLORS[t] || '#0A84FF';
+                  b.className = 'tf ' + (on ? 'on' : 'off');
+                  b.style.background = on ? color : '';
+                  b.style.borderColor = on ? color : '';
+                  b.style.color = on ? '#FFF' : '';
+              });
+          }
+
           function setToggle(btn, on) {
               if (!btn) return;
               btn.className = 'tool ' + (on ? 'on' : 'off');
           }
           function on(id, fn) { var el = $(id); if (el) el.onclick = fn; }
+
+          /* ---------------- 跑道型按钮的点击范围 ----------------
+             .tool / .tf 是圆角胶囊，但 DOM 的命中区永远是外接矩形：圆角外侧那两块
+             明明在按钮外面，点下去照样触发（相邻两个按钮的矩形角还会互相压到）。
+             这里按形状再判一次——落点要落在「矩形 ∩ 到中轴的距离不超过圆角半径」
+             的区域里才算真的点了这个按钮。量不出尺寸时不拦，照旧触发。 */
+          function pillRect(el) {
+              if (!el || !el.getBoundingClientRect) return null;
+              var r = null;
+              try { r = el.getBoundingClientRect(); } catch (e) { return null; }
+              if (!r) return null;
+              var left = Number(r.left) || 0, top = Number(r.top) || 0;
+              var w = Number(r.width), h = Number(r.height);
+              if (!(w > 0)) w = Number(r.right) - left;
+              if (!(h > 0)) h = Number(r.bottom) - top;
+              if (!(w > 0) || !(h > 0)) return null;
+              return { left: left, top: top, right: left + w, bottom: top + h };
+          }
+          function insidePill(el, x, y) {
+              var r = pillRect(el);
+              if (!r) return true;
+              if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+              var rad = Math.min((r.bottom - r.top) / 2, (r.right - r.left) / 2);
+              if (!(rad > 0)) return true;
+              var cx = Math.min(Math.max(x, r.left + rad), r.right - rad);
+              var cy = (r.top + r.bottom) / 2;
+              var dx = x - cx, dy = y - cy;
+              return dx * dx + dy * dy <= rad * rad + 0.75;   // +0.75：贴着边缘点也算
+          }
+          function onPill(id, fn) {
+              var el = $(id);
+              if (!el) return;
+              el.onclick = function (e) {
+                  // 拿不到真实落点（键盘 / 无障碍 / 早期合成 click）时照旧执行
+                  if (e && typeof e.clientX === 'number' && typeof e.clientY === 'number'
+                      && !insidePill(el, e.clientX, e.clientY)) return;
+                  fn();
+              };
+          }
 
           function boot() {
               // ① 引擎没起来：高德 JS API 交给 RN 切回栅格底图，天地图/栅格给明确提示
@@ -991,13 +1136,24 @@ export function buildMapHtml({
               var btnTraj = $('tTraj'), btnLoc = $('tLoc');
               setToggle(btnTraj, trajOn);
               setToggle(btnLoc, locOn);
-              on('tTraj', function () {
+              syncTrajFilter();
+              onPill('tTraj', function () {
                   trajOn = !trajOn; setToggle(btnTraj, trajOn);
+                  syncTrajFilter();
                   drawTraj(); syncHints(); toast('出行轨迹：' + (trajOn ? '开' : '关'));
               });
-              on('tLoc', function () {
+              onPill('tLoc', function () {
                   locOn = !locOn; setToggle(btnLoc, locOn);
                   renderLoc(); syncHints(); toast('地点标点：' + (locOn ? '开' : '关'));
+              });
+              // 四种出行方式各自一个小胶囊：点一下就切换这类轨迹的显示，可多选
+              TRAJ_TYPES.forEach(function (t) {
+                  onPill('tf_' + t, function () {
+                      trajFilter[t] = !trajFilter[t];
+                      syncTrajFilter();
+                      drawTraj(); syncHints();
+                      toast((TRAJ_LABELS[t] || t) + '轨迹：' + (trajFilter[t] ? '显示' : '隐藏'));
+                  });
               });
               on('zin', function () { Engine.zoomIn(); });
               on('zout', function () { Engine.zoomOut(); });
