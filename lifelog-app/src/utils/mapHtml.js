@@ -163,12 +163,17 @@ export function buildMapHtml({
           /* ---- 控件：只占很小一块，尽量不挡地图 ---- */
           .zoomer { position: absolute; right: 10px; top: 10px; z-index: 800; display: flex; flex-direction: column;
               background: ${c.controlBg}; border: 0.5px solid ${c.controlBorder}; border-radius: 11px;
-              box-shadow: 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); overflow: hidden; }
+              box-shadow: 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); overflow: hidden;
+              -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+              -webkit-user-select: none; user-select: none; }
           /* 顶部提示条出现时把缩放控件让下去：原来两者都贴顶，提示条 z-index 更高，
              会压住缩放按钮，表现就是"点了没反应" */
           body.has-banner .zoomer { top: 36px; }
           .zoomer button { width: 32px; height: 30px; border: none; background: transparent; color: ${c.controlText};
-              font-size: 15px; line-height: 1; cursor: pointer; font-family: inherit; }
+              font-size: 15px; line-height: 1; cursor: pointer; font-family: inherit;
+              -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+              -webkit-user-select: none; user-select: none; }
+          .zoomer button:focus { outline: none; }
           .zoomer button + button { border-top: 0.5px solid ${c.controlBorder}; }
           .zoomer button svg { width: 15px; height: 15px; display: block; margin: 0 auto; }
           .zoomer button:active { background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; }
@@ -177,16 +182,24 @@ export function buildMapHtml({
              两个开关各自独立成胶囊，行内 gap 6px 就够；列间距留 8px，避免上下两排的
              命中矩形贴在一起 */
           .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex;
-              flex-direction: column; align-items: flex-end; gap: 8px; }
+              flex-direction: column; align-items: flex-end; gap: 8px;
+              /* 控件上不要长按选中/复制文字，也不要系统那层方形高亮 */
+              -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+              -webkit-user-select: none; user-select: none; }
           .toolsRow { display: flex; gap: 6px; }
           .tool { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 8px;
               border-radius: 15px; border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg};
               color: ${c.controlText}; font-size: 12px; font-family: inherit; font-weight: 500;
               box-shadow: 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); cursor: pointer;
-              transition: background .15s, color .15s, opacity .15s; }
+              transition: background .15s, color .15s, opacity .15s, transform .09s;
+              -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+              -webkit-user-select: none; user-select: none; }
           .tool svg { width: 14px; height: 14px; display: block; }
           .tool.off { opacity: 0.5; }
           .tool.on { background: #0A84FF; border-color: #0A84FF; color: #FFF; }
+          /* 按下反馈用整块缩放：形状跟着胶囊走，不会像系统 tap-highlight 那样露出一块矩形 */
+          .tool:active { transform: scale(0.94); }
+          .tool:focus { outline: none; }
           /* 出行方式筛选（飞机 / 火车 / 汽车 / 轮船）：多选，选中态用该类型的颜色 */
           .trajFilter { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
               max-width: calc(100vw - 20px); }
@@ -194,8 +207,17 @@ export function buildMapHtml({
               border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg}; color: ${c.controlText};
               font-size: 11.5px; font-family: inherit; font-weight: 600; cursor: pointer;
               box-shadow: 0 2px 8px rgba(0,0,0,${isDark ? '0.4' : '0.14'});
-              transition: background .15s, color .15s, opacity .15s; }
+              transition: background .15s, color .15s, opacity .15s, transform .09s;
+              -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+              -webkit-user-select: none; user-select: none; }
           .tf.off { opacity: 0.55; }
+          .tf:active { transform: scale(0.92); }
+          .tf:focus { outline: none; }
+          /* 选中态用该出行方式的颜色（写在样式表里，:active 才能盖得住） */
+          #tf_flight.on { background: #2F7BF6; border-color: #2F7BF6; color: #FFF; }
+          #tf_train.on { background: #10B981; border-color: #10B981; color: #FFF; }
+          #tf_bus.on { background: #F97316; border-color: #F97316; color: #FFF; }
+          #tf_ship.on { background: #8B5CF6; border-color: #8B5CF6; color: #FFF; }
           /* 提示挪到顶部居中：底部留给标点内容卡，避免两者叠在一起 */
           .toast { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); z-index: 950; padding: 5px 10px; border-radius: 9px;
               background: ${c.controlBg}; color: ${c.controlText}; font-size: 11.5px; border: 0.5px solid ${c.controlBorder};
@@ -1040,6 +1062,9 @@ export function buildMapHtml({
           // 筛选胶囊上的叫法（和按钮文案一致；TYPE_LABELS 里是"机票/火车票"这种记录类型名）
           var TRAJ_LABELS = { flight: '飞机', train: '火车', bus: '汽车', ship: '轮船' };
           var trajFilter = { flight: true, train: true, bus: true, ship: true };
+          // 刚进地图时先不显示那排筛选（默认四类全开时它没什么信息量，也挡地图）；
+          // 用户点过「轨迹」之后才跟着轨迹开关一起显示
+          var trajFilterOpened = false;
           function trajTypeOn(t) { return !t || trajFilter[t] !== false; }
           function trajFilterOn() {
               for (var i = 0; i < TRAJ_TYPES.length; i++) if (trajFilter[TRAJ_TYPES[i]]) return true;
@@ -1050,16 +1075,12 @@ export function buildMapHtml({
           }
           function syncTrajFilter() {
               var box = $('trajFilter');
-              if (box) box.style.display = trajOn ? 'flex' : 'none';
+              if (box) box.style.display = (trajOn && trajFilterOpened) ? 'flex' : 'none';
               TRAJ_TYPES.forEach(function (t) {
                   var b = $('tf_' + t);
                   if (!b) return;
                   var on = !!trajFilter[t];
-                  var color = COLORS[t] || '#0A84FF';
                   b.className = 'tf ' + (on ? 'on' : 'off');
-                  b.style.background = on ? color : '';
-                  b.style.borderColor = on ? color : '';
-                  b.style.color = on ? '#FFF' : '';
               });
           }
 
@@ -1148,6 +1169,13 @@ export function buildMapHtml({
               setToggle(btnLoc, locOn);
               syncTrajFilter();
               onPill('tTraj', function () {
+                  // 第一次点：只把那排出行方式筛选叫出来（轨迹不动），之后才是开关
+                  if (!trajFilterOpened) {
+                      trajFilterOpened = true;
+                      syncTrajFilter();
+                      toast('已展开出行方式筛选，再点「轨迹」可开 / 关');
+                      return;
+                  }
                   trajOn = !trajOn; setToggle(btnTraj, trajOn);
                   syncTrajFilter();
                   drawTraj(); syncHints(); toast('出行轨迹：' + (trajOn ? '开' : '关'));

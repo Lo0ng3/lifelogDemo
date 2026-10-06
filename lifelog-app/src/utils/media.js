@@ -319,24 +319,9 @@ export const cleanupMediaCaches = async (logs = []) => {
   try {
     await Image.clearDiskCache();
   } catch {}
-  // 封面小图不是"可再生"的，只删当前没有任何记录引用的那些
+  // 封面小图不是"可再生"的，只删当前没有任何记录引用的那些（和「同步相册影像」共用同一套判定）
   try {
-    const referenced = new Set();
-    for (const log of logs) {
-      for (const field of ['coverUrl', 'coverThumbUrl']) {
-        const url = log?.[field];
-        if (typeof url === 'string' && url.startsWith('file://')) referenced.add(url.split('/').pop());
-      }
-    }
-    for (const name of await FileSystem.readDirectoryAsync(COVERS_DIR)) {
-      if (referenced.has(name)) continue;
-      const path = `${COVERS_DIR}/${name}`;
-      try {
-        const info = await FileSystem.getInfoAsync(path);
-        if (info.exists && typeof info.size === 'number') freed += info.size;
-        await FileSystem.deleteAsync(path, { idempotent: true });
-      } catch {}
-    }
+    freed += (await pruneOrphanCovers(logs)).freed;
   } catch {}
   return freed;
 };
@@ -407,12 +392,22 @@ export const mediaNameOfUri = (uri) => String(uri || '').split('?')[0].split('/'
    判定"被引用"按**文件名**比对（记录里所有含 `/media/` 的字段 + 表单草稿都算：原片 / 实况视频 / 缩略图…），
    这样两个目录都能覆盖，宁可多留也不误删；另外刚生成不到 5 分钟的一律不动。
    返回删掉的文件数、释放的字节数、扫过的文件数，以及读目录失败的目录（不再静默吞掉）。 */
-export const pruneOrphanMediaCopies = async (logs = []) => {
+/* 副本目录里每个文件的"去向"分类。分类本身就是给用户看的答案：
+   为什么点了同步还有文件留着？是还没人在用（马上删），还是真的有人还在用。
+     referenced 记录里还挂着它（相册里找不到原片，删了记录就没图看）
+     draft      还挂在「添加」页表单里没保存（草稿也算"在用"）
+     fresh      刚导入不到 5 分钟（可能马上要保存，这次先不动）
+     unreadable 连文件信息都读不到（权限 / 系统限制），不敢删
+     orphan     没有任何引用 —— 同步时删掉的就是这一类 */
+const SAMPLE_LIMIT = 4;
+export const classifyMediaCopies = async (logs = []) => {
   const referenced = referencedMediaNames(logs);
 
-  let removed = 0;
-  let freed = 0;
-  let scanned = 0;
+  const referencedNames = [];
+  const draftNames = [];
+  const freshNames = [];
+  const unreadable = [];
+  const orphans = [];
   const errors = [];
   for (const dir of mediaDirsToScan()) {
     let names;
@@ -428,22 +423,139 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
     }
     for (const name of names) {
       if (name.startsWith('.')) continue;   // .write-test 之类的探针不碰
-      scanned++;
-      if (referenced.has(name) || draftMediaNames.has(name)) continue;
+      if (referenced.has(name)) { referencedNames.push(name); continue; }
+      if (draftMediaNames.has(name)) { draftNames.push(name); continue; }
       const path = `${dir}/${name}`;
+      let info = null;
       try {
-        const info = await FileSystem.getInfoAsync(path);
-        if (!info.exists) continue;
-        // modificationTime 单位是秒；读不到时间戳的平台直接跳过，宁可不删
-        const mtime = typeof info.modificationTime === 'number' ? info.modificationTime * 1000 : 0;
-        if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) continue;
-        if (typeof info.size === 'number') freed += info.size;
-        await FileSystem.deleteAsync(path, { idempotent: true });
-        removed++;
-      } catch {}
+        info = await FileSystem.getInfoAsync(path);
+      } catch (e) {
+        unreadable.push({ name, error: e?.message || String(e) });
+        continue;
+      }
+      if (!info?.exists) continue;          // 已经不在了，不用管
+      // modificationTime 单位是秒；读不到时间戳的平台直接跳过，宁可不删
+      const mtime = typeof info.modificationTime === 'number' ? info.modificationTime * 1000 : 0;
+      if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) { freshNames.push(name); continue; }
+      orphans.push({ dir, name, path, size: typeof info.size === 'number' ? info.size : 0 });
     }
   }
-  return { removed, freed, scanned, errors };
+  return {
+    referenced: referencedNames,
+    draft: draftNames,
+    fresh: freshNames,
+    unreadable,
+    orphans,
+    errors,
+    total: referencedNames.length + draftNames.length + freshNames.length + unreadable.length + orphans.length,
+  };
+};
+
+export const pruneOrphanMediaCopies = async (logs = []) => {
+  const c = await classifyMediaCopies(logs);
+  let removed = 0;
+  let freed = 0;
+  for (const f of c.orphans) {
+    try {
+      await FileSystem.deleteAsync(f.path, { idempotent: true });
+      removed++;
+      freed += f.size;
+    } catch {}
+  }
+  return {
+    removed,
+    freed,
+    scanned: c.total,
+    errors: c.errors,
+    // 剩下来的都是"有人用"或"暂时不敢动"的，如实报给界面，别让用户以为删漏了
+    kept: {
+      referenced: c.referenced.length,
+      draft: c.draft.length,
+      fresh: c.fresh.length,
+      unreadable: c.unreadable.length,
+    },
+    samples: {
+      referenced: c.referenced.slice(0, SAMPLE_LIMIT),
+      draft: c.draft.slice(0, SAMPLE_LIMIT),
+      fresh: c.fresh.slice(0, SAMPLE_LIMIT),
+    },
+  };
+};
+
+/* covers/ 里没有记录引用的封面小图：换封面、删记录、同一张图重复下载留下的孤儿。
+   封面只被记录的 coverUrl / coverThumbUrl 引用（按文件名比对），
+   刚生成不到 5 分钟的不动（可能正挂在表单里），只扫 App 自己的封面目录。
+   dryRun=true 只统计不删（「数据目录」诊断用）。 */
+export const pruneOrphanCovers = async (logs = [], { dryRun = false } = {}) => {
+  const referenced = new Set();
+  for (const log of logs || []) {
+    for (const field of ['coverUrl', 'coverThumbUrl']) {
+      const url = log?.[field];
+      if (typeof url === 'string' && url.startsWith('file://')) {
+        const name = mediaNameOfUri(url);
+        if (name) referenced.add(name);
+      }
+    }
+  }
+  let removed = 0;
+  let freed = 0;
+  let scanned = 0;
+  let orphans = 0;
+  let names;
+  try {
+    names = await FileSystem.readDirectoryAsync(COVERS_DIR);
+  } catch {
+    return { removed: 0, freed: 0, scanned: 0, orphans: 0, errors: [] };
+  }
+  for (const name of names) {
+    if (name.startsWith('.')) continue;
+    scanned++;
+    if (referenced.has(name)) continue;
+    const path = `${COVERS_DIR}/${name}`;
+    try {
+      const info = await FileSystem.getInfoAsync(path);
+      if (!info?.exists) continue;
+      const mtime = typeof info.modificationTime === 'number' ? info.modificationTime * 1000 : 0;
+      if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) continue;
+      orphans++;
+      if (dryRun) continue;
+      await FileSystem.deleteAsync(path, { idempotent: true });
+      removed++;
+      if (typeof info.size === 'number') freed += info.size;
+    } catch {}
+  }
+  return { removed, freed, scanned, orphans, errors: [] };
+};
+
+// 「数据目录」里的副本明细：按"为什么留着"分开报，一眼能看出是不是真删漏了
+export const describeMediaCopiesAsync = async (logs = []) => {
+  const c = await classifyMediaCopies(logs);
+  const covers = await pruneOrphanCovers(logs, { dryRun: true });
+  const lines = [];
+  if (c.total === 0) {
+    lines.push('影像副本 media：空的');
+  } else {
+    lines.push(
+      `影像副本 media：共 ${c.total} 个 —— 记录引用 ${c.referenced.length}、`
+      + `添加页草稿 ${c.draft.length}、刚导入不到 5 分钟 ${c.fresh.length}、`
+      + `读不到信息 ${c.unreadable.length}、可清理 ${c.orphans.length}`
+    );
+    const sample = (names, label) => {
+      if (names.length) lines.push(`  · ${label}：${names.slice(0, SAMPLE_LIMIT).join('、')}${names.length > SAMPLE_LIMIT ? ' …' : ''}`);
+    };
+    sample(c.orphans.map(o => o.name), '可清理');
+    sample(c.referenced, '仍被记录引用');
+    sample(c.draft, '还在添加页草稿里');
+    sample(c.fresh, '刚导入');
+    if (c.unreadable.length) {
+      lines.push(`  · 读不到：${c.unreadable.slice(0, 2).map(u => `${u.name}（${u.error}）`).join('；')}`);
+    }
+    if (c.errors.length) lines.push(`  · 目录读失败：${c.errors.join('；')}`);
+  }
+  if (covers.scanned > 0) {
+    lines.push(`封面小图 covers：共 ${covers.scanned} 张，其中 ${covers.orphans} 张没有记录引用（同步 / 清理缓存会清掉）`);
+  }
+  return lines.join('\n');
 };
 
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损

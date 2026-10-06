@@ -495,8 +495,8 @@ if (filt.thrown) fail.push(`出行方式筛选那一遍脚本抛错：${filt.thr
   if (filt.calls.polylines.length !== 2 || fPins() !== 2) {
     fail.push(`默认四类全开时应画 2 条轨迹 / 2 个起终点，实际 ${filt.calls.polylines.length} / ${fPins()}`);
   }
-  // 轨迹开着时，筛选胶囊那一排要显示出来
-  if (filt.$('trajFilter').style.display !== 'flex') fail.push('轨迹默认开着时出行方式筛选没有显示');
+  // 刚进地图：那排筛选不显示（默认四类全开，摆出来只会挡地图）
+  if (filt.$('trajFilter').style.display !== 'none') fail.push('默认不该直接把出行方式筛选摆出来');
   // 桩的图层 clear() 不会真的清掉记录，所以按"重画出来几条"的增量来判断
   const segDelta = (fn) => {
     const before = filt.calls.polylines.length;
@@ -504,6 +504,13 @@ if (filt.thrown) fail.push(`出行方式筛选那一遍脚本抛错：${filt.thr
     fn();
     return { lines: filt.calls.polylines.length - before, pins: fPins() - beforePins };
   };
+  // 第一次点「轨迹」：把筛选那一排叫出来，轨迹保持原样（不重画）
+  const dReveal = segDelta(() => filt.$('tTraj').onclick({ clientX: 20, clientY: 14 }));
+  if (filt.$('trajFilter').style.display !== 'flex') fail.push('点「轨迹」后应当展开出行方式筛选');
+  if (dReveal.lines !== 0 || dReveal.pins !== 0) fail.push('第一次点「轨迹」只是展开筛选，不该重画轨迹');
+  if (!/已展开出行方式筛选/.test(filt.$('toast').textContent)) {
+    fail.push(`第一次点「轨迹」应当提示筛选已展开，实际：${filt.$('toast').textContent}`);
+  }
   // 关掉「火车」→ 重画时只剩飞机那一类
   if (typeof filt.$('tf_train').onclick !== 'function') fail.push('出行方式胶囊（火车）没有绑上 onclick');
   const dTrainOff = segDelta(() => filt.$('tf_train').onclick({ clientX: 20, clientY: 14 }));
@@ -528,28 +535,34 @@ if (filt.thrown) fail.push(`出行方式筛选那一遍脚本抛错：${filt.thr
   if (!/四种出行方式都关掉了/.test(filt.$('hint').innerHTML)) {
     fail.push('四类全关掉后没有给出「都关掉了」的提示');
   }
-  // 轨迹开关：点跑道圆角外侧不算点到，点中间才算
+  // 轨迹开关：点跑道圆角外侧不算点到，点中间才算（第二次点开始才是开 / 关）
   const toastBefore = filt.$('toast').textContent;
   filt.$('tTraj').onclick({ clientX: 1, clientY: 1 });
   if (filt.$('toast').textContent !== toastBefore) fail.push('点「轨迹」胶囊的圆角外侧不该触发开关');
-  // 只把「火车」打开（轨迹还开着）→ 重画 1 条
-  const dTrainOn = segDelta(() => filt.$('tf_train').onclick({ clientX: 20, clientY: 14 }));
-  if (dTrainOn.lines !== 1 || dTrainOn.pins !== 1) {
-    fail.push(`只打开火车时应重画 1 条轨迹 / 1 个点，实际 ${dTrainOn.lines} / ${dTrainOn.pins}`);
-  }
   // 关掉轨迹 → 不画；筛选选择要保留
   const dTrajOff = segDelta(() => filt.$('tTraj').onclick({ clientX: 20, clientY: 14 }));
   if (!/出行轨迹：关/.test(filt.$('toast').textContent)) fail.push('点「轨迹」胶囊中间没有关掉轨迹');
   if (dTrajOff.lines !== 0) fail.push('关掉轨迹后不该再画轨迹');
   if (filt.$('trajFilter').style.display !== 'none') fail.push('关掉轨迹后出行方式筛选应当收起');
-  // 再点开：面板回来，按保留下来的筛选（只有火车）重画
+  // 再点开：面板回来（四类仍是关的，所以一条不画）
   const dTrajBack = segDelta(() => filt.$('tTraj').onclick({ clientX: 20, clientY: 14 }));
   if (!/出行轨迹：开/.test(filt.$('toast').textContent)) fail.push('再点一次「轨迹」没有重新打开');
   if (filt.$('trajFilter').style.display !== 'flex') fail.push('重新打开轨迹后出行方式筛选应当再出现');
-  if (dTrajBack.lines !== 1) fail.push(`重开轨迹后应按保留的筛选只画火车，实际 ${dTrajBack.lines} 条`);
+  if (dTrajBack.lines !== 0) fail.push(`四类仍是关的，重开轨迹后不该画线，实际 ${dTrajBack.lines} 条`);
+  // 只把「火车」打开 → 只画火车（筛选状态跨开关保留）
+  const dTrainOn = segDelta(() => filt.$('tf_train').onclick({ clientX: 20, clientY: 14 }));
+  if (dTrainOn.lines !== 1 || dTrainOn.pins !== 1) {
+    fail.push(`只打开火车时应重画 1 条轨迹 / 1 个点，实际 ${dTrainOn.lines} / ${dTrainOn.pins}`);
+  }
   // 再把「飞机」打开 → 两类都画
   const dBoth = segDelta(() => filt.$('tf_flight').onclick({ clientX: 20, clientY: 14 }));
   if (dBoth.lines !== 2) fail.push(`飞机也打开后应重画 2 条轨迹，实际 ${dBoth.lines}`);
+  // 长按选中/复制的兜底：控件样式里必须关掉 user-select 与系统方形高亮
+  if (!/\.tool \{[^}]*user-select: none/.test(filt.html)) fail.push('轨迹 / 标点胶囊没有关掉文字选中（长按会弹出复制）');
+  if (!/-webkit-tap-highlight-color: transparent/.test(filt.html)) {
+    fail.push('控件没有关掉系统那层方形高亮（按住时会露出一块矩形）');
+  }
+  if (!/\.tool:active \{ transform: scale/.test(filt.html)) fail.push('按钮按下反馈没有做成跟着胶囊走的缩放');
 }
 
 /* ======================= 高德栅格底图（不需要 key）那一遍 ======================= */

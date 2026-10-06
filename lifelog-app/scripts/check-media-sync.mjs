@@ -29,6 +29,7 @@ const addFile = (path, size, mtime = 1700000000) => files.set(path, { dir: false
 
 const MEDIA = 'file:///data/user/0/app/files/media/';
 const DCIM = 'file:///storage/emulated/0/DCIM/';
+const COVERS = 'file:///data/user/0/app/files/covers/';
 
 /* ---------------------------------- 写桩模块 ---------------------------------- */
 const writePkg = (name, filesMap) => {
@@ -73,10 +74,12 @@ writePkg('expo-file-system', {
       }
       store().files.delete(uri);
       store().removedPaths.push(uri);
-      // 父目录的名字表同步摘掉，后面的 prune 才会看到"目录里真的没了"
+      // 父目录的名字表同步摘掉，后面的 prune 才会看到"目录里真的没了"。
+      // 带不带结尾斜杠都试一遍：调用方拼的是 MEDIA_DIR（无斜杠）+ '/' + 文件名
       const parent = uri.slice(0, uri.lastIndexOf('/') + 1);
-      const p = store().files.get(parent);
-      if (p && p.dir) p.names = p.names.filter((n) => n !== uri.slice(parent.length));
+      const name = uri.slice(uri.lastIndexOf('/') + 1);
+      const p = store().files.get(parent) || store().files.get(parent.slice(0, -1));
+      if (p && p.dir) p.names = p.names.filter((n) => n !== name);
     };
     export const makeDirectoryAsync = async (uri) => { store().files.set(uri, { dir: true, names: [] }); };
     export const copyAsync = async ({ from, to }) => { store().files.set(to, { dir: false, size: 1, mtime: 1700000000 }); };
@@ -132,7 +135,7 @@ const copySource = (rel) => {
   return target;
 };
 copySource('src/utils/storagePaths.js');
-copySource('src/utils/media.js');
+const managePath = copySource('src/utils/media.js');
 const mediaSyncPath = copySource('src/utils/mediaSync.js');
 
 /* --------------------------------- 造一份数据 --------------------------------- */
@@ -151,7 +154,7 @@ const logs = [
   { id: 2, title: '断链的分享副本（指纹能对上原片）', localImages: [
     { uri: MEDIA + 'share_b.jpg', filename: 'IMG_2.jpg', size: 222, isVideo: false },
   ] },
-  { id: 3, title: '相册里找不到，只能靠副本显示', localImages: [
+  { id: 3, title: '相册里找不到，只能靠副本显示', coverUrl: COVERS + 'cover_keep.jpg', localImages: [
     { uri: MEDIA + 'share_d.jpg', filename: 'IMG_9.jpg', size: 999, isVideo: false },
   ] },
   { id: 4, title: '谁都没引用的孤儿副本', localImages: [] },
@@ -162,12 +165,31 @@ addFile(MEDIA + 'share_a.jpg', 111);
 addFile(MEDIA + 'share_b.jpg', 222);
 addFile(MEDIA + 'share_c.jpg', 333);   // 孤儿
 addFile(MEDIA + 'share_d.jpg', 999);
-files.get(MEDIA.slice(0, -1)).names = ['share_a.jpg', 'share_b.jpg', 'share_c.jpg', 'share_d.jpg'];
+addFile(MEDIA + 'share_e.jpg', 444);                                        // 还被「添加」页草稿挂着
+addFile(MEDIA + 'share_f.jpg', 555, Math.floor(Date.now() / 1000) - 30);     // 刚导入 30 秒
+files.get(MEDIA.slice(0, -1)).names = [
+  'share_a.jpg', 'share_b.jpg', 'share_c.jpg', 'share_d.jpg', 'share_e.jpg', 'share_f.jpg', 'ghost.jpg',
+];
+// ghost.jpg 出现在目录列表里、但读不到文件信息（模拟权限/系统限制）→ 必须报出来且不删
+// （它不在 files 表里，getInfoAsync 会抛错）
 
-const remaining = () => [...files.keys()].filter((k) => k.startsWith(MEDIA)).map((k) => k.slice(MEDIA.length)).sort();
+// 封面小图：一张记录还在用，两张是孤儿
+addDir(COVERS.slice(0, -1));
+addFile(COVERS + 'cover_keep.jpg', 66);
+addFile(COVERS + 'cover_orphan1.jpg', 77);
+addFile(COVERS + 'cover_orphan2.jpg', 88);
+files.get(COVERS.slice(0, -1)).names = ['cover_keep.jpg', 'cover_orphan1.jpg', 'cover_orphan2.jpg'];
+
+// 直接看目录里的名字表（deleteAsync 会把名字从父目录摘掉），
+// 这样"列表里有、但读不到信息"的 ghost.jpg 也在结果里
+const mediaNames = () => (files.get(MEDIA.slice(0, -1))?.names || []).slice().sort();
+const coverNames = () => (files.get(COVERS.slice(0, -1))?.names || []).slice().sort();
 
 /* ----------------------------------- 跑一遍 ----------------------------------- */
 const { syncMediaFromGallery } = await import(pathToFileURL(mediaSyncPath).href);
+const { setDraftMediaEntries, describeMediaCopiesAsync } = await import(pathToFileURL(managePath).href);
+// 「添加」页表单里还挂着一张（草稿也算"在用"，同步不能删）
+setDraftMediaEntries([{ uri: MEDIA + 'share_e.jpg' }]);
 const report = await syncMediaFromGallery(logs);
 const next = report.logs;
 const entryOf = (id) => next.find((l) => l.id === id).localImages[0];
@@ -182,9 +204,11 @@ if (entryOf(2).assetId !== 'srv-2') fail.push(`记录 2 没有重链到相册原
 if (parse(entryOf(2).uri) !== 'IMG_2.jpg') fail.push(`记录 2 应换成相册原片，实际 ${entryOf(2).uri}`);
 // ④ 相册里找不到的副本必须留着（不然记录就没图可看了）
 if (entryOf(3).uri !== MEDIA + 'share_d.jpg') fail.push('相册里找不到原片时不该改动条目，副本必须留着');
-// ③ 孤儿副本、以及两张刚被原片接管的副本，磁盘上都该没了
-const left = remaining();
-if (left.join(',') !== 'share_d.jpg') fail.push(`media/ 目录最后应只剩 share_d.jpg，实际 ${left.join(',') || '（空）'}`);
+// ③ 孤儿副本、以及两张刚被原片接管的副本，磁盘上都该没了；草稿 / 刚导入 / 读不到的留着
+const left = mediaNames();
+if (left.join(',') !== 'ghost.jpg,share_d.jpg,share_e.jpg,share_f.jpg') {
+  fail.push(`media/ 目录最后应剩 share_d / share_e / share_f / ghost，实际 ${left.join(',') || '（空）'}`);
+}
 if (report.freedCopies !== 2) fail.push(`重链后直接删掉的副本应为 2 个，实际 ${report.freedCopies}`);
 if (report.removedCopies !== 1) fail.push(`孤儿副本应清掉 1 个（share_c），实际 ${report.removedCopies}`);
 if (report.freedBytes !== 333) fail.push(`孤儿副本应释放 333 字节，实际 ${report.freedBytes}`);
@@ -192,10 +216,42 @@ if (report.matched !== 2) fail.push(`重链条数应为 2，实际 ${report.matc
 if (report.unmatched.length !== 0) fail.push('这一份数据里不该有"无法恢复"的记录');
 if (report.permissionDenied) fail.push('桩里相册权限是给的，不该报 permissionDenied');
 
+// ⑤ 剩下的副本要如实分类报出来（这就是"点了同步却说没有多余的"的答案）
+const copiesLeft = report.copiesLeft || {};
+if (copiesLeft.referenced !== 1) fail.push(`应报出 1 个"仍被记录引用"的副本，实际 ${copiesLeft.referenced}`);
+if (copiesLeft.draft !== 1) fail.push(`应报出 1 个"还在添加页草稿里"的副本，实际 ${copiesLeft.draft}`);
+if (copiesLeft.fresh !== 1) fail.push(`应报出 1 个"刚导入不到 5 分钟"的副本，实际 ${copiesLeft.fresh}`);
+if (copiesLeft.unreadable !== 1) fail.push(`应报出 1 个"读不到文件信息"的副本，实际 ${copiesLeft.unreadable}`);
+
+// ⑥ 封面小图：记录还在用的留着，孤儿删掉
+if (report.removedCovers !== 2) fail.push(`孤儿封面应清掉 2 张，实际 ${report.removedCovers}`);
+if (coverNames().join(',') !== 'cover_keep.jpg') {
+  fail.push(`covers/ 最后应只剩被记录引用的那张，实际 ${coverNames().join(',') || '（空）'}`);
+}
+
+// ⑦ 「数据目录」里的副本明细要说清楚每一类各有多少
+const detail = await describeMediaCopiesAsync(logs);
+if (!/记录引用 1/.test(detail) || !/添加页草稿 1/.test(detail) || !/可清理 0/.test(detail)) {
+  fail.push(`副本明细的计数不对：${detail.replace(/\n/g, ' | ')}`);
+}
+if (!/封面小图 covers：共 1 张，其中 0 张没有记录引用/.test(detail)) {
+  fail.push(`副本明细里的封面统计不对：${detail.replace(/\n/g, ' | ')}`);
+}
+if (!/读不到信息 1/.test(detail)) fail.push('副本明细里没有把"读不到文件信息"报出来');
+
+// ⑧ 草稿清掉之后再同步一次：那张副本这时才该被清掉
+setDraftMediaEntries([]);
+const report2 = await syncMediaFromGallery(next);
+if (report2.copiesLeft?.draft !== 0) fail.push('清空草稿后不该再报"草稿里还有副本"');
+if (mediaNames().includes('share_e.jpg')) fail.push('草稿清空后，share_e.jpg 这次同步应当被清掉');
+if (report2.removedCopies !== 1) fail.push(`第二次同步应清掉 1 个（share_e），实际 ${report2.removedCopies}`);
+
 console.log(`重链 ${report.matched} 条；删副本 ${report.freedCopies + report.removedCopies} 个（重链接管 ${report.freedCopies} + 孤儿 ${report.removedCopies}），释放 ${report.freedBytes} 字节`);
-console.log(`media/ 目录还剩：${left.join(', ') || '（空）'}`);
+console.log(`media/ 目录还剩：${left.join(', ') || '（空）'}（记录引用 ${copiesLeft.referenced} / 草稿 ${copiesLeft.draft} / 刚导入 ${copiesLeft.fresh} / 读不到 ${copiesLeft.unreadable}）`);
+console.log(`封面小图：删了 ${report.removedCovers} 张没人引用的，还剩 ${coverNames().join(', ') || '（空）'}`);
+console.log(`第二次同步（草稿已清空）：又清掉 ${report2.removedCopies} 个副本`);
 if (fail.length) {
   console.error('✗ 自检未通过：\n- ' + fail.join('\n- '));
   process.exit(1);
 }
-console.log('✓ 通过：能引用相册的副本 / 指纹能对上的副本 / 没人引用的孤儿副本都会删掉，找不到原片的副本保留');
+console.log('✓ 通过：能引用相册的副本 / 指纹能对上的副本 / 没人引用的孤儿副本（含孤儿封面）都会删掉；找不到原片的、草稿里的、刚导入的、读不到的副本保留并如实报出原因');

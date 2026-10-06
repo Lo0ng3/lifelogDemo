@@ -9,7 +9,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess,
-  pruneOrphanMediaCopies, referencedMediaNames, entriesMediaNames, mediaNameOfUri,
+  pruneOrphanMediaCopies, pruneOrphanCovers, referencedMediaNames, entriesMediaNames, mediaNameOfUri,
 } from './media';
 
 const PAGE_SIZE = 500;
@@ -381,6 +381,7 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
       },
       changed: false, logs, matched: 0, unmatched: [], freedCopies: 0,
       removedCopies: pruned.removed, freedBytes: pruned.freed, mediaScanErrors: pruned.errors,
+      removedCovers: 0, freedCoverBytes: 0, copiesLeft: pruned.kept, samplesLeft: pruned.samples,
     };
   }
 
@@ -438,7 +439,10 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
   // media/ 里还在"的影像都在这里删掉。放在重链之后，是因为只有重链后的记录
   // 才不再指向那些副本——开头那一遍看不到这一步的结果
   const pruned2 = await pruneOrphanMediaCopies(changed ? next : logs)
-    .catch(() => ({ removed: 0, freed: 0, errors: [] }));
+    .catch(() => ({ removed: 0, freed: 0, errors: [], kept: {}, samples: {} }));
+
+  // 封面小图同理：换封面 / 删记录留下的孤儿封面也是"没有记录的图片"，一并清掉
+  const covers = await pruneOrphanCovers(changed ? next : logs).catch(() => ({ removed: 0, freed: 0 }));
 
   return {
     permissionDenied: false,
@@ -450,5 +454,10 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     removedCopies: pruned.removed + pruned2.removed,
     freedBytes: pruned.freed + pruned2.freed,
     mediaScanErrors: [...pruned.errors, ...pruned2.errors],
+    // 还剩哪些副本、为什么留着（界面据此如实报出来，不再只说一句"没有多余的"）
+    copiesLeft: pruned2.kept || {},
+    samplesLeft: pruned2.samples || {},
+    removedCovers: covers.removed,
+    freedCoverBytes: covers.freed,
   };
 };

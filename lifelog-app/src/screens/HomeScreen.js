@@ -29,7 +29,7 @@ import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
 import { describeStorageAsync } from '../utils/storagePaths';
-import { cleanupMediaCaches } from '../utils/media';
+import { cleanupMediaCaches, describeMediaCopiesAsync } from '../utils/media';
 import { shortPlaceName } from '../utils/format';
 import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
@@ -182,10 +182,28 @@ export default function HomeScreen({ navigation }) {
       // 哪怕是 0 条、哪怕读目录失败——不然用户会以为"点了没生效"
       if (report.mediaScanErrors?.length) {
         message += `\n\n⚠️ 影像副本目录没能全部读到：${report.mediaScanErrors.join('；')}`;
-      } else if (report.removedCopies > 0) {
-        const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
+      }
+      const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
+      if (report.removedCopies > 0) {
         message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的影像副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
-      } else {
+      }
+      if (report.removedCovers > 0) {
+        message += `\n已清理 ${report.removedCovers} 张没有记录引用的封面小图。`;
+      }
+      // 没删掉的副本要说明"为什么留着"，否则用户看到的永远是"结果还是有的"
+      const left = report.copiesLeft || {};
+      const leftTotal = (left.referenced || 0) + (left.draft || 0) + (left.fresh || 0) + (left.unreadable || 0);
+      if (leftTotal > 0) {
+        const why = [];
+        if (left.referenced) why.push(`· ${left.referenced} 个仍被记录引用（记录存的就是副本，相册里找不到原片，删了记录就没图看；能找到原片的会在同步时自动换掉）`);
+        if (left.draft) why.push(`· ${left.draft} 个还挂在「添加」页表单里没保存（去那一页删掉或保存后，再同步一次就会清）`);
+        if (left.fresh) why.push(`· ${left.fresh} 个是刚导入不到 5 分钟的，下次同步会再清`);
+        if (left.unreadable) why.push(`· ${left.unreadable} 个读不到文件信息（系统限制，不敢删）`);
+        message += `\n\n影像副本目录还剩 ${leftTotal} 个文件：\n${why.join('\n')}`;
+        const samples = report.samplesLeft?.referenced || [];
+        if (samples.length) message += `\n（例如 ${samples.slice(0, 3).join('、')}）`;
+        message += '\n在「数据目录」里能看到完整明细。';
+      } else if (report.removedCopies === 0 && report.removedCovers === 0) {
         message += '\n\n影像副本目录里没有多余的影像。';
       }
       Alert.alert('同步完成', message);
@@ -225,11 +243,13 @@ export default function HomeScreen({ navigation }) {
     return applied;
   };
 
-  // 数据目录：看副本/封面实际落在哪、各有多少，并现场做一次写入测试
+  // 数据目录：看副本/封面实际落在哪、各有多少（含"为什么还留着"的明细），并现场做一次写入测试
   const handleShowStorage = async () => {
     toggleSidebar(false);
     try {
-      Alert.alert('数据目录', await describeStorageAsync());
+      const storage = await describeStorageAsync();
+      const copies = await describeMediaCopiesAsync(logData).catch(() => '');
+      Alert.alert('数据目录', [storage, copies].filter(Boolean).join('\n\n'));
     } catch (e) {
       Alert.alert('数据目录', e?.message || '读取目录信息失败');
     }
