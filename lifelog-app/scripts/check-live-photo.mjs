@@ -22,7 +22,25 @@ const files = new Map();          // uri → Uint8Array
 const reads = [];                 // { uri, offset, length }
 const writes = [];                // { uri, length }
 let bytesRead = 0;
-globalThis.__rcNewFS = { files, reads, writes, get bytesRead() { return bytesRead; }, addBytesRead: (n) => { bytesRead += n; }, resetReads: () => { reads.length = 0; bytesRead = 0; } };
+// 原生只读区间读的桩：真机上就是 Paths.readFileRange（"r" 打开，相册照片也能读）
+const readRange = (uri, offset, length) => {
+  const f = files.get(uri);
+  if (!f) return new Uint8Array(0);
+  const start = Math.max(0, Math.min(f.length, Math.floor(offset)));
+  const len = Math.max(0, Math.min(f.length - start, Math.floor(length)));
+  const out = f.slice(start, start + len);
+  reads.push({ uri, offset: start, length: out.length });
+  bytesRead += out.length;
+  return out;
+};
+globalThis.__rcNewFS = {
+  files, reads, writes, readRange,
+  get bytesRead() { return bytesRead; },
+  addBytesRead: (n) => { bytesRead += n; },
+  resetReads: () => { reads.length = 0; bytesRead = 0; },
+};
+globalThis.__rcExternalDir = '/storage/emulated/0/Android/data/com.example/files';
+globalThis.__rcReadRange = readRange;
 
 const writePkg = (name, filesMap, exportsMap = null) => {
   const dir = join(scratch, 'node_modules', name);
@@ -100,13 +118,26 @@ writePkg('expo-media-library', {
   '/': 'index.js',
   'index.js': `export const getAssetInfoAsync = async () => null;`,
 });
+// 真机上 Paths 模块存在（外部目录 + 原生删除 + 只读区间读都靠它）；这里给出同样的形状
+writePkg('expo-modules-core', {
+  '/': 'index.js',
+  'index.js': `export const requireOptionalNativeModule = (name) => (name === 'Paths' ? {
+    externalFilesDir: globalThis.__rcExternalDir,
+    deletePath: (uri) => Promise.resolve(globalThis.__rcNativeDelete(uri)),
+    readFileRange: (uri, offset, length) => Promise.resolve(globalThis.__rcReadRange(uri, offset, length)),
+  } : null);`,
+});
 
 /* ------------------------------ 拷源码（本身就是纯 ESM） ------------------------------ */
 const copySource = (rel) => {
+  // 源码是给 metro 看的 ESM-in-.js：复制成 .mjs 并给相对导入补后缀，node 才解析得了
+  const code = readFileSync(join(root, rel), 'utf8')
+    .replace(/from '\.\/([A-Za-z0-9_-]+)'/g, "from './$1.mjs'");
   const target = join(scratch, basename(rel).replace(/\.js$/, '.mjs'));
-  writeFileSync(target, readFileSync(join(root, rel), 'utf8'));
+  writeFileSync(target, code);
   return target;
 };
+copySource('src/utils/storagePaths.js');
 const livePhotoPath = copySource('src/utils/livePhoto.js');
 
 /* ------------------------------- 造一张"动态照片" ------------------------------- */

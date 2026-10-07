@@ -80,6 +80,22 @@ export const writeFileBase64Async = async (dest, base64) => {
   await FileSystem.writeAsStringAsync(dest, base64, { encoding: FileSystem.EncodingType.Base64 });
 };
 
+/* 只读区间读（原生）。实况照片的动效贴在相册原片尾部，只需要读最后一段；
+   但 expo-file-system 的 FileHandle 是用 `RandomAccessFile(file, "rw")` 打开的，
+   相册里的照片 App 没有写权限 → 一 open 就 EACCES（"实况提取一直是 0 个文件"就是这个原因）。
+   所以走原生 `Paths.readFileRange`（"r" 打开）。原生模块不在（iOS / 旧构建）时返回 null，
+   调用方回退到整文件读。 */
+export const readFileRangeAsync = async (uri, offset, length) => {
+  if (!native?.readFileRange) return null;
+  try {
+    const bytes = await native.readFileRange(uri, offset, length);
+    return bytes && bytes.length ? bytes : null;
+  } catch (e) {
+    console.warn('[storage] 区间读失败', uri, e?.message || e);
+    return null;
+  }
+};
+
 // 文件/目录在不在：优先看父目录的名字表（expo-file-system 对**不存在**的沙盒外路径
 // getInfoAsync 会抛错，单靠它分不清"没有"和"读不到"），读不了目录再退回 getInfoAsync
 const pathExistsAsync = async (path) => {
@@ -204,7 +220,9 @@ export const describeStorageAsync = async () => {
   for (const [label, dir] of cacheDirs) {
     try {
       const st = await dirStatsAsync(dir);
-      lines.push(st.files === 0 ? `${label}：暂无` : sizeLine(label, st));
+      lines.push(st.files === 0
+        ? `${label}：暂无${label.includes('motionVideos') ? '（看过实况照片后会生成，进后台会清空）' : ''}`
+        : sizeLine(label, st));
     } catch (e) {
       lines.push(`${label}：读取失败（${e?.message || e}）`);
     }

@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as FileSystemNew from 'expo-file-system';
+import { readFileRangeAsync } from './storagePaths';
 
 const HEADER_BYTES = 512 * 1024; // 头部扫描范围（GCamera XMP 元数据）
 const TAIL_BYTES = 256 * 1024;   // 尾部扫描范围（三星 SEFT / 追加 mp4 的 ftyp）
@@ -150,26 +151,31 @@ const detectQuick = async (uri, size) => {
 };
 
 /* -------- 按区间读文件：只碰尾部窗口，绝不整文件读 --------
-   内嵌的动效永远贴在照片**最后**，而 expo-file-system 新版 API 的 FileHandle 支持
-   设置 offset 再 readBytes，所以从文件尾往里读一个窗口就够了：2MB 起步、不够翻倍、
-   上限 TAIL_CAP。以前这里走 src.arrayBuffer() 整文件读 + 在 JS 里扫全部字节，
-   20~40MB 的大图点一次要等好几秒，打开详情页预热时尤其明显。
+   内嵌的动效永远贴在照片**最后**，从文件尾往里读一个窗口就够了：2MB 起步、不够翻倍、
+   上限 TAIL_CAP。以前走 src.arrayBuffer() 整文件读 + 在 JS 里扫全部字节，20~40MB 的
+   大图点一次要等好几秒（打开详情页预热时尤其明显）。
+
+   读法用原生 `Paths.readFileRange`（只读打开）：**不能用 expo-file-system 的
+   FileHandle** —— 它是 `RandomAccessFile(file, "rw")`，相册里的照片 App 没有写权限，
+   一 open 就 EACCES，表现就是"实况提取一直是 0 个文件、数据目录显示暂无"。
+   原生模块不在（iOS / 旧构建）时退回整文件读：慢，但一定拿得到（1.9.3 之前就是这条路）。
    返回 { bytes, windowStart, size }；读不了返回 null。 */
-const readTailWindow = (uri, want) => {
-  let handle = null;
+const readTailWindow = async (uri, want) => {
+  if (!readFileRangeAsync) return null;
   try {
-    handle = new FileSystemNew.File(uri).open();
-    const size = typeof handle.size === 'number' ? handle.size : 0;
+    const info = await FileSystem.getInfoAsync(uri);
+    const size = info?.exists && typeof info.size === 'number' ? info.size : 0;
     if (size <= 0) return null;
     const len = Math.max(1, Math.min(size, Math.ceil(want)));
     const windowStart = size - len;
-    handle.offset = windowStart;
-    return { bytes: handle.readBytes(len), windowStart, size };
+    const bytes = await readFileRangeAsync(uri, windowStart, len);
+    if (bytes?.length) return { bytes, windowStart, size };
+    // 拿不到原生区间读（旧构建 / iOS）：整文件读兜底，窗口就算整个文件
+    const whole = await new FileSystemNew.File(uri).bytes();
+    return whole?.length ? { bytes: whole, windowStart: 0, size: whole.length } : null;
   } catch (e) {
     console.warn('[livePhoto] 读取文件尾部失败', uri, e?.message || e);
     return null;
-  } finally {
-    try { handle?.close(); } catch {}
   }
 };
 
@@ -188,7 +194,7 @@ const findMotionStart = (win, videoLength) => {
 const detectFull = async (uri) => {
   let want = TAIL_STEP;
   for (;;) {
-    const win = readTailWindow(uri, Math.min(want, TAIL_CAP));
+    const win = await readTailWindow(uri, Math.min(want, TAIL_CAP));
     if (!win) return { live: false, source: 'scan' };
     const start = findLastFtyp(win.bytes, 0);
     if (start > 0) {
@@ -331,7 +337,7 @@ export const extractMotionVideo = async (entry, info) => {
     // 不知道就从 2MB 起步、找不到再翻倍
     let want = info?.videoLength > 0 ? info.videoLength + 64 * 1024 : TAIL_STEP;
     for (;;) {
-      const win = readTailWindow(uri, Math.min(want, TAIL_CAP));
+      const win = await readTailWindow(uri, Math.min(want, TAIL_CAP));
       if (!win) return null;
       const start = findMotionStart(win, info?.videoLength);
       if (start > 0) {

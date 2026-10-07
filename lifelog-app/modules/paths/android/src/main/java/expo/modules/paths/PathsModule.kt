@@ -68,6 +68,29 @@ class PathsModule : Module() {
         if (!target.exists()) true else target.deleteRecursively()
       }.getOrDefault(false)
     }
+
+    /* 只读区间读：实况照片的动效贴在相册原片的尾部，我们只需要读最后那一段，
+       但**不能用 expo-file-system 的 FileHandle** —— 它的实现是
+       `RandomAccessFile(file, "rw")`（见 FileSystemFileHandle.kt），相册里的照片
+       App 根本没有写权限，一 open 就 EACCES，于是"提取一直是 0 个文件"。
+       这里用 "r" 打开，按 offset/length 读一段返回给 JS（失败返回空数组）。 */
+    AsyncFunction("readFileRange") { uri: String, offset: Double, length: Double ->
+      runCatching {
+        val file = toFile(uri)
+        if (!file.isFile) return@runCatching ByteArray(0)
+        val size = file.length()
+        if (size <= 0) return@runCatching ByteArray(0)
+        val start = offset.toLong().coerceIn(0L, size)
+        val len = length.toLong().coerceIn(0L, size - start).toInt()
+        if (len <= 0) return@runCatching ByteArray(0)
+        val out = ByteArray(len)
+        java.io.RandomAccessFile(file, "r").use { raf ->
+          raf.seek(start)
+          raf.readFully(out)
+        }
+        out
+      }.getOrDefault(ByteArray(0))
+    }
   }
 
   private fun externalFilesDir(): String =

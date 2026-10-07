@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Modal, Alert, ActivityIndicator
+  Dimensions, Modal, Alert, ActivityIndicator, Platform, ToastAndroid
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -452,6 +452,10 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
     try {
       const uri = await extractMotionVideo(entry, info);
       if (uri) { setVideoReady(false); setPlayingUri(uri); }
+      else if (Platform.OS === 'android') {
+        // 提取失败别静默：以前失败在这里被吞掉，用户只看到"点了没反应"
+        ToastAndroid.show('实况动效读取失败，先看静帧吧（可在侧边栏「数据目录」查看）', ToastAndroid.LONG);
+      }
     } finally {
       setLoading(false);
     }
