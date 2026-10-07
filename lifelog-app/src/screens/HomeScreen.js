@@ -184,27 +184,36 @@ export default function HomeScreen({ navigation }) {
         message += `\n\n⚠️ 影像副本目录没能全部读到：${report.mediaScanErrors.join('；')}`;
       }
       const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
+      const sizeMB = (b) => (b < 1024 * 1024 ? `${Math.round(b / 1024)} KB` : `${Math.round((b / 1024 / 1024) * 10) / 10} MB`);
       if (report.removedCopies > 0) {
         message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的影像副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
       }
       if (report.removedCovers > 0) {
-        message += `\n已清理 ${report.removedCovers} 张没有记录引用的封面小图。`;
+        message += `\n已清理 ${report.removedCovers} 张没有记录引用的封面小图（${sizeMB(report.freedCoverBytes || 0)}）。`;
       }
       // 没删掉的副本要说明"为什么留着"，否则用户看到的永远是"结果还是有的"
       const left = report.copiesLeft || {};
+      const leftBytes = report.copiesLeftBytes || {};
       const leftTotal = (left.referenced || 0) + (left.draft || 0) + (left.fresh || 0) + (left.unreadable || 0);
       if (leftTotal > 0) {
         const why = [];
-        if (left.referenced) why.push(`· ${left.referenced} 个仍被记录引用（记录存的就是副本，相册里找不到原片，删了记录就没图看；能找到原片的会在同步时自动换掉）`);
-        if (left.draft) why.push(`· ${left.draft} 个还挂在「添加」页表单里没保存（去那一页删掉或保存后，再同步一次就会清）`);
-        if (left.fresh) why.push(`· ${left.fresh} 个是刚导入不到 5 分钟的，下次同步会再清`);
+        if (left.referenced) why.push(`· ${left.referenced} 个（${sizeMB(leftBytes.referenced || 0)}）仍被记录引用：记录存的就是副本、相册里找不到原片，删了记录就没图看；能找到原片的同步时会自动换掉`);
+        if (left.draft) why.push(`· ${left.draft} 个（${sizeMB(leftBytes.draft || 0)}）还挂在「添加」页表单里没保存：去那一页删掉或保存后，再同步一次就会清`);
+        if (left.fresh) why.push(`· ${left.fresh} 个（${sizeMB(leftBytes.fresh || 0)}）是刚导入不到 5 分钟的，下次同步会再清`);
         if (left.unreadable) why.push(`· ${left.unreadable} 个读不到文件信息（系统限制，不敢删）`);
         message += `\n\n影像副本目录还剩 ${leftTotal} 个文件：\n${why.join('\n')}`;
-        const samples = report.samplesLeft?.referenced || [];
-        if (samples.length) message += `\n（例如 ${samples.slice(0, 3).join('、')}）`;
-        message += '\n在「数据目录」里能看到完整明细。';
+        message += '\n数量与大小在「数据目录」里也能看到。';
       } else if (report.removedCopies === 0 && report.removedCovers === 0) {
         message += '\n\n影像副本目录里没有多余的影像。';
+      }
+      // 确实没人引用、却删不掉的：说清楚有多少、多大（正常不该出现，出现了就是系统层面拒绝删除）
+      const failed = report.failedToDelete;
+      if (failed?.count) {
+        message += `\n\n⚠️ 有 ${failed.count} 个（${sizeMB(failed.bytes || 0)}）没有记录引用的副本没能删掉`
+          + (failed.reasons?.length ? `：${failed.reasons.join('；')}。` : '。');
+      }
+      if (report.failedCovers > 0) {
+        message += `\n⚠️ 另有 ${report.failedCovers} 张没有引用的封面小图没能删掉。`;
       }
       Alert.alert('同步完成', message);
     } catch (e) {

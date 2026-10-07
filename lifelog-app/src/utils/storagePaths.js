@@ -80,6 +80,52 @@ export const writeFileBase64Async = async (dest, base64) => {
   await FileSystem.writeAsStringAsync(dest, base64, { encoding: FileSystem.EncodingType.Base64 });
 };
 
+// 文件/目录在不在：优先看父目录的名字表（expo-file-system 对**不存在**的沙盒外路径
+// getInfoAsync 会抛错，单靠它分不清"没有"和"读不到"），读不了目录再退回 getInfoAsync
+const pathExistsAsync = async (path) => {
+  const cut = path.lastIndexOf('/');
+  const parent = path.slice(0, cut);
+  const name = path.slice(cut + 1);
+  try {
+    const names = await FileSystem.readDirectoryAsync(parent);
+    return names.includes(name);
+  } catch {
+    try {
+      return !!(await FileSystem.getInfoAsync(path)).exists;
+    } catch {
+      return true;   // 拿不准就当还在（宁可不报"删掉了"）
+    }
+  }
+};
+
+/* 删除 App 私有目录里的文件 / 目录，返回 { ok, error }。
+ *
+ * 为什么不能只用 FileSystem.deleteAsync：它删之前会检查 `Uri.withAppendedPath(uri, "..")`
+ * 的写权限（见 expo-file-system 的 legacy deleteAsync），而给一个**文件**路径拼上 ".."
+ * 之后 File.canWrite() 的 stat 直接失败 —— 于是 Android/data 里的文件永远报
+ * "Location ... isn't deletable."。用户看到的就是"同步说清理过了，文件还在"。
+ * 所以这里优先走原生 Paths.deletePath（java.io.File.deleteRecursively），
+ * 原生模块不在（iOS / 老构建）或失败时才退回 expo-file-system，最后按目录名字表复核。 */
+export const deletePathAsync = async (path) => {
+  let error = null;
+  if (native?.deletePath) {
+    try {
+      const done = await native.deletePath(path);
+      if (done && !(await pathExistsAsync(path))) return { ok: true, error: null };
+      if (!done) error = '原生删除返回失败';
+    } catch (e) {
+      error = e?.message || String(e);
+    }
+  }
+  try {
+    await FileSystem.deleteAsync(path, { idempotent: true });
+  } catch (e) {
+    error = error || e?.message || String(e);
+  }
+  if (!(await pathExistsAsync(path))) return { ok: true, error: null };
+  return { ok: false, error: error || '文件还在（删除没有生效）' };
+};
+
 // 目录体积：递归统计文件数与字节数。目录不存在/读不了都返回 0，不抛错。
 // expo-file-system 的 getInfoAsync 对**不存在**的沙盒外路径会先抛权限错，
 // 所以每一层都要自己吞异常；maxEntries 兜底，避免缓存目录里几万个文件把诊断卡住
@@ -193,7 +239,8 @@ export const describeStorageAsync = async () => {
   try {
     await writeFileBase64Async(probe, 'b2s=');   // "ok"
     const st = await FileSystem.getInfoAsync(probe);
-    await FileSystem.deleteAsync(probe, { idempotent: true }).catch(() => {});
+    // 探针也在 Android/data 里，删除同样得走原生（见 deletePathAsync 的说明）
+    await deletePathAsync(probe);
     lines.push(`写入测试：${st.exists ? '通过' : '失败（文件没写出来）'}`);
   } catch (e) {
     lines.push(`写入测试：失败（${e?.message || e}）`);

@@ -15,9 +15,9 @@
 // 2) 标点用内联 SVG 画，不依赖任何外部 CSS 类，避免个别 WebView 上
 //    transform/border-radius 组合渲染异常导致「标点不见了」；
 // 3) 控制条只保留两组小控件：右下角「轨迹 / 标点」两个小胶囊 + 右上角缩放/全览/全屏。
-//    点开「轨迹」会在上面再弹一排「飞机 / 火车 / 汽车 / 轮船」多选胶囊，用来筛选
-//    显示哪几类出行轨迹；这些胶囊是跑道型，命中区按跑道形状判（见 insidePill），
-//    点圆角外面那块不算点到按钮；
+//    「轨迹」只负责展开 / 收起上面那排「飞机 / 火车 / 汽车 / 轮船」多选胶囊，
+//    轨迹本身的开关就在这四类里（四类全关 = 不画轨迹）。这些胶囊是跑道型，
+//    命中区按跑道形状判（见 insidePill），点圆角外面那块不算点到按钮；
 // 4) 点标点 = 地图飞到该点并放大 + 弹出内容卡片（卡片里可跳详情）；
 // 5) 同一个坐标上的多条记录只画一个标点，卡片里左右切换着看，不再叠成一摞谁也点不准的针；
 //    地名相同但坐标有差异的地点也并成一根针（旅票的出发地/目的地一起算），
@@ -178,7 +178,7 @@ export function buildMapHtml({
           .zoomer button svg { width: 15px; height: 15px; display: block; margin: 0 auto; }
           .zoomer button:active { background: ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}; }
 
-          /* 右下角是一列：上面是「轨迹」开着时才出现的出行方式多选，下面是两个开关。
+          /* 右下角是一列：上面是「轨迹」点开后出现的出行方式多选，下面是两个开关。
              两个开关各自独立成胶囊，行内 gap 6px 就够；列间距留 8px，避免上下两排的
              命中矩形贴在一起 */
           .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex;
@@ -197,6 +197,8 @@ export function buildMapHtml({
           .tool svg { width: 14px; height: 14px; display: block; }
           .tool.off { opacity: 0.5; }
           .tool.on { background: #0A84FF; border-color: #0A84FF; color: #FFF; }
+          /* 筛选那一排展开时给「轨迹」加一圈浅蓝，一眼能看出它现在是展开态 */
+          .tool.opened { box-shadow: 0 0 0 2px rgba(10,132,255,0.35), 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); }
           /* 按下反馈用整块缩放：形状跟着胶囊走，不会像系统 tap-highlight 那样露出一块矩形 */
           .tool:active { transform: scale(0.94); }
           .tool:focus { outline: none; }
@@ -968,7 +970,7 @@ export function buildMapHtml({
           }
           function drawTraj() {
               trajLayer.clear();
-              if (!trajOn) return;
+              if (!trajFilterOn()) return;   // 四类全关 = 整层轨迹关掉
               GROUPS.forEach(function (g) {
                   if (g.onLoc) return;
                   if (!groupShownInTraj(g)) return;    // 被出行方式筛选关掉的类型不画点
@@ -1012,15 +1014,13 @@ export function buildMapHtml({
           }
           function syncHints() {
               var any = POINTS.length > 0 || SEGS.length > 0;
-              var trajVisible = trajOn && trajFilterOn();
+              var trajVisible = trajFilterOn();   // 四类里有开着的就在画
               var locVisible = locOn && GROUPS.some(function (g) { return g.onLoc; });
               if (!any) {
                   showHint('当前筛选下没有可定位的印记<br/><span style="font-size:11.5px">在「地点」或「旅票」里选一个地名即可标点</span>');
               } else if (!locVisible && !trajVisible) {
-                  // 轨迹开着但四种出行方式全被点掉了：说清楚在哪儿能打开，别让人以为坏了
-                  showHint(trajOn
-                      ? '出行轨迹：四种出行方式都关掉了<br/><span style="font-size:11.5px">点右下角「轨迹」上面那排小胶囊可以重新打开</span>'
-                      : '标点与轨迹都已关闭');
+                  // 四种出行方式全被点掉了：说清楚在哪儿能打开，别让人以为坏了
+                  showHint('出行轨迹：四种出行方式都关掉了<br/><span style="font-size:11.5px">点右下角「轨迹」展开那排小胶囊，把要看的方式点开</span>');
               } else {
                   hideHint();
               }
@@ -1036,7 +1036,7 @@ export function buildMapHtml({
           function fitAll() {
               var lls = [];
               if (locOn) GROUPS.forEach(function (g) { if (g.onLoc) lls.push({ lat: g.lat, lng: g.lng }); });
-              if (trajOn) {
+              if (trajFilterOn()) {
                   GROUPS.forEach(function (g) {
                       if (!g.onLoc && groupShownInTraj(g)) lls.push({ lat: g.lat, lng: g.lng });
                   });
@@ -1052,18 +1052,19 @@ export function buildMapHtml({
           }
 
           var locLayer = null, trajLayer = null;
-          var trajOn = true, locOn = true;
+          var locOn = true;   // 轨迹那一层没有独立开关了，看四种出行方式里有没有开着的
 
-          /* ---------------- 出行方式筛选（轨迹开关的二级开关） ----------------
-             点开「轨迹」后出现的一排多选：飞机 / 火车 / 汽车 / 轮船（默认四类全开）。
-             关掉哪一类，那一类的轨迹弧线和起终点标点就都不画；多选，任意组合。
-             subType 缺失的老数据当作"要显示"，不会被筛掉。 */
+          /* ---------------- 出行方式（轨迹的开关就藏在这四类里） ----------------
+             「轨迹」按钮只负责把这一排展开 / 收起，本身不再开 / 关轨迹；
+             画不画轨迹完全看这四类：飞机 / 火车 / 汽车 / 轮船（默认四类全开）。
+             关掉哪一类，那一类的轨迹弧线和起终点就都不画；多选，任意组合，
+             四类全关就等于整层轨迹关掉。subType 缺失的老数据当作"要显示"。 */
           var TRAJ_TYPES = ['flight', 'train', 'bus', 'ship'];
           // 筛选胶囊上的叫法（和按钮文案一致；TYPE_LABELS 里是"机票/火车票"这种记录类型名）
           var TRAJ_LABELS = { flight: '飞机', train: '火车', bus: '汽车', ship: '轮船' };
           var trajFilter = { flight: true, train: true, bus: true, ship: true };
-          // 刚进地图时先不显示那排筛选（默认四类全开时它没什么信息量，也挡地图）；
-          // 用户点过「轨迹」之后才跟着轨迹开关一起显示
+          // 刚进地图时先不显示那排（四类全开时它没什么信息量，也挡地图）：
+          // 点一下「轨迹」把它叫出来，再点一下收起
           var trajFilterOpened = false;
           function trajTypeOn(t) { return !t || trajFilter[t] !== false; }
           function trajFilterOn() {
@@ -1075,13 +1076,18 @@ export function buildMapHtml({
           }
           function syncTrajFilter() {
               var box = $('trajFilter');
-              if (box) box.style.display = (trajOn && trajFilterOpened) ? 'flex' : 'none';
+              if (box) box.style.display = trajFilterOpened ? 'flex' : 'none';
               TRAJ_TYPES.forEach(function (t) {
                   var b = $('tf_' + t);
                   if (!b) return;
                   var on = !!trajFilter[t];
                   b.className = 'tf ' + (on ? 'on' : 'off');
               });
+              // 「轨迹」按钮的状态 = 这一层现在有没有内容；展开时再加一圈浅蓝
+              var btn = $('tTraj');
+              if (btn) {
+                  btn.className = 'tool ' + (trajFilterOn() ? 'on' : 'off') + (trajFilterOpened ? ' opened' : '');
+              }
           }
 
           function setToggle(btn, on) {
@@ -1164,21 +1170,14 @@ export function buildMapHtml({
               Engine.onViewEnd(function () { safe(function () { Engine.prefetch(); }); });
 
               // 控件先绑定、再画数据：就算后面绘图出问题，缩放/开关也一定是活的
-              var btnTraj = $('tTraj'), btnLoc = $('tLoc');
-              setToggle(btnTraj, trajOn);
+              var btnLoc = $('tLoc');
               setToggle(btnLoc, locOn);
               syncTrajFilter();
+              // 「轨迹」只管展开 / 收起出行方式那一排：画不画轨迹全看那四类（见上面的说明）
               onPill('tTraj', function () {
-                  // 第一次点：只把那排出行方式筛选叫出来（轨迹不动），之后才是开关
-                  if (!trajFilterOpened) {
-                      trajFilterOpened = true;
-                      syncTrajFilter();
-                      toast('已展开出行方式筛选，再点「轨迹」可开 / 关');
-                      return;
-                  }
-                  trajOn = !trajOn; setToggle(btnTraj, trajOn);
+                  trajFilterOpened = !trajFilterOpened;
                   syncTrajFilter();
-                  drawTraj(); syncHints(); toast('出行轨迹：' + (trajOn ? '开' : '关'));
+                  toast(trajFilterOpened ? '选择要显示的出行方式' : '已收起出行方式筛选');
               });
               onPill('tLoc', function () {
                   locOn = !locOn; setToggle(btnLoc, locOn);

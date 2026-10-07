@@ -23,13 +23,20 @@ const files = new Map();
 const removedPaths = [];
 globalThis.__rcFS = { files, removedPaths };
 globalThis.__rcAssets = [];
+globalThis.__rcExternalDir = '/storage/emulated/0/Android/data/com.example/files';
 
 const addDir = (path, names = []) => files.set(path, { dir: true, names });
 const addFile = (path, size, mtime = 1700000000) => files.set(path, { dir: false, size, mtime });
 
-const MEDIA = 'file:///data/user/0/app/files/media/';
+// 真机上副本 / 封面落在应用专属外部目录（Android/data）——这一条是这次的关键：
+// expo-file-system 的 deleteAsync 对**文件**拼 "<路径>/.." 判权限，必然失败，
+// 只有原生 File API 删得掉。所以桩里也要按这个真实布局来。
+const APP_ROOT = 'file:///storage/emulated/0/Android/data/com.example/files/';
+const INTERNAL_ROOT = 'file:///data/user/0/com.example/files/';
+const MEDIA = `${APP_ROOT}media/`;
+const COVERS = `${APP_ROOT}covers/`;
+const LEGACY_MEDIA = `${INTERNAL_ROOT}media/`;    // 1.8.2 之前用的内部目录，也要一起扫
 const DCIM = 'file:///storage/emulated/0/DCIM/';
-const COVERS = 'file:///data/user/0/app/files/covers/';
 
 /* ---------------------------------- 写桩模块 ---------------------------------- */
 const writePkg = (name, filesMap) => {
@@ -52,8 +59,8 @@ writePkg('expo-file-system', {
   '/': 'legacy.js',
   'legacy.js': `
     const store = () => globalThis.__rcFS;
-    export const documentDirectory = 'file:///data/user/0/app/files/';
-    export const cacheDirectory = 'file:///data/user/0/app/cache/';
+    export const documentDirectory = 'file:///data/user/0/com.example/files/';
+    export const cacheDirectory = 'file:///data/user/0/com.example/cache/';
     export const EncodingType = { Base64: 'base64' };
     // 真机上沙盒外的**不存在**路径 getInfoAsync 会抛权限错，这里保持一致
     export const getInfoAsync = async (uri) => {
@@ -66,7 +73,7 @@ writePkg('expo-file-system', {
       if (!f || !f.dir) throw new Error("Location '" + dir + "' isn't readable.");
       return f.names.slice();
     };
-    export const deleteAsync = async (uri) => {
+    const deleteReally = async (uri) => {
       const f = store().files.get(uri);
       if (f && f.dir) {
         const prefix = uri + '/';
@@ -81,6 +88,17 @@ writePkg('expo-file-system', {
       const p = store().files.get(parent) || store().files.get(parent.slice(0, -1));
       if (p && p.dir) p.names = p.names.filter((n) => n !== name);
     };
+    // 忠实复刻真机上的行为：deleteAsync 删之前会检查 "<uri>/.." 的写权限，给**文件**
+    // 路径拼上 ".." 之后 stat 直接失败 → Android/data（外部目录）里的文件永远报
+    // "isn't deletable"。内部目录（前缀判定）不受影响，所以内部的删除是好的。
+    export const deleteAsync = async (uri) => {
+      if (!uri.startsWith('file:///data/user/0/')) {
+        throw new Error("Location '" + uri + "' isn't deletable.");
+      }
+      return await deleteReally(uri);
+    };
+    // 原生 Paths.deletePath 的桩：直接删（真机上就是 java.io.File.deleteRecursively）
+    globalThis.__rcNativeDelete = deleteReally;
     export const makeDirectoryAsync = async (uri) => { store().files.set(uri, { dir: true, names: [] }); };
     export const copyAsync = async ({ from, to }) => { store().files.set(to, { dir: false, size: 1, mtime: 1700000000 }); };
     export const writeAsStringAsync = async () => {};
@@ -104,7 +122,11 @@ writePkg('expo-media-library', {
 
 writePkg('expo-modules-core', {
   '/': 'index.js',
-  'index.js': `export const requireOptionalNativeModule = () => null;`,
+  // 真机上 Paths 模块存在（外部目录 + 原生删除都是靠它）；这里给出同样的形状
+  'index.js': `export const requireOptionalNativeModule = (name) => (name === 'Paths' ? {
+    externalFilesDir: globalThis.__rcExternalDir,
+    deletePath: (uri) => Promise.resolve(globalThis.__rcNativeDelete(uri)),
+  } : null);`,
 });
 writePkg('expo-image', {
   '/': 'index.js',
@@ -173,6 +195,11 @@ files.get(MEDIA.slice(0, -1)).names = [
 // ghost.jpg 出现在目录列表里、但读不到文件信息（模拟权限/系统限制）→ 必须报出来且不删
 // （它不在 files 表里，getInfoAsync 会抛错）
 
+// 1.8.2 之前落在内部目录里的老副本：也要一起扫、一起清（内部目录 expo 的删除是好的）
+addDir(LEGACY_MEDIA.slice(0, -1));
+addFile(LEGACY_MEDIA + 'legacy_orphan.jpg', 321);
+files.get(LEGACY_MEDIA.slice(0, -1)).names = ['legacy_orphan.jpg'];
+
 // 封面小图：一张记录还在用，两张是孤儿
 addDir(COVERS.slice(0, -1));
 addFile(COVERS + 'cover_keep.jpg', 66);
@@ -184,6 +211,7 @@ files.get(COVERS.slice(0, -1)).names = ['cover_keep.jpg', 'cover_orphan1.jpg', '
 // 这样"列表里有、但读不到信息"的 ghost.jpg 也在结果里
 const mediaNames = () => (files.get(MEDIA.slice(0, -1))?.names || []).slice().sort();
 const coverNames = () => (files.get(COVERS.slice(0, -1))?.names || []).slice().sort();
+const legacyNames = () => (files.get(LEGACY_MEDIA.slice(0, -1))?.names || []).slice().sort();
 
 /* ----------------------------------- 跑一遍 ----------------------------------- */
 const { syncMediaFromGallery } = await import(pathToFileURL(mediaSyncPath).href);
@@ -210,8 +238,14 @@ if (left.join(',') !== 'ghost.jpg,share_d.jpg,share_e.jpg,share_f.jpg') {
   fail.push(`media/ 目录最后应剩 share_d / share_e / share_f / ghost，实际 ${left.join(',') || '（空）'}`);
 }
 if (report.freedCopies !== 2) fail.push(`重链后直接删掉的副本应为 2 个，实际 ${report.freedCopies}`);
-if (report.removedCopies !== 1) fail.push(`孤儿副本应清掉 1 个（share_c），实际 ${report.removedCopies}`);
-if (report.freedBytes !== 333) fail.push(`孤儿副本应释放 333 字节，实际 ${report.freedBytes}`);
+// 孤儿副本：外部目录里的 share_c + 内部老目录里的 legacy_orphan，两个都要清掉
+if (report.removedCopies !== 2) fail.push(`孤儿副本应清掉 2 个（share_c + legacy_orphan），实际 ${report.removedCopies}`);
+if (report.freedBytes !== 333 + 321) fail.push(`孤儿副本应释放 ${333 + 321} 字节，实际 ${report.freedBytes}`);
+// 关键回归：外部目录（Android/data）里的文件只能用原生删除，走 expo 的 deleteAsync 必失败
+if (legacyNames().length !== 0) fail.push(`内部老目录里的孤儿副本应当被清掉，实际还剩 ${legacyNames().join(',')}`);
+if (report.failedToDelete?.count) {
+  fail.push(`不该有删不掉的副本，实际 ${report.failedToDelete.count} 个：${(report.failedToDelete.reasons || []).join('；')}`);
+}
 if (report.matched !== 2) fail.push(`重链条数应为 2，实际 ${report.matched}`);
 if (report.unmatched.length !== 0) fail.push('这一份数据里不该有"无法恢复"的记录');
 if (report.permissionDenied) fail.push('桩里相册权限是给的，不该报 permissionDenied');
@@ -250,6 +284,7 @@ console.log(`重链 ${report.matched} 条；删副本 ${report.freedCopies + rep
 console.log(`media/ 目录还剩：${left.join(', ') || '（空）'}（记录引用 ${copiesLeft.referenced} / 草稿 ${copiesLeft.draft} / 刚导入 ${copiesLeft.fresh} / 读不到 ${copiesLeft.unreadable}）`);
 console.log(`封面小图：删了 ${report.removedCovers} 张没人引用的，还剩 ${coverNames().join(', ') || '（空）'}`);
 console.log(`第二次同步（草稿已清空）：又清掉 ${report2.removedCopies} 个副本`);
+console.log('Android/data 的删除回归：桩里 expo 的 deleteAsync 对文件必然失败，以上清理全部走原生删除才可能通过');
 if (fail.length) {
   console.error('✗ 自检未通过：\n- ' + fail.join('\n- '));
   process.exit(1);

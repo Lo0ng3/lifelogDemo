@@ -7,7 +7,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { Image as RNImage } from 'react-native';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync } from './storagePaths';
+import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync, deletePathAsync } from './storagePaths';
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -385,6 +385,14 @@ export const entriesMediaNames = (entries = []) => {
 // 文件路径的 basename（去掉 ? 查询串），用于按文件名比对
 export const mediaNameOfUri = (uri) => String(uri || '').split('?')[0].split('/').pop();
 
+// 删除失败的原因给大家看的一句人话：expo-file-system 那两句经典报错（只出现在
+// Android/data 这类目录上）直接翻译成"系统拒绝了删除"，其余去掉路径、截断
+const shortDeleteError = (raw) => {
+  const s = String(raw || '');
+  if (/isn't deletable|isn't writable/i.test(s)) return '系统拒绝了删除（App 私有外部目录的权限限制）';
+  return s.replace(/Location '[^']*'/g, '文件').slice(0, 80) || '删除失败';
+};
+
 /* 副本目录里每个文件的"去向"分类。分类本身就是给用户看的答案：
    为什么点了同步还有文件留着？是还没人在用（马上删），还是真的有人还在用。
      referenced 记录里还挂着它（相册里找不到原片，删了记录就没图看）
@@ -392,7 +400,6 @@ export const mediaNameOfUri = (uri) => String(uri || '').split('?')[0].split('/'
      fresh      刚导入不到 5 分钟（可能马上要保存，这次先不动）
      unreadable 连文件信息都读不到（权限 / 系统限制），不敢删
      orphan     没有任何引用 —— 同步时删掉的就是这一类 */
-const SAMPLE_LIMIT = 4;
 export const classifyMediaCopies = async (logs = []) => {
   const referenced = referencedMediaNames(logs);
 
@@ -416,23 +423,32 @@ export const classifyMediaCopies = async (logs = []) => {
     }
     for (const name of names) {
       if (name.startsWith('.')) continue;   // .write-test 之类的探针不碰
-      if (referenced.has(name)) { referencedNames.push(name); continue; }
-      if (draftMediaNames.has(name)) { draftNames.push(name); continue; }
       const path = `${dir}/${name}`;
       let info = null;
+      let statError = null;
       try {
         info = await FileSystem.getInfoAsync(path);
       } catch (e) {
-        unreadable.push({ name, error: e?.message || String(e) });
-        continue;
+        statError = e?.message || String(e);
       }
+      const item = {
+        name,
+        dir,
+        path,
+        size: typeof info?.size === 'number' ? info.size : 0,
+        error: statError,
+      };
+      if (referenced.has(name)) { referencedNames.push(item); continue; }
+      if (draftMediaNames.has(name)) { draftNames.push(item); continue; }
+      if (statError) { unreadable.push(item); continue; }
       if (!info?.exists) continue;          // 已经不在了，不用管
       // modificationTime 单位是秒；读不到时间戳的平台直接跳过，宁可不删
       const mtime = typeof info.modificationTime === 'number' ? info.modificationTime * 1000 : 0;
-      if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) { freshNames.push(name); continue; }
-      orphans.push({ dir, name, path, size: typeof info.size === 'number' ? info.size : 0 });
+      if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) { freshNames.push(item); continue; }
+      orphans.push(item);
     }
   }
+  const bytes = (list) => list.reduce((sum, it) => sum + (it.size || 0), 0);
   return {
     referenced: referencedNames,
     draft: draftNames,
@@ -441,6 +457,14 @@ export const classifyMediaCopies = async (logs = []) => {
     orphans,
     errors,
     total: referencedNames.length + draftNames.length + freshNames.length + unreadable.length + orphans.length,
+    bytes: {
+      referenced: bytes(referencedNames),
+      draft: bytes(draftNames),
+      fresh: bytes(freshNames),
+      unreadable: bytes(unreadable),
+      orphan: bytes(orphans),
+      total: bytes(referencedNames) + bytes(draftNames) + bytes(freshNames) + bytes(unreadable) + bytes(orphans),
+    },
   };
 };
 
@@ -455,13 +479,19 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
   const c = await classifyMediaCopies(logs);
   let removed = 0;
   let freed = 0;
+  const deleteReasons = [];
   for (const f of c.orphans) {
-    try {
-      await FileSystem.deleteAsync(f.path, { idempotent: true });
+    const res = await deletePathAsync(f.path);
+    if (res.ok) {
       removed++;
       freed += f.size;
-    } catch {}
+    } else {
+      // 删不掉要说出原因（以前这里静默吞掉，才出现"数据目录说有可清理的、同步却说没有多余的"）。
+      // 原因里带上完整路径会连文件名一起露出来，只留一句短的
+      deleteReasons.push(shortDeleteError(res.error));
+    }
   }
+  const failedBytes = c.orphans.reduce((sum, f) => sum + (f.size || 0), 0) - freed;
   return {
     removed,
     freed,
@@ -474,10 +504,17 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
       fresh: c.fresh.length,
       unreadable: c.unreadable.length,
     },
-    samples: {
-      referenced: c.referenced.slice(0, SAMPLE_LIMIT),
-      draft: c.draft.slice(0, SAMPLE_LIMIT),
-      fresh: c.fresh.slice(0, SAMPLE_LIMIT),
+    keptBytes: {
+      referenced: c.bytes.referenced,
+      draft: c.bytes.draft,
+      fresh: c.bytes.fresh,
+      unreadable: c.bytes.unreadable,
+    },
+    // 确实没有引用、但这次没删掉的（删除失败）：只报数量、大小和一句原因，不列文件名
+    failedToDelete: {
+      count: c.orphans.length - removed,
+      bytes: failedBytes,
+      reasons: [...new Set(deleteReasons)],
     },
   };
 };
@@ -501,11 +538,12 @@ export const pruneOrphanCovers = async (logs = [], { dryRun = false } = {}) => {
   let freed = 0;
   let scanned = 0;
   let orphans = 0;
+  let failed = 0;
   let names;
   try {
     names = await FileSystem.readDirectoryAsync(COVERS_DIR);
   } catch {
-    return { removed: 0, freed: 0, scanned: 0, orphans: 0, errors: [] };
+    return { removed: 0, freed: 0, scanned: 0, orphans: 0, failed: 0, errors: [] };
   }
   for (const name of names) {
     if (name.startsWith('.')) continue;
@@ -519,37 +557,38 @@ export const pruneOrphanCovers = async (logs = [], { dryRun = false } = {}) => {
       if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) continue;
       orphans++;
       if (dryRun) continue;
-      await FileSystem.deleteAsync(path, { idempotent: true });
-      removed++;
-      if (typeof info.size === 'number') freed += info.size;
+      // 和影像副本一样：Android/data 里的文件只能用原生删除（见 deletePathAsync）
+      const res = await deletePathAsync(path);
+      if (res.ok) {
+        removed++;
+        if (typeof info.size === 'number') freed += info.size;
+      } else {
+        failed++;
+      }
     } catch {}
   }
-  return { removed, freed, scanned, orphans, errors: [] };
+  return { removed, freed, scanned, orphans, failed, errors: [] };
 };
 
 // 「数据目录」里的副本明细：按"为什么留着"分开报，一眼能看出是不是真删漏了
 export const describeMediaCopiesAsync = async (logs = []) => {
   const c = await classifyMediaCopies(logs);
   const covers = await pruneOrphanCovers(logs, { dryRun: true });
+  const mb = (b) => (b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(2)} MB`);
   const lines = [];
   if (c.total === 0) {
     lines.push('影像副本 media：空的');
   } else {
     lines.push(
-      `影像副本 media：共 ${c.total} 个 —— 记录引用 ${c.referenced.length}、`
-      + `添加页草稿 ${c.draft.length}、刚导入不到 5 分钟 ${c.fresh.length}、`
-      + `读不到信息 ${c.unreadable.length}、可清理 ${c.orphans.length}`
+      `影像副本 media：共 ${c.total} 个，${mb(c.bytes.total)} —— `
+      + `记录引用 ${c.referenced.length} 个（${mb(c.bytes.referenced)}）、`
+      + `添加页草稿 ${c.draft.length} 个（${mb(c.bytes.draft)}）、`
+      + `刚导入不到 5 分钟 ${c.fresh.length} 个（${mb(c.bytes.fresh)}）、`
+      + `读不到信息 ${c.unreadable.length} 个、`
+      + `可清理 ${c.orphans.length} 个（${mb(c.bytes.orphan)}）`
     );
-    const sample = (names, label) => {
-      if (names.length) lines.push(`  · ${label}：${names.slice(0, SAMPLE_LIMIT).join('、')}${names.length > SAMPLE_LIMIT ? ' …' : ''}`);
-    };
-    sample(c.orphans.map(o => o.name), '可清理');
-    sample(c.referenced, '仍被记录引用');
-    sample(c.draft, '还在添加页草稿里');
-    sample(c.fresh, '刚导入');
-    if (c.unreadable.length) {
-      lines.push(`  · 读不到：${c.unreadable.slice(0, 2).map(u => `${u.name}（${u.error}）`).join('；')}`);
-    }
+    // 只报数量与大小，不列文件名（用户不需要、也容易看成一堆陌生名字）
+    if (c.unreadable.length) lines.push(`  · 有 ${c.unreadable.length} 个文件读不到信息（系统限制，没法判断大小、不会删）`);
     if (c.errors.length) lines.push(`  · 目录读失败：${c.errors.join('；')}`);
   }
   if (covers.scanned > 0) {

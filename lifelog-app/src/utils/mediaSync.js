@@ -11,6 +11,7 @@ import {
   normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess,
   pruneOrphanMediaCopies, pruneOrphanCovers, referencedMediaNames, entriesMediaNames, mediaNameOfUri,
 } from './media';
+import { deletePathAsync } from './storagePaths';
 
 const PAGE_SIZE = 500;
 // 单个条目最多核对的候选数量：文件大小要逐个 getAssetInfoAsync 读，候选太多时截断避免卡死。
@@ -381,7 +382,8 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
       },
       changed: false, logs, matched: 0, unmatched: [], freedCopies: 0,
       removedCopies: pruned.removed, freedBytes: pruned.freed, mediaScanErrors: pruned.errors,
-      removedCovers: 0, freedCoverBytes: 0, copiesLeft: pruned.kept, samplesLeft: pruned.samples,
+      removedCovers: 0, freedCoverBytes: 0,
+      copiesLeft: pruned.kept, copiesLeftBytes: pruned.keptBytes, failedToDelete: pruned.failedToDelete,
     };
   }
 
@@ -421,25 +423,22 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
   }
 
   // 被引用替换掉的本地副本删掉（选图器缓存 / 旧迁移副本，已由相册原片接管）。
-  // 删之前再看一眼重链后的记录：同一个文件还被别的条目挂着就不能删
+  // 删之前再看一眼重链后的记录：同一个文件还被别的条目挂着就不能删。
+  // 删除必须走 deletePathAsync（原生 File API）——expo-file-system 的 deleteAsync
+  // 对 Android/data 里的文件一定会报 "isn't deletable"（详见 storagePaths 里的说明）
   let freedCopies = 0;
   const stillReferenced = referencedMediaNames(changed ? next : logs);
   for (const uri of replacedUris) {
     if (stillReferenced.has(mediaNameOfUri(uri))) continue;
-    try {
-      const info = await FileSystem.getInfoAsync(uri);
-      if (info.exists) {
-        await FileSystem.deleteAsync(uri, { idempotent: true });
-        freedCopies++;
-      }
-    } catch {}
+    const res = await deletePathAsync(uri);
+    if (res.ok) freedCopies++;
   }
 
   // 收尾再扫一遍副本目录：这一轮重链刚腾出来的、以及任何"记录里已经没有、
   // media/ 里还在"的影像都在这里删掉。放在重链之后，是因为只有重链后的记录
   // 才不再指向那些副本——开头那一遍看不到这一步的结果
   const pruned2 = await pruneOrphanMediaCopies(changed ? next : logs)
-    .catch(() => ({ removed: 0, freed: 0, errors: [], kept: {}, samples: {} }));
+    .catch(() => ({ removed: 0, freed: 0, errors: [], kept: {}, keptBytes: {}, failedToDelete: null }));
 
   // 封面小图同理：换封面 / 删记录留下的孤儿封面也是"没有记录的图片"，一并清掉
   const covers = await pruneOrphanCovers(changed ? next : logs).catch(() => ({ removed: 0, freed: 0 }));
@@ -456,8 +455,10 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     mediaScanErrors: [...pruned.errors, ...pruned2.errors],
     // 还剩哪些副本、为什么留着（界面据此如实报出来，不再只说一句"没有多余的"）
     copiesLeft: pruned2.kept || {},
-    samplesLeft: pruned2.samples || {},
+    copiesLeftBytes: pruned2.keptBytes || {},
+    failedToDelete: pruned2.failedToDelete || null,
     removedCovers: covers.removed,
     freedCoverBytes: covers.freed,
+    failedCovers: covers.failed || 0,
   };
 };

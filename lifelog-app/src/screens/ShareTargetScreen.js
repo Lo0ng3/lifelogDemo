@@ -5,7 +5,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
-import * as FileSystem from 'expo-file-system/legacy';
 import { Search, Plus, PlayCircle, X } from 'lucide-react-native';
 
 import { LogContext } from '../context/LogContext';
@@ -14,16 +13,18 @@ import { makeMediaIndex, isVideoEntry, mediaUri } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { labelOf, groupColor, groupSoft } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
-import { MEDIA_DIR } from '../utils/storagePaths';
+import { MEDIA_DIR, deletePathAsync } from '../utils/storagePaths';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 // 应用自己复制出来的副本（MEDIA_DIR 里的）才能删；相册、用户文件绝不动
 const isAppCopy = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.startsWith(`${MEDIA_DIR}/`);
 
+// 删除走 deletePathAsync：Android/data 里的副本用 expo-file-system 的 deleteAsync
+// 一定报 "isn't deletable"（它检查的是 "<路径>/.." 的写权限），取消分享时删不掉
 const discardUris = async (uris) => {
   for (const uri of uris) {
     if (!isAppCopy(uri)) continue;
-    try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+    await deletePathAsync(uri);
   }
 };
 

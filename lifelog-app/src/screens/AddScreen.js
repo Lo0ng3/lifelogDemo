@@ -4,7 +4,6 @@ import {
   ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
   BackHandler, ToastAndroid, Modal, Keyboard
 } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -13,6 +12,7 @@ import {
 import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
+import { deletePathAsync } from '../utils/storagePaths';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
@@ -701,11 +701,11 @@ export default function AddScreen({ navigation, route }) {
       addLog(logDataToSave);
     }
 
-    // 重链成功的条目已指向相册原片，选图器留在缓存里的临时拷贝直接删掉
+    // 重链成功的条目已指向相册原片，留下的副本直接删掉。
+    // 必须走 deletePathAsync（原生删除）：Android/data 里的文件用 expo-file-system
+    // 的 deleteAsync 一定报 "isn't deletable"，副本就永远清不掉（见 storagePaths）
     for (const uri of relink.replacedUris) {
-      try {
-        await FileSystem.deleteAsync(uri, { idempotent: true });
-      } catch {}
+      await deletePathAsync(uri);
     }
 
     clearForm();
