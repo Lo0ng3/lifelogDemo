@@ -177,7 +177,7 @@ export default function HomeScreen({ navigation }) {
       const broken = report.unmatched;
       let message;
       if (report.matched > 0) {
-        message = `已重新关联 ${report.matched} 个影像。`;
+        message = `已重新关联 ${report.matched} 张照片。`;
         if (report.freedCopies > 0) {
           message += `\n已清理 ${report.freedCopies} 个本地副本，改用相册原片（为应用释放了存储空间）。`;
         }
@@ -185,19 +185,19 @@ export default function HomeScreen({ navigation }) {
           message += `\n\n仍有 ${broken.length} 条记录无法自动恢复（原片可能已不在相册）：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
         }
       } else if (broken.length > 0) {
-        message = `没有可自动恢复的影像。${broken.length} 条记录的媒体在相册中找不到对应文件，可能需要重新添加：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
+        message = `没有可自动恢复的照片。${broken.length} 条记录的媒体在相册中找不到对应文件，可能需要重新添加：\n${broken.slice(0, 5).map(r => `· ${r.title}`).join('\n')}${broken.length > 5 ? '\n…' : ''}`;
       } else {
-        message = '所有影像都能正常显示，无需修复。';
+        message = '所有照片都能正常显示，无需修复。';
       }
       // 同步顺带清掉的孤儿副本（media/ 里有、记录里没有的影像）：结果一律如实报，
       // 哪怕是 0 条、哪怕读目录失败——不然用户会以为"点了没生效"
       if (report.mediaScanErrors?.length) {
-        message += `\n\n⚠️ 影像副本目录没能全部读到：${report.mediaScanErrors.join('；')}`;
+        message += `\n\n⚠️ 副本目录没能全部读到：${report.mediaScanErrors.join('；')}`;
       }
       const freedMB = Math.round((report.freedBytes / 1024 / 1024) * 10) / 10;
       const sizeMB = (b) => (b < 1024 * 1024 ? `${Math.round(b / 1024)} KB` : `${Math.round((b / 1024 / 1024) * 10) / 10} MB`);
       if (report.removedCopies > 0) {
-        message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的影像副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
+        message += `\n\n已清理 ${report.removedCopies} 个没有记录引用的副本${report.freedBytes > 0 ? `（释放约 ${freedMB} MB）` : ''}。`;
       }
       if (report.removedCovers > 0) {
         message += `\n已清理 ${report.removedCovers} 张没有记录引用的封面小图（${sizeMB(report.freedCoverBytes || 0)}）。`;
@@ -212,10 +212,10 @@ export default function HomeScreen({ navigation }) {
         if (left.draft) why.push(`· ${left.draft} 个（${sizeMB(leftBytes.draft || 0)}）还挂在「添加」页表单里没保存：去那一页删掉或保存后，再同步一次就会清`);
         if (left.fresh) why.push(`· ${left.fresh} 个（${sizeMB(leftBytes.fresh || 0)}）是刚导入不到 5 分钟的，下次同步会再清`);
         if (left.unreadable) why.push(`· ${left.unreadable} 个读不到文件信息（系统限制，不敢删）`);
-        message += `\n\n影像副本目录还剩 ${leftTotal} 个文件：\n${why.join('\n')}`;
+        message += `\n\n副本目录还剩 ${leftTotal} 个文件：\n${why.join('\n')}`;
         message += '\n数量与大小在「数据目录」里也能看到。';
       } else if (report.removedCopies === 0 && report.removedCovers === 0) {
-        message += '\n\n影像副本目录里没有多余的影像。';
+        message += '\n\n副本目录里没有多余的文件。';
       }
       // 确实没人引用、却删不掉的：说清楚有多少、多大（正常不该出现，出现了就是系统层面拒绝删除）
       const failed = report.failedToDelete;
@@ -286,8 +286,8 @@ export default function HomeScreen({ navigation }) {
             const pruned = await pruneOrphanMediaCopies(logData).catch(() => ({ removed: 0 }));
             const mb = Math.round((pruned.freed || 0) / 1024 / 1024 * 10) / 10;
             Alert.alert('已清空草稿', pruned.removed
-              ? `「添加」页里没保存的影像已清掉，并释放了 ${mb} MB（${pruned.removed} 个副本）。`
-              : '「添加」页里没保存的影像已清掉。');
+              ? `「添加」页里没保存的照片已清掉，并释放了 ${mb} MB（${pruned.removed} 个副本）。`
+              : '「添加」页里没保存的照片已清掉。');
           },
         });
       }
@@ -781,7 +781,7 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
               <RefreshCw size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册影像'}</Text>
+              <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册照片'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup}>
               <Upload size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
@@ -927,7 +927,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.syncPill} pointerEvents="none">
           <ActivityIndicator size="small" color="#FFF" />
           <Text style={styles.syncPillText}>
-            正在同步影像{syncProgress ? ` ${syncProgress.done}/${syncProgress.total}` : ''}
+            正在同步照片{syncProgress ? ` ${syncProgress.done}/${syncProgress.total}` : ''}
           </Text>
         </View>
       )}

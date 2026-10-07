@@ -566,7 +566,7 @@ export default function DetailScreen({ route, navigation }) {
   // 设为封面时同步生成小图文件（covers/ 目录），列表/详情直接显示，重启无需重新解析相册
   const handleGridLongPress = (idx) => {
     const isCurrentCover = item.coverIndex === idx;
-    Alert.alert('封面设置', '将这张影像设为该记录的封面吗？', [
+    Alert.alert('封面设置', '将这张照片设为该记录的封面吗？', [
       { text: '取消', style: 'cancel' },
       ...(item.coverIndex != null
         ? [{ text: '取消封面', style: 'destructive', onPress: () => updateLog({ ...item, coverIndex: null, coverThumbUrl: null }) }]
@@ -680,7 +680,7 @@ export default function DetailScreen({ route, navigation }) {
         {/* 相关影像九宫格 */}
         {resolvedMedia.length > 0 && (
           <Animated.View entering={FadeInDown.duration(300).delay(120)} style={{ marginTop: 16 }}>
-            <Text style={styles.sectionTitle}>相关影像</Text>
+            <Text style={styles.sectionTitle}>相关照片</Text>
             <MediaGrid
               entries={resolvedMedia}
               coverIndex={item.coverIndex}

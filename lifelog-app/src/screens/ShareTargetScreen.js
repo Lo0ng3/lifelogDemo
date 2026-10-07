@@ -33,7 +33,7 @@ const describeSkipped = (ownCount, otherCount) => {
   const parts = [];
   if (ownCount) parts.push(`${ownCount} 个这条记录里已经有了`);
   if (otherCount) parts.push(`${otherCount} 个已经记在别的记录里了`);
-  return parts.length ? `${parts.join('，')}。` : '没有可用的影像。';
+  return parts.length ? `${parts.join('，')}。` : '没有可用的照片。';
 };
 
 /* ------------------------------------------------------------------ *
@@ -114,7 +114,7 @@ export default function ShareTargetScreen({ route, navigation }) {
       if (accepted.length === 0) {
         // 一张都没收下：这里不删副本——用户可能换一条记录再试，副本还得用；
         // 真的都不要了他会点取消，那条路径统一删
-        Alert.alert('没有可添加的影像', describeSkipped(dupOwn.length, dupOther.length));
+        Alert.alert('没有可添加的照片', describeSkipped(dupOwn.length, dupOther.length));
         return;
       }
 
@@ -127,7 +127,7 @@ export default function ShareTargetScreen({ route, navigation }) {
         ...dupOther.map(mediaUri),
       ]);
 
-      const tips = [`已添加 ${accepted.length} 个影像`];
+      const tips = [`已添加 ${accepted.length} 张照片`];
       if (dupOwn.length + dupOther.length > 0) tips.push(`跳过 ${dupOwn.length + dupOther.length} 个已记过的`);
       if (Platform.OS === 'android') ToastAndroid.show(tips.join('，'), ToastAndroid.SHORT);
       // 直接进这条记录的详情：加完就能看到结果，也能顺手调整影像顺序
@@ -187,7 +187,7 @@ export default function ShareTargetScreen({ route, navigation }) {
             <Text style={styles.mediaMoreText}>+{media.length - 6}</Text>
           </View>
         )}
-        <Text style={styles.mediaCount}>共 {media.length} 个影像</Text>
+        <Text style={styles.mediaCount}>共 {media.length} 张照片</Text>
       </View>
 
       <TouchableOpacity style={styles.createBtn} activeOpacity={0.85} onPress={handleCreate} disabled={busy}>

@@ -1051,6 +1051,7 @@ export default function AddScreen({ navigation, route }) {
               <Text style={styles.dupNoteBody} numberOfLines={2}>
                 最近一条：{relatedRecords[0].title}
               </Text>
+              <Text style={styles.dupNoteHint}>点一下打开那条记录（只是提醒，不影响保存）</Text>
             </TouchableOpacity>
           )}
           {/* 随笔用心情 emoji 代替评分；心情必填 */}
@@ -1261,7 +1262,10 @@ const makeStyles = (c) => ({
     backgroundColor: c.warnSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.warnText,
   },
   dupNoteTitle: { fontSize: 13.5, fontWeight: '600', color: c.warnText },
-  dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 1.5, opacity: 0.92 },
+  // lineHeight 是绝对单位（pt），不是倍数：写成 1.5 会把行高压成 1.5pt，
+  // 文字被裁得只剩一条缝——之前"底下那行被遮挡"就是这个
+  dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
+  dupNoteHint: { fontSize: 11, color: c.warnText, marginTop: 6, opacity: 0.7 },
   container: { flex: 1, backgroundColor: c.bg },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
   cancelText: { fontSize: 16, color: c.textSecondary },

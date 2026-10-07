@@ -597,10 +597,10 @@ export const describeMediaCopiesAsync = async (logs = []) => {
   const mb = (b) => (b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(2)} MB`);
   const lines = [];
   if (c.total === 0) {
-    lines.push('影像副本 media：空的');
+    lines.push('副本 media：空的');
   } else {
     lines.push(
-      `影像副本 media：共 ${c.total} 个，${mb(c.bytes.total)} —— `
+      `副本 media：共 ${c.total} 个，${mb(c.bytes.total)} —— `
       + `记录引用 ${c.referenced.length} 个（${mb(c.bytes.referenced)}）、`
       + `添加页草稿 ${c.draft.length} 个（${mb(c.bytes.draft)}）、`
       + `刚导入不到 5 分钟 ${c.fresh.length} 个（${mb(c.bytes.fresh)}）、`
