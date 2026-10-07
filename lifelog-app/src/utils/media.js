@@ -285,45 +285,64 @@ const dirSizeAsync = async (dir) => {
   }
 };
 
-// 可再生缓存的总闸：封面帧/实况提取缓存超过上限就整体清掉，下次用时自动重建。
+// 实况提取出来的动效视频：只是"这次会话的临时文件"，进后台 / 下次启动就整体清空
+// （见 LogContext 的 AppState 监听与启动清理）。所以它没有体积上限——留着才占地方，
+// 清了下次看再提取一遍就是了。
+export const clearMotionVideos = async () => {
+  const dir = `${FileSystem.documentDirectory}motionVideos`;
+  let freed = 0;
+  try {
+    freed = await dirSizeAsync(dir);
+    if (freed > 0) await deletePathAsync(dir);
+  } catch {}
+  return freed;
+};
+
+// 可再生缓存的总闸：封面帧超过上限就整体清掉，下次用时自动重建。
 // 启动时调用，防止长期使用后缓存无限膨胀
-export const enforceCacheCaps = async ({ thumbCapMB = 30, motionCapMB = 50 } = {}) => {
+// （实况提取的 motionVideos 不在这里管：它进后台就整体清空，不需要上限）
+export const enforceCacheCaps = async ({ thumbCapMB = 30 } = {}) => {
   try {
     const tDir = `${FileSystem.documentDirectory}videoThumbs`;
-    const mDir = `${FileSystem.documentDirectory}motionVideos`;
     if ((await dirSizeAsync(tDir)) > thumbCapMB * 1024 * 1024) {
-      await FileSystem.deleteAsync(tDir, { idempotent: true });
-    }
-    if ((await dirSizeAsync(mDir)) > motionCapMB * 1024 * 1024) {
-      await FileSystem.deleteAsync(mDir, { idempotent: true });
+      await deletePathAsync(tDir);
     }
   } catch {}
 };
 
-// 手动清理所有可再生缓存（封面帧、实况提取、选图器临时拷贝、图片浏览缓存），
-// 外加没人引用的封面小图（换封面 / 删记录 / 重复下载留下的孤儿文件），返回释放的字节数
-export const cleanupMediaCaches = async (logs = []) => {
+/* 手动清理可再生缓存。侧边栏「清理缓存」现在是二级选项，能挑清哪些：
+   thumbs 封面帧（视频缩略图 + 选图器临时缩略图）、motion 实况提取的动效、
+   images 图片浏览缓存（expo-image 磁盘缓存）、covers 没人引用的封面小图。
+   返回 { freed, covers }：释放的字节数 + 清掉的孤儿封面张数。 */
+export const cleanupMediaCaches = async (logs = [], { thumbs = true, motion = true, images = true, covers = true } = {}) => {
   let freed = 0;
-  const dirs = [
-    `${FileSystem.documentDirectory}videoThumbs`,
-    `${FileSystem.documentDirectory}motionVideos`,
-    `${FileSystem.cacheDirectory}VideoThumbnails`,
-  ];
+  const dirs = [];
+  if (thumbs) {
+    dirs.push(`${FileSystem.documentDirectory}videoThumbs`, `${FileSystem.cacheDirectory}VideoThumbnails`);
+  }
+  if (motion) dirs.push(`${FileSystem.documentDirectory}motionVideos`);
   for (const dir of dirs) {
     try {
       freed += await dirSizeAsync(dir);
-      await FileSystem.deleteAsync(dir, { idempotent: true });
+      await deletePathAsync(dir);
     } catch {}
   }
-  thumbCache.clear();
-  try {
-    await Image.clearDiskCache();
-  } catch {}
+  if (thumbs) thumbCache.clear();
+  if (images) {
+    try {
+      await Image.clearDiskCache();
+    } catch {}
+  }
   // 封面小图不是"可再生"的，只删当前没有任何记录引用的那些（和「同步相册影像」共用同一套判定）
-  try {
-    freed += (await pruneOrphanCovers(logs)).freed;
-  } catch {}
-  return freed;
+  let coversRemoved = 0;
+  if (covers) {
+    try {
+      const r = await pruneOrphanCovers(logs);
+      freed += r.freed;
+      coversRemoved = r.removed;
+    } catch {}
+  }
+  return { freed, covers: coversRemoved };
 };
 
 // 刚生成不到 5 分钟的副本一律不动：可能是添加页草稿里刚挑的、或刚分享进来还没保存的
@@ -570,7 +589,8 @@ export const pruneOrphanCovers = async (logs = [], { dryRun = false } = {}) => {
   return { removed, freed, scanned, orphans, failed, errors: [] };
 };
 
-// 「数据目录」里的副本明细：按"为什么留着"分开报，一眼能看出是不是真删漏了
+// 「数据目录」里的副本明细：按"为什么留着"分开报，一眼能看出是不是真删漏了。
+// 返回 { text, draft, orphan }：text 给弹窗显示，draft / orphan 给上层做按钮（比如"清空草稿"）
 export const describeMediaCopiesAsync = async (logs = []) => {
   const c = await classifyMediaCopies(logs);
   const covers = await pruneOrphanCovers(logs, { dryRun: true });
@@ -594,7 +614,7 @@ export const describeMediaCopiesAsync = async (logs = []) => {
   if (covers.scanned > 0) {
     lines.push(`封面小图 covers：共 ${covers.scanned} 张，其中 ${covers.orphans} 张没有记录引用（同步 / 清理缓存会清掉）`);
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), draft: c.draft.length, orphan: c.orphans.length };
 };
 
 // 启动时清理瞬时缓存：这些都是可再生的内容，清掉无损

@@ -264,7 +264,10 @@ if (coverNames().join(',') !== 'cover_keep.jpg') {
 }
 
 // ⑦ 「数据目录」里的副本明细要说清楚每一类各有多少
-const detail = await describeMediaCopiesAsync(logs);
+const detailRes = await describeMediaCopiesAsync(logs);
+const detail = detailRes.text;
+if (detailRes.draft !== 1) fail.push(`副本明细应报出 1 个草稿副本（给"清空草稿"按钮用），实际 ${detailRes.draft}`);
+if (detailRes.orphan !== 0) fail.push(`同步之后不该还有可清理的副本，实际 ${detailRes.orphan}`);
 if (!/记录引用 1/.test(detail) || !/添加页草稿 1/.test(detail) || !/可清理 0/.test(detail)) {
   fail.push(`副本明细的计数不对：${detail.replace(/\n/g, ' | ')}`);
 }

@@ -1071,6 +1071,27 @@ export function buildMapHtml({
               for (var i = 0; i < TRAJ_TYPES.length; i++) if (trajFilter[TRAJ_TYPES[i]]) return true;
               return false;
           }
+          /* 出行方式 / 标点的选择存进 localStorage：切换深浅色、改色板时整份 HTML 会重建
+             （WebView 重新加载），不存的话每次都被重置回"四类全开、筛选收起"。 */
+          var TOOL_PREFS_KEY = 'rc_map_tools_v1';
+          function loadToolPrefs() {
+              try {
+                  if (!window.localStorage) return;
+                  var p = JSON.parse(window.localStorage.getItem(TOOL_PREFS_KEY) || 'null');
+                  if (!p || typeof p !== 'object') return;
+                  TRAJ_TYPES.forEach(function (t) { if (typeof p[t] === 'boolean') trajFilter[t] = p[t]; });
+                  if (typeof p.opened === 'boolean') trajFilterOpened = p.opened;
+                  if (typeof p.loc === 'boolean') locOn = p.loc;
+              } catch (e) {}
+          }
+          function saveToolPrefs() {
+              try {
+                  if (!window.localStorage) return;
+                  var p = { opened: trajFilterOpened, loc: locOn };
+                  TRAJ_TYPES.forEach(function (t) { p[t] = !!trajFilter[t]; });
+                  window.localStorage.setItem(TOOL_PREFS_KEY, JSON.stringify(p));
+              } catch (e) {}
+          }
           function groupShownInTraj(g) {
               return g.records.some(function (r) { return trajTypeOn(r.subType); });
           }
@@ -1171,16 +1192,19 @@ export function buildMapHtml({
 
               // 控件先绑定、再画数据：就算后面绘图出问题，缩放/开关也一定是活的
               var btnLoc = $('tLoc');
+              loadToolPrefs();          // 恢复上次的出行方式 / 标点选择（切主题重建 HTML 也不丢）
               setToggle(btnLoc, locOn);
               syncTrajFilter();
               // 「轨迹」只管展开 / 收起出行方式那一排：画不画轨迹全看那四类（见上面的说明）
               onPill('tTraj', function () {
                   trajFilterOpened = !trajFilterOpened;
                   syncTrajFilter();
+                  saveToolPrefs();
                   toast(trajFilterOpened ? '选择要显示的出行方式' : '已收起出行方式筛选');
               });
               onPill('tLoc', function () {
                   locOn = !locOn; setToggle(btnLoc, locOn);
+                  saveToolPrefs();
                   renderLoc(); syncHints(); toast('地点标点：' + (locOn ? '开' : '关'));
               });
               // 四种出行方式各自一个小胶囊：点一下就切换这类轨迹的显示，可多选
@@ -1188,6 +1212,7 @@ export function buildMapHtml({
                   onPill('tf_' + t, function () {
                       trajFilter[t] = !trajFilter[t];
                       syncTrajFilter();
+                      saveToolPrefs();
                       drawTraj(); syncHints();
                       toast((TRAJ_LABELS[t] || t) + '轨迹：' + (trajFilter[t] ? '显示' : '隐藏'));
                   });

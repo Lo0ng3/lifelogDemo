@@ -283,12 +283,18 @@ function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder, on
 
 // 详情查看器里的图片：捏合缩放 / 双击放大 / 放大后拖动。
 // 视频仍走原生播放控件（全屏播放本身就是"放大看"），这里只管图片。
-function ZoomableImage({ uri, active, onZoomChange }) {
+function ZoomableImage({ uri, active, onZoomChange, onSingleTap }) {
   const { width: winW, height: winH } = Dimensions.get('window');
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const tx = useSharedValue(0), ty = useSharedValue(0);
   const savedTx = useSharedValue(0), savedTy = useSharedValue(0);
+  // 当前有没有放大：既用于限制拖动，也用于"没放大时别抢横向手势"
+  const [zoomed, setZoomed] = useState(false);
+  const zoomedRef = useRef(false);
+  // 回调装进 ref：notify 保持稳定引用，下面的 effect 才能安心把依赖写全（不会每次渲染都重跑）
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
 
   const reset = () => {
     'worklet';
@@ -299,7 +305,11 @@ function ZoomableImage({ uri, active, onZoomChange }) {
     savedTx.value = 0;
     savedTy.value = 0;
   };
-  const notify = (on) => { if (onZoomChange) onZoomChange(on); };
+  const notify = useCallback((on) => {
+    zoomedRef.current = on;
+    setZoomed(on);
+    if (onZoomChangeRef.current) onZoomChangeRef.current(on);
+  }, []);
 
   const pinch = Gesture.Pinch()
     .onUpdate((e) => { scale.value = Math.min(6, Math.max(1, savedScale.value * e.scale)); })
@@ -308,8 +318,11 @@ function ZoomableImage({ uri, active, onZoomChange }) {
       savedScale.value = scale.value;
       runOnJS(notify)(true);
     });
-  // 放大之后才允许拖动，并且限制在图片范围内（避免把图拖出屏幕外找不回来）
+  /* 放大之后才允许拖动，并且限制在图片范围内（避免把图拖出屏幕外找不回来）。
+     `.enabled(zoomed)` 很关键：没放大时这个 pan 绝不能接管触摸，否则查看器的
+     横向翻页（FlatList 的 pagingEnabled）会被它吃掉 —— 表现就是"静态图滑不动"。 */
   const pan = Gesture.Pan()
+    .enabled(zoomed)
     .onUpdate((e) => {
       if (savedScale.value <= 1.05) return;
       tx.value = savedTx.value + e.translationX;
@@ -331,7 +344,23 @@ function ZoomableImage({ uri, active, onZoomChange }) {
       savedScale.value = 2.5;
       runOnJS(notify)(true);
     });
-  const gesture = Gesture.Simultaneous(pinch, pan, doubleTap);
+  const handleSingleTap = () => {
+    if (zoomedRef.current) return;
+    if (onSingleTap) onSingleTap();
+  };
+  // 单击（只有传了 onSingleTap 才用，比如实况照片"点一下播动效"）：
+  // 用 Exclusive 排它，双击优先，单击等双击失败后才算数；放大状态下单击不做事
+  const singleTap = Gesture.Tap()
+    .onEnd((_e, success) => {
+      'worklet';
+      if (!success) return;
+      runOnJS(handleSingleTap)();
+    });
+  const gesture = Gesture.Simultaneous(
+    pinch,
+    pan,
+    onSingleTap ? Gesture.Exclusive(doubleTap, singleTap) : doubleTap
+  );
   const animStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
   }));
@@ -342,8 +371,10 @@ function ZoomableImage({ uri, active, onZoomChange }) {
       scale.value = 1; savedScale.value = 1;
       tx.value = 0; ty.value = 0;
       savedTx.value = 0; savedTy.value = 0;
+      // 翻走时要把"正在放大"的状态也报回去，否则查看器的翻页会一直被锁着
+      if (zoomedRef.current) notify(false);
     }
-  }, [active, scale, savedScale, tx, ty, savedTx, savedTy]);
+  }, [active, scale, savedScale, tx, ty, savedTx, savedTy, notify]);
 
   return (
     <GestureDetector gesture={gesture}>
@@ -372,7 +403,13 @@ function LiveGridBadge({ entry }) {
   const [live, setLive] = useState(false);
   useEffect(() => {
     let alive = true;
-    getLivePhotoInfo(entry, { full: true }).then(i => { if (alive) setLive(!!i?.live); });
+    getLivePhotoInfo(entry, { full: true }).then(i => {
+      if (!alive) return;
+      setLive(!!i?.live);
+      // 进详情页就把内嵌动效提取好（后台跑、失败不影响静帧）：点播放 / 全屏播放时直接命中。
+      // 提取只读文件尾那几 MB，成本很低；文件在进后台时会被整体清掉，不会长期占空间。
+      if (i?.live) extractMotionVideo(entry, i).catch(() => {});
+    });
     return () => { alive = false; };
   }, [entry]);
   if (!live) return null;
@@ -387,16 +424,30 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
   const [playingUri, setPlayingUri] = useState(null);
   const [videoReady, setVideoReady] = useState(false);
   const [loading, setLoading] = useState(false);
+  // 进页面就预热好的动效地址：点播放直接命中，不用再等提取
+  const preloadRef = useRef(null);
   useEffect(() => {
     let alive = true;
     setPlayingUri(null);
     setVideoReady(false);
-    getLivePhotoInfo(entry, { full: true }).then(i => { if (alive) setInfo(i); });
+    preloadRef.current = null;
+    getLivePhotoInfo(entry, { full: true }).then(i => {
+      if (!alive) return;
+      setInfo(i);
+      // 打开全屏查看器就开始提取（后台、串行）：通常你点「实况」之前就已经备好了
+      if (i?.live) {
+        extractMotionVideo(entry, i)
+          .then(uri => { if (alive && uri) preloadRef.current = uri; })
+          .catch(() => {});
+      }
+    });
     return () => { alive = false; };
   }, [entry]);
   const isLive = !!info?.live;
   const handlePlay = async () => {
     if (loading || playingUri) return;
+    // 预热好了就是纯切换，不再有任何文件 IO
+    if (preloadRef.current) { setVideoReady(false); setPlayingUri(preloadRef.current); return; }
     setLoading(true);
     try {
       const uri = await extractMotionVideo(entry, info);
@@ -405,35 +456,29 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
       setLoading(false);
     }
   };
-  // 普通照片：直接给可缩放版本（双指捏合 / 双击放大 / 放大后拖动）
-  if (!isLive) {
-    return (
-      <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
-        <ZoomableImage uri={entry.uri} active={active} onZoomChange={onZoomChange} />
-      </View>
-    );
-  }
+  /* 普通照片和实况照片的静帧都用同一个可缩放视图（双指捏合 / 双击放大 / 放大后拖动）。
+     实况多传一个 onSingleTap：没放大时点一下 = 播动效（放大状态下单击不触发，避免误播）。 */
   return (
     <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={isLive && !videoReady ? handlePlay : undefined}
-        style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
-      >
-        <Image source={{ uri: entry.uri }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="memory" />
-        {isLive && !videoReady && (
-          <View style={styles.livePlayBadge}>
-            {loading ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <>
-                <Text style={styles.livePlayText}>实况</Text>
-                <PlayCircle size={16} color="#FFF" />
-              </>
-            )}
-          </View>
-        )}
-      </TouchableOpacity>
+      <ZoomableImage
+        uri={entry.uri}
+        active={active}
+        onZoomChange={onZoomChange}
+        onSingleTap={isLive && !videoReady ? handlePlay : undefined}
+      />
+      {/* 角标只是提示，别挡手势（点播交给上面的 onSingleTap） */}
+      {isLive && !videoReady && (
+        <View style={styles.livePlayBadge} pointerEvents="none">
+          {loading ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <>
+              <Text style={styles.livePlayText}>实况</Text>
+              <PlayCircle size={16} color="#FFF" />
+            </>
+          )}
+        </View>
+      )}
       {playingUri && (
         <View
           style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, opacity: videoReady ? 1 : 0 }}

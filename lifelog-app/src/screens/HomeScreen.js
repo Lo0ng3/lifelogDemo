@@ -29,7 +29,9 @@ import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
 import { describeStorageAsync } from '../utils/storagePaths';
-import { cleanupMediaCaches, describeMediaCopiesAsync } from '../utils/media';
+import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
+import { clearMotionVideoCache } from '../utils/livePhoto';
+import { requestAddDraftReset } from '../utils/draftReset';
 import { shortPlaceName } from '../utils/format';
 import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
@@ -52,6 +54,15 @@ const VIEWS = [
   { id: 'list', label: '列表' },
   { id: 'month', label: '日历' },
   { id: 'map', label: '地图' },
+];
+
+// 「清理缓存」二级选项：每一项都能单独勾，都是可再生内容
+const CACHE_TARGETS = [
+  { key: 'thumbs', label: '封面帧（视频缩略图）', note: '列表里的视频封面，删了会按需重建' },
+  { key: 'images', label: '图片浏览缓存', note: '看过的图片磁盘缓存，删了会重新加载' },
+  { key: 'motion', label: '实况动效临时文件', note: '实况照片提取出来的视频，进后台本来就会清' },
+  { key: 'covers', label: '没人引用的封面小图', note: '换封面 / 删记录留下的孤儿文件' },
+  { key: 'map', label: '地图缓存（瓦片 + 高德 SDK）', note: '清完下次进地图要重新下载，不想重下就取消勾选' },
 ];
 
 // 视图切换：白色药丸跟着选中项滑动（原来是一格一格硬切，现在带弹簧过渡）
@@ -212,6 +223,12 @@ export default function HomeScreen({ navigation }) {
         message += `\n\n⚠️ 有 ${failed.count} 个（${sizeMB(failed.bytes || 0)}）没有记录引用的副本没能删掉`
           + (failed.reasons?.length ? `：${failed.reasons.join('；')}。` : '。');
       }
+      // 相册只授权了「部分照片」：没授权那部分原片扫不到，记录会继续用副本显示。
+      // 不点破的话用户只会看到"怎么还有副本留着"，所以这里明说怎么办。
+      if (report.permState?.accessPrivileges === 'limited') {
+        message += '\n\nℹ️ 相册权限是「仅部分照片」：没授权的那部分原片扫不到，'
+          + '对应的记录会继续用应用内的副本显示。想清理干净，请在系统设置里把相册权限改成「所有照片」后再同步一次。';
+      }
       if (report.failedCovers > 0) {
         message += `\n⚠️ 另有 ${report.failedCovers} 张没有引用的封面小图没能删掉。`;
       }
@@ -252,13 +269,29 @@ export default function HomeScreen({ navigation }) {
     return applied;
   };
 
-  // 数据目录：看副本/封面实际落在哪、各有多少（含"为什么还留着"的明细），并现场做一次写入测试
+  // 数据目录：看副本/封面实际落在哪、各有多少（含"为什么还留着"的明细），并现场做一次写入测试。
+  // 如果副本是被「添加」页草稿占着（那是个常驻 tab，放弃的分享副本会一直留着），
+  // 这里给一个"清空草稿"的出口：清完立刻扫一遍副本目录，能删的就地删掉。
   const handleShowStorage = async () => {
     toggleSidebar(false);
     try {
       const storage = await describeStorageAsync();
-      const copies = await describeMediaCopiesAsync(logData).catch(() => '');
-      Alert.alert('数据目录', [storage, copies].filter(Boolean).join('\n\n'));
+      const copies = await describeMediaCopiesAsync(logData).catch(() => null);
+      const buttons = [{ text: '关闭', style: 'cancel' }];
+      if (copies?.draft) {
+        buttons.unshift({
+          text: '清空添加页草稿',
+          onPress: async () => {
+            requestAddDraftReset();
+            const pruned = await pruneOrphanMediaCopies(logData).catch(() => ({ removed: 0 }));
+            const mb = Math.round((pruned.freed || 0) / 1024 / 1024 * 10) / 10;
+            Alert.alert('已清空草稿', pruned.removed
+              ? `「添加」页里没保存的影像已清掉，并释放了 ${mb} MB（${pruned.removed} 个副本）。`
+              : '「添加」页里没保存的影像已清掉。');
+          },
+        });
+      }
+      Alert.alert('数据目录', [storage, copies?.text].filter(Boolean).join('\n\n'), buttons);
     } catch (e) {
       Alert.alert('数据目录', e?.message || '读取目录信息失败');
     }
@@ -305,19 +338,44 @@ export default function HomeScreen({ navigation }) {
     );
   };
   
-  // 清理缓存：封面帧/实况提取/浏览缓存/地图瓦片都是可再生内容，清掉立刻释放空间
-  // （地图瓦片在 WebView 的 HTTP 缓存里：栅格模式的图片、矢量模式的 SDK 与矢量数据都算）
-  const handleCleanCache = async () => {
+  /* 清理缓存：先弹二级选项，让用户挑清哪些（都是可再生内容，清了不影响记录）。
+     地图缓存和别的缓存共用一个 WebView 的 HTTP 缓存（瓦片 + 高德 SDK + 矢量数据），
+     所以它单独一项、默认勾上——不想让下次进地图重新下 SDK 就取消它。 */
+  const [cachePickerOpen, setCachePickerOpen] = useState(false);
+  const [cacheTargets, setCacheTargets] = useState({ thumbs: true, images: true, motion: true, covers: true, map: true });
+
+  const handleCleanCache = () => {
     toggleSidebar(false);
+    setCachePickerOpen(true);
+  };
+
+  const runCleanCache = async () => {
+    const t = cacheTargets;
+    if (!t.thumbs && !t.images && !t.motion && !t.covers && !t.map) {
+      Alert.alert('清理缓存', '一项都没选。');
+      return;
+    }
+    setCachePickerOpen(false);
     try {
-      const freed = await cleanupMediaCaches(logData);
-      try {
-        // clearCache(true) 连磁盘里的地图缓存一起清；地图还活着也没关系，
-        // 只是下次平移/缩放要重新下载瓦片。clearHistory 只清前进后退记录
-        mapRef.current?.clearCache?.(true);
-      } catch {}
-      const mb = Math.round((freed / 1024 / 1024) * 10) / 10;
-      Alert.alert('清理完成', `已释放 ${mb} MB 空间（缓存 + 没人引用的封面小图），地图缓存也已清空。`);
+      const res = await cleanupMediaCaches(logData, {
+        thumbs: t.thumbs, images: t.images, motion: t.motion, covers: t.covers,
+      });
+      // 实况提取目录刚被清空，内存里"已就绪"的地址也要一起作废，不然会指向不存在的文件
+      if (t.motion) clearMotionVideoCache();
+      if (t.map) {
+        try {
+          // clearCache(true) 连磁盘里的地图缓存一起清；地图还活着也没关系，
+          // 只是下次进地图要重新下载瓦片 / SDK
+          mapRef.current?.clearCache?.(true);
+        } catch {}
+      }
+      const mb = Math.round((res.freed / 1024 / 1024) * 10) / 10;
+      const parts = [];
+      if (t.thumbs || t.images || t.motion) parts.push('缓存');
+      if (t.covers && res.covers) parts.push(`没人引用的封面小图 ${res.covers} 张`);
+      Alert.alert('清理完成',
+        `已释放 ${mb} MB 空间${parts.length ? `（${parts.join(' + ')}）` : ''}。`
+        + (t.map ? '\n地图缓存（瓦片 + 高德 SDK）也清空了，下次进地图会重新下载。' : ''));
     } catch (e) {
       Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
     }
@@ -977,6 +1035,39 @@ export default function HomeScreen({ navigation }) {
       </Modal>
 
       <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      {/* 清理缓存：二级选项，挑清哪些（都是可再生内容，不影响记录和照片引用） */}
+      <Modal transparent visible={cachePickerOpen} animationType="fade" onRequestClose={() => setCachePickerOpen(false)}>
+        <TouchableOpacity style={styles.settingsOverlay} activeOpacity={1} onPress={() => setCachePickerOpen(false)}>
+          <TouchableOpacity style={styles.settingsCard} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.settingsTitle}>清理缓存</Text>
+            <Text style={styles.settingsLabel}>勾选要清理的项（都是可再生内容）</Text>
+            {CACHE_TARGETS.map(({ key, label, note }) => (
+              <TouchableOpacity
+                key={key}
+                style={styles.cacheRow}
+                onPress={() => setCacheTargets((prev) => ({ ...prev, [key]: !prev[key] }))}
+              >
+                <View style={[styles.cacheBox, cacheTargets[key] && styles.cacheBoxOn]}>
+                  {cacheTargets[key] && <Check size={14} color={colors.textOnAccent} />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cacheRowLabel}>{label}</Text>
+                  {!!note && <Text style={styles.cacheRowNote}>{note}</Text>}
+                </View>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.settingsBtnRow}>
+              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setCachePickerOpen(false)}>
+                <Text style={styles.settingsBtnCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnSave]} onPress={runCleanCache}>
+                <Text style={styles.settingsBtnSaveText}>开始清理</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -1086,4 +1177,11 @@ const makeStyles = (c) => ({
   chipTextActivePurple: { color: c.purple, fontWeight: '500' },
   chipActiveGreen: { backgroundColor: c.groupNoteSoft, borderColor: c.groupNoteSoft },
   chipTextActiveGreen: { color: c.groupNote, fontWeight: '500' },
+  // 清理缓存的二级选项（多选行）
+  cacheRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 9, gap: 10 },
+  cacheBox: { width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: c.border,
+    alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  cacheBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
+  cacheRowLabel: { fontSize: 14, color: c.text },
+  cacheRowNote: { fontSize: 11.5, color: c.textMuted, marginTop: 2, lineHeight: 16 },
 });

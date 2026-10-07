@@ -1,10 +1,13 @@
-// 实况/动态照片支持：跨厂商四级检测，全程基于分段读，绝不把整张照片加载进内存。
+// 实况/动态照片支持：跨厂商四级检测 + 提取，全程基于分段读，绝不把整张照片加载进内存。
 // ① iOS：expo-media-library 的 photoLive 标记 + pairedVideoAsset 配对视频；
 // ② 头部 512KB：GCamera XMP 标记（Google/小米/OV 等大多数厂商）；
 // ③ 尾部 256KB：三星 SEFT 标记 / 追加式 mp4 的 ftyp（覆盖三星与大部分"JPEG+视频"拼接）；
-// ④ 详情页兜底：全文件扫描（覆盖荣耀等无标记拼接格式），只在打开详情时执行。
+// ④ 详情页兜底：尾部窗口扫描（覆盖荣耀等无标记拼接格式），只在打开详情时执行。
 // 检测结果持久化到 AsyncStorage（assetId+大小为键，照片被替换自动失效），重启不重算。
-// mp4 提取沿用 mp4CleanEnd 结构走查，写出干净的 mp4；提取结果落盘缓存，播放秒开。
+// mp4 提取同样只读尾部窗口（内嵌视频永远在文件最后），沿用 mp4CleanEnd 结构走查写出干净的
+// mp4；结果落盘缓存 + 会话内存缓存，同一个文件点第二次是纯切换、零文件 IO。
+// 落盘目录 motionVideos 由上层在「进后台 / 下次启动」时整体清空（见 media.clearMotionVideos），
+// 所以它只是"这次会话的临时文件"，不占长期存储，也不再需要体积上限。
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
@@ -13,8 +16,8 @@ import * as FileSystemNew from 'expo-file-system';
 
 const HEADER_BYTES = 512 * 1024; // 头部扫描范围（GCamera XMP 元数据）
 const TAIL_BYTES = 256 * 1024;   // 尾部扫描范围（三星 SEFT / 追加 mp4 的 ftyp）
-const MAX_DETECT_SIZE = 40 * 1024 * 1024; // 全文件扫描的上限（实况照片远小于此，仅详情页兜底用）
-const TAIL_CAP = 16 * 1024 * 1024; // 提取时的尾部扫描上限
+const TAIL_STEP = 2 * 1024 * 1024; // 尾部窗口的起始大小（不够就翻倍）
+const TAIL_CAP = 16 * 1024 * 1024; // 尾部窗口的上限（实况动效通常 1~3MB，16MB 已经很宽裕）
 const STORE_KEY = '@livephoto_cache';
 const STORE_CAP = 5000;
 
@@ -146,16 +149,54 @@ const detectQuick = async (uri, size) => {
   return { live: false, source: 'quick' };
 };
 
-// 全文件扫描兜底（详情页专用）：无标记拼接格式（荣耀等）的最后一条路径
-const detectFull = async (uri) => {
-  const { File } = FileSystemNew;
-  const buffer = await new File(uri).arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const start = findLastFtyp(bytes, 0);
-  if (start > 0) {
-    return { live: true, videoLength: bytes.length - start, source: 'scan' };
+/* -------- 按区间读文件：只碰尾部窗口，绝不整文件读 --------
+   内嵌的动效永远贴在照片**最后**，而 expo-file-system 新版 API 的 FileHandle 支持
+   设置 offset 再 readBytes，所以从文件尾往里读一个窗口就够了：2MB 起步、不够翻倍、
+   上限 TAIL_CAP。以前这里走 src.arrayBuffer() 整文件读 + 在 JS 里扫全部字节，
+   20~40MB 的大图点一次要等好几秒，打开详情页预热时尤其明显。
+   返回 { bytes, windowStart, size }；读不了返回 null。 */
+const readTailWindow = (uri, want) => {
+  let handle = null;
+  try {
+    handle = new FileSystemNew.File(uri).open();
+    const size = typeof handle.size === 'number' ? handle.size : 0;
+    if (size <= 0) return null;
+    const len = Math.max(1, Math.min(size, Math.ceil(want)));
+    const windowStart = size - len;
+    handle.offset = windowStart;
+    return { bytes: handle.readBytes(len), windowStart, size };
+  } catch (e) {
+    console.warn('[livePhoto] 读取文件尾部失败', uri, e?.message || e);
+    return null;
+  } finally {
+    try { handle?.close(); } catch {}
   }
-  return { live: false, source: 'scan' };
+};
+
+// 在窗口里定位内嵌 mp4 的起点：优先用 XMP 声明的长度（要正好落在 ftyp 框上），
+// 其次找窗口里最后一个 ftyp（三星等没有长度标记的拼接格式）
+const findMotionStart = (win, videoLength) => {
+  if (videoLength > 0) {
+    const at = win.size - videoLength - win.windowStart;
+    if (at >= 0 && isFtypBox(win.bytes, at)) return at;
+  }
+  return findLastFtyp(win.bytes, 0);
+};
+
+// 兜底检测（详情页专用）：无标记拼接格式（荣耀等）的最后一条路径。
+// 只扫尾部窗口——为了判断"是不是实况"去整文件读 20~40MB 纯属浪费
+const detectFull = async (uri) => {
+  let want = TAIL_STEP;
+  for (;;) {
+    const win = readTailWindow(uri, Math.min(want, TAIL_CAP));
+    if (!win) return { live: false, source: 'scan' };
+    const start = findLastFtyp(win.bytes, 0);
+    if (start > 0) {
+      return { live: true, videoLength: win.size - (win.windowStart + start), source: 'scan' };
+    }
+    if (win.windowStart === 0 || want >= TAIL_CAP) return { live: false, source: 'scan' };
+    want *= 2;
+  }
 };
 
 // 检测媒体条目是否实况/动态照片。
@@ -211,8 +252,9 @@ export const getLivePhotoInfo = async (entry, { full = false } = {}) => {
       } else {
         // ②③ 头部 XMP + 尾部 SEFT/ftyp 廉价检测
         out = { ...await detectQuick(uri, size), size, scanned: false };
-        // ④ 全文件扫描兜底（仅详情页）
-        if (!out.live && full && size <= MAX_DETECT_SIZE) {
+        // ④ 尾部窗口兜底扫描（仅详情页）：只读文件尾那一段，跟整张图多大无关，
+        //    所以不再限制文件大小（以前限制 40MB 是为了别整文件读）
+        if (!out.live && full) {
           out = { ...await detectFull(uri), size, scanned: true };
         }
       }
@@ -237,8 +279,30 @@ const isFtypBox = (bytes, i) =>
   bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 &&
   bytes[i + 4] === 0x66 && bytes[i + 5] === 0x74 && bytes[i + 6] === 0x79 && bytes[i + 7] === 0x70;
 
+/* 本次会话里已经提取好的动效地址：命中就直接返回，连 stat 都不做——
+   "同一张照片点第二次不用等"就靠它；进后台清空目录时由上层一起清掉。 */
+const readyCache = new Map();
+// 正在提取的（预热和用户点击可能同时发生，共用同一个任务，别重复读两遍）
+const pendingCache = new Map();
+
+export const clearMotionVideoCache = () => {
+  readyCache.clear();
+  pendingCache.clear();
+};
+
+// 把窗口里的那一段 mp4 写出去（末尾按 box 结构裁到最后一个完整 box）
+const writeMotionClip = async (win, startInWin, dest) => {
+  const cleanEnd = mp4CleanEnd(win.bytes, startInWin);
+  const end = cleanEnd > startInWin ? cleanEnd : win.bytes.length;
+  const dir = `${FileSystem.documentDirectory}motionVideos`;
+  if (!(await FileSystem.getInfoAsync(dir)).exists) {
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  }
+  new FileSystemNew.File(dest).write(win.bytes.subarray(startInWin, end));
+};
+
 // 提取内嵌的动态视频，返回可播放的本地 mp4 地址；解析失败返回 null（界面回退为静帧展示）。
-// 结果落盘缓存，同一张照片只解析一次
+// 只读尾部窗口 → 定位 mp4 起点 → 原地裁剪写出，全程不整文件读；磁盘 + 内存两层缓存
 export const extractMotionVideo = async (entry, info) => {
   const normalized = normalizeEntry(entry) || {};
   const uri = normalized.uri;
@@ -249,41 +313,45 @@ export const extractMotionVideo = async (entry, info) => {
   if (!uri.startsWith('file://')) return null;
 
   const key = normalized.assetId || uri;
+  if (readyCache.has(key)) return readyCache.get(key);
+  const inflight = pendingCache.get(key);
+  if (inflight) return inflight;
+
   const dest = `${FileSystem.documentDirectory}motionVideos/${hashKey(key)}.mp4`;
-  try {
-    const existing = await FileSystem.getInfoAsync(dest);
-    if (existing.exists) return dest;
-  } catch {}
-
-  try {
-    const { File } = FileSystemNew;
-    const src = new File(uri);
-    const buffer = await src.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-
-    // 优先用 XMP 声明的视频长度精确定位；不行就在尾部扫描 mp4 起始框
-    let start = -1;
-    if (info?.videoLength && info.videoLength > 0 && info.videoLength < bytes.length) {
-      const candidate = bytes.length - info.videoLength;
-      if (isFtypBox(bytes, candidate)) start = candidate;
-    }
-    if (start < 0) {
-      const from = Math.max(0, bytes.length - TAIL_CAP);
-      for (let i = from; i + 8 <= bytes.length; i++) {
-        if (isFtypBox(bytes, i)) start = i;
+  const task = (async () => {
+    try {
+      const existing = await FileSystem.getInfoAsync(dest);
+      if (existing.exists) {
+        readyCache.set(key, dest);
+        return dest;
       }
-    }
-    if (start <= 0) return null;
+    } catch {}
 
-    const dir = `${FileSystem.documentDirectory}motionVideos`;
-    if (!(await FileSystem.getInfoAsync(dir)).exists) {
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    // 视频长度已知就按它定窗口（+64KB 余量：有的厂商会在视频后再拼私有尾数据），
+    // 不知道就从 2MB 起步、找不到再翻倍
+    let want = info?.videoLength > 0 ? info.videoLength + 64 * 1024 : TAIL_STEP;
+    for (;;) {
+      const win = readTailWindow(uri, Math.min(want, TAIL_CAP));
+      if (!win) return null;
+      const start = findMotionStart(win, info?.videoLength);
+      if (start > 0) {
+        await writeMotionClip(win, start, dest);
+        readyCache.set(key, dest);
+        return dest;
+      }
+      // 窗口已经覆盖到文件头、或到了上限还没找到：这张不是实况 / 格式不认识
+      if (win.windowStart === 0 || want >= TAIL_CAP) return null;
+      want = Math.min(want * 2, TAIL_CAP);
     }
-    const cleanEnd = mp4CleanEnd(bytes, start);
-    new File(dest).write(bytes.subarray(start, cleanEnd > start ? cleanEnd : bytes.length));
-    return dest;
+  })();
+
+  pendingCache.set(key, task);
+  try {
+    return await task;
   } catch (e) {
     console.warn('[livePhoto] 提取动态视频失败', e?.message || e);
     return null;
+  } finally {
+    pendingCache.delete(key);
   }
 };

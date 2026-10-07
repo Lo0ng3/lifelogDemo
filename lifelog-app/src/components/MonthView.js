@@ -13,6 +13,14 @@ import { groupColor } from '../utils/recordMeta';
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日'];
 const MAX_DOTS = 3;
+/* 周条（星期表头 / 收起后的本周）和日期格必须用同一组左右边界：
+   日期格住在 tlWrap 里（tlWrap 有 marginHorizontal: TL_PAD_H），grid 再叠一层
+   paddingHorizontal: GRID_PAD_H，所以最外侧那一天距容器边 = TL_PAD_H + GRID_PAD_H；
+   而周条是 tlWrap 外面的兄弟节点，得自己补上同样的缩进。
+   之前周条只写了 10，日期格实际内缩 16+10，两者差 16px —— 星期文字相对日期
+   会整体"扇形"错开（第一列偏左、最后一列偏右），就是看到的没对齐。 */
+const TL_PAD_H = 16;
+const GRID_PAD_H = 10;
 // 没有记录的日期共用同一个空数组：否则每次渲染都是新的 []，
 // 会让下面的 memo 化日期格全部判定为"props 变了"而重渲染
 const NO_RECORDS = [];
@@ -397,10 +405,10 @@ const makeStyles = (c) => ({
   navBtnText: { fontSize: 16, color: c.textSecondary, marginTop: -2 },
   todayBtn: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.accentSoft, alignItems: 'center', justifyContent: 'center' },
   todayBtnText: { fontSize: 12.5, color: c.accent, fontWeight: '600' },
-  // 收起时固定显示的那条"本周"
-  weekStrip: { flexDirection: 'row', alignItems: 'center', height: 38, paddingHorizontal: 10, marginBottom: 4 },
+  // 收起时固定显示的那条"本周"；左右缩进要跟日期格一致（见 TL_PAD_H / GRID_PAD_H 的说明）
+  weekStrip: { flexDirection: 'row', alignItems: 'center', height: 38, paddingHorizontal: TL_PAD_H + GRID_PAD_H, marginBottom: 4 },
   weekText: { flex: 1, textAlign: 'center', fontSize: 11, color: c.textMuted },
-  grid: { paddingHorizontal: 10, paddingBottom: 6 },
+  grid: { paddingHorizontal: GRID_PAD_H, paddingBottom: 6 },
   week: { flexDirection: 'row' },
   dayHit: { flex: 1, paddingVertical: 2 },
   dayFill: { width: '100%' },
@@ -431,7 +439,7 @@ const makeStyles = (c) => ({
   tlHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6, borderTopWidth: 1, borderTopColor: c.divider },
   tlTitle: { fontSize: 13.5, fontWeight: '600', color: c.text },
   tlCount: { fontSize: 11.5, color: c.textMuted },
-  tlWrap: { flex: 1, marginHorizontal: 16, backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden' },
+  tlWrap: { flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden' },
   tlContent: { paddingBottom: 12 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },

@@ -1,9 +1,11 @@
 import React, { createContext, useState, useEffect } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions, withTimeout } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, enforceCacheCaps } from '../utils/media';
+import { downloadRemoteCover, cleanTransientCaches, enforceCacheCaps, clearMotionVideos } from '../utils/media';
+import { clearMotionVideoCache } from '../utils/livePhoto';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
 export const LogContext = createContext();
@@ -23,14 +25,28 @@ export const LogProvider = ({ children }) => {
   const [amapJsKey, setAmapJsKeyState] = useState('');
   const [amapJsCode, setAmapJsCodeState] = useState('');
 
+  /* 实况照片提取出来的动效视频（motionVideos/）只是"这次会话的临时文件"：
+     进后台就整体清掉（下次看再提取一遍，反正点开详情页会预热），
+     磁盘清掉的同时也把内存里的"已就绪"表清掉，否则会拿到已经不存在的路径。
+     启动时再兜底清一遍，防止进程被系统杀掉时留下残留。 */
+  const clearMotionCache = () => {
+    clearMotionVideoCache();
+    clearMotionVideos().catch(() => {});
+  };
+
   useEffect(() => {
     loadLogs();
+    clearMotionCache();
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'background') clearMotionCache();
+    });
     // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu') setProviderState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_key').then(v => { if (v) setAmapKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_key').then(v => { if (v) setAmapJsKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_code').then(v => { if (v) setAmapJsCodeState(v); }).catch(() => {});
+    return () => appStateSub.remove();
   }, []);
 
   const setTdtKey = async (key) => {

@@ -445,6 +445,13 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
 
   return {
     permissionDenied: false,
+    // 权限状态一并带回：相册只授权了"部分照片"时，没授权那部分原片扫不到，
+    // 记录会继续用副本显示（界面据此提示用户去给全量权限）
+    permState: {
+      granted: !!perm?.granted,
+      accessPrivileges: perm?.accessPrivileges || 'all',
+      canAskAgain: !!perm?.canAskAgain,
+    },
     changed,
     logs: changed ? next : logs,
     matched,

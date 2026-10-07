@@ -13,6 +13,7 @@ import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { deletePathAsync } from '../utils/storagePaths';
+import { onAddDraftReset } from '../utils/draftReset';
 import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
@@ -321,6 +322,12 @@ export default function AddScreen({ navigation, route }) {
   // 这些还在草稿里、没保存的图要算"被引用"，不能被当成多余的删掉
   useEffect(() => { setDraftMediaEntries(selectedImages); }, [selectedImages]);
   useEffect(() => () => setDraftMediaEntries([]), []);
+  // 侧边栏「数据目录」里点了"清空添加页草稿"：把表单和草稿保护一起清掉，
+  // 那批副本就变成没人引用的孤儿，同步 / 清理时能删（否则常驻 tab 会让它们永远留着）
+  useEffect(() => onAddDraftReset(() => {
+    setSelectedImages([]);
+    setDraftMediaEntries([]);
+  }), []);
 
   useEffect(() => {
     if (route.params?.editItem) {
