@@ -137,7 +137,7 @@ export default function AddScreen({ navigation, route }) {
     setShowSearchAuto(false);
     if (Platform.OS === 'android') {
       ToastAndroid.show(
-        added > 0 ? `已加入 ${added} 个分享进来的影像` : '这些影像已经在表单里了',
+        added > 0 ? `已加入 ${added} 张分享进来的照片` : '这些照片已经在表单里了',
         ToastAndroid.SHORT
       );
     }
@@ -522,7 +522,7 @@ export default function AddScreen({ navigation, route }) {
         });
         const skipped = list.length - fresh.length;
         if (skipped > 0 && Platform.OS === 'android') {
-          ToastAndroid.show(`已跳过 ${skipped} 个重复添加的影像`, ToastAndroid.SHORT);
+          ToastAndroid.show(`已跳过 ${skipped} 张重复的照片`, ToastAndroid.SHORT);
         }
         if (fresh.length > 0) {
           setSelectedImages(prev => [...prev, ...fresh]);
@@ -632,12 +632,12 @@ export default function AddScreen({ navigation, route }) {
     // 应用内选图器产物是纯相册引用，保存零扫描零等待
     const hasCopies = selectedImages.some(e => isAppOwnedMediaPath(mediaUri(e)));
     if (hasCopies && Platform.OS === 'android') {
-      ToastAndroid.show('正在关联相册影像…', ToastAndroid.LONG);
+      ToastAndroid.show('正在关联相册照片…', ToastAndroid.LONG);
     }
     const relink = await relinkNewEntries(selectedImages);
     if (relink.keptCount > 0 && Platform.OS === 'android') {
       ToastAndroid.show(
-        `${relink.keptCount} 个影像将以副本保存（${relink.reason || '未能关联到相册原片'}），可在"同步相册影像"中重试`,
+        `${relink.keptCount} 张照片将以副本保存（${relink.reason || '未能关联到相册原片'}），可在"同步相册影像"中重试`,
         ToastAndroid.LONG
       );
     }
@@ -1137,11 +1137,9 @@ export default function AddScreen({ navigation, route }) {
           <View style={styles.divider} />
 
           <View>
-            <Text style={styles.inputLabel}>{
-              baseType === 'ticket' ? '票根 / 留影'
-                : baseType === 'note' ? '照片'
-                : '现场影像 / 截图'
-            } ({selectedImages.length})</Text>
+            {/* 各类型统一叫「照片」：以前旅票是"票根 / 留影"、娱乐/地点是"现场影像 / 截图"，
+                同一个东西三个名字，容易看混 */}
+            <Text style={styles.inputLabel}>照片 ({selectedImages.length})</Text>
             <View style={styles.imageGrid}>
               {selectedImages.map((entry, idx) => (
                 <View key={idx} style={styles.imageGridItem}>

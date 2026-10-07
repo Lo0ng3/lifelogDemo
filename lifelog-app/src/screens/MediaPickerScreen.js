@@ -666,7 +666,7 @@ export default function MediaPickerScreen({ route, navigation }) {
       )}
       {status === 'denied' && (
         <View style={styles.deniedBox}>
-          <Text style={styles.deniedText}>需要相册权限才能选择影像</Text>
+          <Text style={styles.deniedText}>需要相册权限才能选择照片</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={init}>
             <Text style={styles.retryText}>重新授权</Text>
           </TouchableOpacity>
