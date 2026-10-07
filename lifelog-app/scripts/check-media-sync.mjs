@@ -156,6 +156,7 @@ const copySource = (rel) => {
   writeFileSync(target, code);
   return target;
 };
+copySource('src/utils/diag.js');
 copySource('src/utils/storagePaths.js');
 const managePath = copySource('src/utils/media.js');
 const mediaSyncPath = copySource('src/utils/mediaSync.js');

@@ -9,6 +9,7 @@
 // 外部目录不可用（未挂载、iOS、同步调用失败）时不报错，静默回退内部目录。
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import * as FileSystem from 'expo-file-system/legacy';
+import { getLivePhotoError } from './diag';
 
 const native = requireOptionalNativeModule('Paths');
 
@@ -220,9 +221,16 @@ export const describeStorageAsync = async () => {
   for (const [label, dir] of cacheDirs) {
     try {
       const st = await dirStatsAsync(dir);
-      lines.push(st.files === 0
-        ? `${label}：暂无${label.includes('motionVideos') ? '（看过实况照片后会生成，进后台会清空）' : ''}`
-        : sizeLine(label, st));
+      if (st.files > 0) {
+        lines.push(sizeLine(label, st));
+      } else if (label.includes('motionVideos')) {
+        // 实况动效为空时把"为什么"也带上：以前失败是静默的，用户只能看到"暂无"
+        const why = getLivePhotoError();
+        lines.push(`实况视频 motionVideos：暂无（看过实况照片后会生成，进后台会清空）`
+          + (why ? `\n  · 最近一次提取失败：${why}` : ''));
+      } else {
+        lines.push(`${label}：暂无`);
+      }
     } catch (e) {
       lines.push(`${label}：读取失败（${e?.message || e}）`);
     }

@@ -14,6 +14,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as FileSystemNew from 'expo-file-system';
 import { readFileRangeAsync } from './storagePaths';
+import { setLivePhotoError } from './diag';
 
 const HEADER_BYTES = 512 * 1024; // 头部扫描范围（GCamera XMP 元数据）
 const TAIL_BYTES = 256 * 1024;   // 尾部扫描范围（三星 SEFT / 追加 mp4 的 ftyp）
@@ -172,9 +173,11 @@ const readTailWindow = async (uri, want) => {
     if (bytes?.length) return { bytes, windowStart, size };
     // 拿不到原生区间读（旧构建 / iOS）：整文件读兜底，窗口就算整个文件
     const whole = await new FileSystemNew.File(uri).bytes();
+    if (!whole?.length) setLivePhotoError('区间读与整文件读都没拿到数据（相册文件可能无法以只读方式打开）');
     return whole?.length ? { bytes: whole, windowStart: 0, size: whole.length } : null;
   } catch (e) {
     console.warn('[livePhoto] 读取文件尾部失败', uri, e?.message || e);
+    setLivePhotoError(`读取失败：${e?.message || e}`);
     return null;
   }
 };
@@ -343,10 +346,14 @@ export const extractMotionVideo = async (entry, info) => {
       if (start > 0) {
         await writeMotionClip(win, start, dest);
         readyCache.set(key, dest);
+        setLivePhotoError(null);
         return dest;
       }
       // 窗口已经覆盖到文件头、或到了上限还没找到：这张不是实况 / 格式不认识
-      if (win.windowStart === 0 || want >= TAIL_CAP) return null;
+      if (win.windowStart === 0 || want >= TAIL_CAP) {
+        setLivePhotoError('读到了文件但没找到内嵌 mp4（这张可能不是实况照片）');
+        return null;
+      }
       want = Math.min(want * 2, TAIL_CAP);
     }
   })();
@@ -356,6 +363,7 @@ export const extractMotionVideo = async (entry, info) => {
     return await task;
   } catch (e) {
     console.warn('[livePhoto] 提取动态视频失败', e?.message || e);
+    setLivePhotoError(`提取失败：${e?.message || e}`);
     return null;
   } finally {
     pendingCache.delete(key);

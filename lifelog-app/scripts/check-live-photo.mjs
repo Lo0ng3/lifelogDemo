@@ -137,6 +137,7 @@ const copySource = (rel) => {
   writeFileSync(target, code);
   return target;
 };
+copySource('src/utils/diag.js');
 copySource('src/utils/storagePaths.js');
 const livePhotoPath = copySource('src/utils/livePhoto.js');
 
