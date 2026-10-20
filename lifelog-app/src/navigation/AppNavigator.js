@@ -10,9 +10,8 @@ import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
 import ShareTargetScreen from '../screens/ShareTargetScreen';
-import TabBarBlur from '../components/TabBarBlur';
+import AppTabBar from '../components/AppTabBar';
 import { useTheme } from '../theme/ThemeProvider';
-import { tabBarStyleFor } from './tabBarStyle';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -25,18 +24,13 @@ function Tabs() {
   const { colors } = useTheme();
   return (
     <Tab.Navigator
+      tabBar={(props) => <AppTabBar {...props} />}
       screenOptions={{
         // Tab 之间用轻微的位移过渡，比硬切更顺；键盘弹出时收起 TabBar
         animation: 'shift',
-        tabBarHideOnKeyboard: true,
         // 配置底部导航栏的样式（跟随主题）
         tabBarActiveTintColor: colors.accent, // 选中时的颜色
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
-        tabBarStyle: tabBarStyleFor(colors),
-        tabBarBackground: () => <TabBarBlur />,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: -1 },
-        tabBarItemStyle: { paddingVertical: 0 },
-        tabBarIconStyle: { marginBottom: -1 },
         headerShown: false, // 隐藏默认的顶部标题栏，我们后续自己画
       }}
     >

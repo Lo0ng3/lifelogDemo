@@ -662,17 +662,22 @@ export default function DetailScreen({ route, navigation }) {
 
       {/* 退出按钮固定在屏幕最上层，不跟着 ScrollView 滚走 */}
       <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
-        <BlurView
-          tint={isDark ? 'dark' : 'light'}
-          intensity={isDark ? 50 : 60}
-          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-          style={styles.fixedBack}
-        >
+        <View style={[
+          styles.fixedBack,
+          Platform.OS !== 'ios' && { backgroundColor: isDark ? 'rgba(30,30,32,0.92)' : 'rgba(255,255,255,0.92)' },
+        ]}>
+          {Platform.OS === 'ios' && (
+            <BlurView
+              tint={isDark ? 'dark' : 'light'}
+              intensity={isDark ? 50 : 60}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.42)' : 'rgba(255,255,255,0.42)' }]} />
           <TouchableOpacity style={styles.fixedBackBtn} onPress={() => navigation.goBack()} activeOpacity={0.82}>
             <ChevronLeft size={24} color={colors.text} />
           </TouchableOpacity>
-        </BlurView>
+        </View>
       </View>
 
       <ScrollView
@@ -764,12 +769,17 @@ export default function DetailScreen({ route, navigation }) {
 
       {/* 底部操作条：与底部导航同宽同高，同样用高斯模糊底 */}
       <View pointerEvents="box-none" style={[styles.actionWrap, { bottom: Math.max(18, insets.bottom - 10) }]}>
-        <BlurView
-          tint={isDark ? 'dark' : 'light'}
-          intensity={isDark ? 50 : 60}
-          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-          style={styles.actionBar}
-        >
+        <View style={[
+          styles.actionBar,
+          Platform.OS !== 'ios' && { backgroundColor: isDark ? 'rgba(30,30,32,0.92)' : 'rgba(255,255,255,0.92)' },
+        ]}>
+          {Platform.OS === 'ios' && (
+            <BlurView
+              tint={isDark ? 'dark' : 'light'}
+              intensity={isDark ? 50 : 60}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.52)' }]} />
           <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75}>
             <Edit3 size={17} color={colors.accent} />
@@ -780,7 +790,7 @@ export default function DetailScreen({ route, navigation }) {
             <Trash2 size={17} color={colors.danger} />
             <Text style={[styles.actionText, { color: colors.danger }]}>删除</Text>
           </TouchableOpacity>
-        </BlurView>
+        </View>
       </View>
 
       {/* 全屏图片/视频查看器 */}

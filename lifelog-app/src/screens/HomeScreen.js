@@ -41,6 +41,7 @@ import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
 import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { getPalette } from '../theme/palette';
 import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 import { tabBarStyleFor, HIDDEN_TAB_BAR } from '../navigation/tabBarStyle';
 
@@ -536,8 +537,19 @@ export default function HomeScreen({ navigation }) {
   }, [mapFullscreen, winW, winH]);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [mapIsDark, setMapIsDark] = useState(isDark);
   const sidebarAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
+
+  // 主题切换时不要立刻重建 WebView 里的地图：地图在背景层保活，
+  // 每次切深浅都会重载瓦片和渲染器，关闭「我的」后再同步地图主题更稳。
+  useEffect(() => {
+    if (!isSidebarOpen) setMapIsDark(isDark);
+  }, [isDark, isSidebarOpen]);
+  const mapPalette = useMemo(
+    () => getPalette(mapIsDark ? 'dark' : 'light'),
+    [mapIsDark]
+  );
 
   const toggleSidebar = useCallback((open) => {
     setIsSidebarOpen(open);
@@ -717,13 +729,13 @@ export default function HomeScreen({ navigation }) {
     provider: mapProvider,
     jsApiKey: useJsApi ? amapJsKey : '',
     securityCode: useJsApi ? amapJsCode : '',
-    dark: isDark,
+    dark: mapIsDark,
     notice: jsApiFailed ? '高德 JS API 没能出图，已切回栅格底图（检查 JS API Key / 安全密钥 / 网络）' : '',
-    colors: colors.map,
+    colors: mapPalette.map,
     // 矢量模式不注入 Leaflet：省掉 145KB 的内联脚本，也少一份用不上的库
     leafletJs: useJsApi ? '' : LEAFLET_JS,
     leafletCss: useJsApi ? '' : LEAFLET_CSS,
-  }), [mapData, tdtKey, mapProvider, amapJsKey, amapJsCode, useJsApi, isDark, jsApiFailed, colors.map]);
+  }), [mapData, tdtKey, mapProvider, amapJsKey, amapJsCode, useJsApi, mapIsDark, jsApiFailed, mapPalette.map]);
   // source 对象要 memo：否则每次 HomeScreen 重渲染（滑动侧边栏、打字搜索…）
   // 都会给 WebView 换一个新对象，WebView 把整张地图连同瓦片重新加载一遍
   // baseUrl 给页面一个正经的 https 源：高德 JS API 会往 vdata.amap.com 发跨域请求，
@@ -976,6 +988,8 @@ export default function HomeScreen({ navigation }) {
                       style={[styles.appearanceOption, on && styles.appearanceOptionOn]}
                       onPress={() => setMode(option.id)}
                       activeOpacity={0.75}
+                      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                      accessibilityRole="button"
                     >
                       <View style={[
                         styles.appearanceSwatch,
