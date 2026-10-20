@@ -23,6 +23,12 @@ import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, ME
 
 // 二级类型选择：第一级大类 → 第二级子类；地点无子类
 const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐', note: '随笔' };
+const TYPE_CARDS = [
+  { id: 'ticket', label: '旅票', hint: '航班 · 列车', Icon: Plane, bgKey: 'iconTicket', colorKey: 'groupTicket' },
+  { id: 'location', label: '地点', hint: '城市 · 小店', Icon: MapPin, bgKey: 'groupPlaceSoft', colorKey: 'groupPlace' },
+  { id: 'media', label: '娱乐', hint: '电影 · 阅读', Icon: Film, bgKey: 'iconMedia', colorKey: 'groupMedia' },
+  { id: 'note', label: '随笔', hint: '日记 · 想法', Icon: NotebookPen, bgKey: 'groupNoteSoft', colorKey: 'groupNote' },
+];
 const SUB_OPTIONS = {
   ticket: TICKET_SUB_OPTIONS,
   media: MEDIA_SUB_OPTIONS,
@@ -193,6 +199,14 @@ export default function AddScreen({ navigation, route }) {
   const applyType = (base, sub) => {
     setBaseType(base);
     setSubType(sub);
+  };
+
+  // 首页四大类卡片：先落到该类默认子类，再打开二级选择（地点没有子类，直接选中）
+  const chooseBaseType = (base) => {
+    const defaultSub = base === 'ticket' ? 'flight' : base === 'media' ? 'movie' : base === 'note' ? 'diary' : 'location';
+    if (base !== baseType || subType !== defaultSub) applyType(base, defaultSub);
+    setSheetBase(base);
+    if (base !== 'location') typeSheetRef.current?.present();
   };
 
   /* ---------------- 表单键盘体验 ----------------
@@ -800,17 +814,43 @@ export default function AddScreen({ navigation, route }) {
         onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
         contentContainerStyle={scrollContentStyle}
       >
+        <View style={styles.formIntro}>
+          <Text style={styles.formKicker}>记录一个瞬间</Text>
+          <Text style={styles.formTitle}>今天，想留下什么？</Text>
+        </View>
+
+        <GlassSurface style={styles.typePicker} blur={false} borderRadius={21}>
+          {TYPE_CARDS.map((card) => {
+            const on = baseType === card.id;
+            const Icon = card.Icon;
+            return (
+              <TouchableOpacity
+                key={card.id}
+                style={[styles.typeCard, on && styles.typeCardActive]}
+                onPress={() => chooseBaseType(card.id)}
+                activeOpacity={0.82}
+              >
+                <View style={[styles.typeIcon, { backgroundColor: on ? colors.accentSoft : colors[card.bgKey] }]}>
+                  <Icon size={18} color={on ? colors.accent : colors[card.colorKey]} />
+                </View>
+                <Text style={[styles.typeCardLabel, on && styles.typeCardLabelActive]}>{card.label}</Text>
+                <Text style={styles.typeCardHint}>{card.hint}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </GlassSurface>
+
         <GlassSurface style={styles.cardSection} blur={false} borderRadius={20}>
-          {/* 类型字段：点开底部弹层做二级选择（大类 → 子类） */}
           <TouchableOpacity
-            style={styles.typeRow}
+            style={styles.subtypeRow}
             onPress={() => { setSheetBase(baseType); typeSheetRef.current?.present(); }}
+            activeOpacity={0.75}
           >
-            <Text style={styles.typeLabel}>类型</Text>
-            <Text style={styles.typeValue}>
+            <Text style={styles.subtypeLabel}>
               {baseType === 'location' ? '地点' : `${BASE_LABEL[baseType] || ''} · ${SUB_LABEL[subType] || ''}`}
             </Text>
-            <ChevronRight size={16} color={colors.textFaint} />
+            <Text style={styles.subtypeAction}>切换</Text>
+            <ChevronRight size={14} color={colors.textFaint} />
           </TouchableOpacity>
           {baseType === 'ticket' && (
             <View style={{ zIndex: 10 }}>
@@ -1275,6 +1315,20 @@ const makeStyles = (c) => ({
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
   formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  formIntro: { paddingHorizontal: 1, paddingTop: 8, paddingBottom: 15 },
+  formKicker: { fontSize: 10.5, fontWeight: '650', color: c.textMuted, letterSpacing: 0.1 },
+  formTitle: { marginTop: 2, fontSize: 27, lineHeight: 32, fontWeight: '800', letterSpacing: -0.9, color: c.textStrong },
+  typePicker: { flexDirection: 'row', gap: 4, padding: 5, borderRadius: 21, marginBottom: 12 },
+  typeCard: { flex: 1, height: 88, paddingVertical: 8, paddingHorizontal: 3, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'transparent' },
+  typeCardActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  typeIcon: { width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
+  typeCardLabel: { fontSize: 11, fontWeight: '650', color: c.textSecondary },
+  typeCardLabelActive: { color: c.accent, fontWeight: '750' },
+  typeCardHint: { fontSize: 8, color: c.textMuted, marginTop: 1 },
+  subtypeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16 },
+  subtypeLabel: { fontSize: 10.5, fontWeight: '650', color: c.textMuted },
+  subtypeAction: { marginLeft: 'auto', fontSize: 10, fontWeight: '650', color: c.accent },
   typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
   typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
   typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },

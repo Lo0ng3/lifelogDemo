@@ -34,6 +34,9 @@ function Tabs() {
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
         tabBarStyle: tabBarStyleFor(colors),
         tabBarBackground: () => <TabBarGlass />,
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: -1 },
+        tabBarItemStyle: { paddingVertical: 0 },
+        tabBarIconStyle: { marginBottom: -1 },
         headerShown: false, // 隐藏默认的顶部标题栏，我们后续自己画
       }}
     >
@@ -51,6 +54,7 @@ function Tabs() {
         name="Add"
         component={AddScreen}
         options={{
+          tabBarStyle: { display: 'none' },
           tabBarLabel: '添加',
           tabBarIcon: ({ color, size }) => (
             <PlusCircle color={color} size={size} />

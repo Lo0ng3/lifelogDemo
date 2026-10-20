@@ -10,7 +10,7 @@ import { useTheme } from '../theme/ThemeProvider';
 // 不裁切不拉伸不强制铺满，槽位内空隙即卡片背景。
 // 槽位尺寸由调用方决定（列表 64 / 详情 80），文字起点因此对所有条目统一。
 // 无封面时回退类型图标（现状一致）。
-export default function CoverIcon({ item, height = 64, style }) {
+export function useCoverSource(item) {
   const { colors } = useTheme();
   const { IconComponent, iconColor, iconBgColor } = getIconConfig(item, colors);
   const entry = item?.coverIndex != null ? item.localImages?.[item.coverIndex] : null;
@@ -30,14 +30,23 @@ export default function CoverIcon({ item, height = 64, style }) {
     return () => { alive = false; };
   }, [entry, item?.coverThumbUrl]);
 
-  const src = item?.coverThumbUrl || uri || item?.coverUrl;
+  return {
+    src: item?.coverThumbUrl || uri || item?.coverUrl,
+    IconComponent,
+    iconColor,
+    iconBgColor,
+  };
+}
+
+export default function CoverIcon({ item, height = 64, style }) {
+  const { src, IconComponent, iconColor, iconBgColor } = useCoverSource(item);
   return (
     <View style={[styles.slot, { width: height, height }, style]}>
       {src ? (
         <Image
           source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
           style={StyleSheet.absoluteFill}
-          contentFit="contain"
+          contentFit="cover"
           transition={150}
           // memory 只走内存缓存：列表来回滑、封面被挤出内存就得重新联网下载，
           // 滚动时就是一团解码/GC 抖动。memory-disk 是默认档，落盘一次之后不再重下
@@ -55,6 +64,6 @@ export default function CoverIcon({ item, height = 64, style }) {
 }
 
 const styles = StyleSheet.create({
-  slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 8 },
+  slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 10, overflow: 'hidden' },
   iconBox: { width: '100%', height: '100%', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 });

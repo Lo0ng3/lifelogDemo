@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
   useWindowDimensions, Keyboard
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen
+  User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen,
+  ChevronLeft, ChevronRight
 } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
@@ -27,6 +28,7 @@ import { LogContext } from '../context/LogContext';
 import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
+import FeatureCard, { MiniCover } from '../components/FeatureCard';
 import { exportBackup, importBackup } from '../utils/backup';
 import { describeStorageAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
@@ -42,15 +44,14 @@ import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../util
 import { tabBarStyleFor, HIDDEN_TAB_BAR } from '../navigation/tabBarStyle';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const SIDEBAR_WIDTH = SCREEN_WIDTH * 0.58;
+const SIDEBAR_WIDTH = SCREEN_WIDTH;
 
 const subTypeOptions = { ticket: TICKET_SUB_OPTIONS, media: MEDIA_SUB_OPTIONS };
 
 // 列表行高固定（RecordRow 里 cardItem 就是 96，行与行之间没有分隔线/外边距）。
 // 把这个信息交给 FlatList，滚动时就不用逐行测量、也不会因为测量结果回来而"跳一下"
-const ROW_HEIGHT = 96;
 const rowKeyExtractor = (item) => String(item.id);
-const rowItemLayout = (_, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index });
+const MONTH_EN = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 const VIEWS = [
   { id: 'list', label: '列表' },
@@ -111,7 +112,7 @@ export default function HomeScreen({ navigation }) {
     amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
   } = useContext(LogContext);
   // 外观：始终跟随系统（和开屏图保持一致）
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, mode, setMode } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
@@ -468,6 +469,8 @@ export default function HomeScreen({ navigation }) {
 
   const toggleSidebar = useCallback((open) => {
     setIsSidebarOpen(open);
+    // 「我的」是全屏页，底部 TabBar 跟着收起；关闭时按当前主题装回去
+    navigation.setOptions({ tabBarStyle: open ? HIDDEN_TAB_BAR : tabBarStyleFor(colors) });
     // 打开侧边栏先收键盘：列表搜索框还聚焦着的时候，键盘会盖住侧边栏下半部分，
     // 那几项（导出备份 / 导入备份 / 清理缓存 / 说明…）点了就像没反应，得点好几次
     if (open) Keyboard.dismiss();
@@ -481,7 +484,7 @@ export default function HomeScreen({ navigation }) {
       }
     ).start();
     Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 150, useNativeDriver: true }).start();
-  }, [sidebarAnim, overlayAnim]);
+  }, [sidebarAnim, overlayAnim, navigation, colors]);
 
   // 进 / 退全屏：地图铺满整屏并横过来（转内容，不转界面）。
   // 底部 TabBar 也要藏起来/装回去，不然全屏地图底部会露出一条 TabBar
@@ -531,6 +534,10 @@ export default function HomeScreen({ navigation }) {
         exitMapFullscreen();
         return true;
       }
+      if (isSidebarOpen) {
+        toggleSidebar(false);
+        return true;
+      }
       if (sheetOpen) {
         filterSheetRef.current?.dismiss();
         return true;
@@ -545,7 +552,7 @@ export default function HomeScreen({ navigation }) {
       return true;
     });
     return () => sub.remove();
-  }, [navigation, sheetOpen, mapFullscreen, exitMapFullscreen]);
+  }, [navigation, sheetOpen, mapFullscreen, exitMapFullscreen, isSidebarOpen, toggleSidebar]);
 
   const renderBackdrop = useCallback(
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
@@ -563,6 +570,32 @@ export default function HomeScreen({ navigation }) {
     result.sort((a, b) => new Date(b.date) - new Date(a.date));
     return result;
   }, [logData, activeFilters, searchQuery]);
+
+  // 首页月报：沿用 demo 的「本月 N 条印记 / 共 M 张影像」口径，
+  // 不跟随搜索筛选变化，避免搜索时月报数字跟着跳。
+  const monthStats = useMemo(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const prefix = `${year}-${String(month).padStart(2, '0')}`;
+    const records = [...logData]
+      .filter((item) => String(item.date || '').startsWith(prefix))
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return {
+      year,
+      month,
+      records,
+      images: records.reduce((sum, item) => sum + (item.localImages?.length || 0), 0),
+    };
+  }, [logData]);
+
+  const featureRecord = filteredAndSortedData[0] || null;
+
+  const profileStats = useMemo(() => ({
+    records: logData.length,
+    images: logData.reduce((sum, item) => sum + (item.localImages?.length || 0), 0),
+    places: logData.filter((item) => item.baseType === 'location').length,
+  }), [logData]);
 
   // 同名地点的落点：地点印记和旅票的出发地/目的地一起算（规则见 utils/mapPlaces.js）。
   // 用全量 logData 算，切换筛选时同一地点的位置不会跳
@@ -654,8 +687,13 @@ export default function HomeScreen({ navigation }) {
       onPress={openDetail}
       onEdit={editItem}
       onDelete={handleDeleteItem}
+      style={[
+        styles.rowSurface,
+        index === 0 && styles.rowFirst,
+        index === filteredAndSortedData.length - 1 && styles.rowLast,
+      ]}
     />
-  ), [filteredAndSortedData.length, openDetail, editItem, handleDeleteItem]);
+  ), [filteredAndSortedData.length, openDetail, editItem, handleDeleteItem, styles]);
 
   // 切视图时给内容一个很短的淡入上浮，避免"啪"一下换掉
   const viewAnim = useSharedValue(1);
@@ -768,51 +806,167 @@ export default function HomeScreen({ navigation }) {
         <View pointerEvents="none" style={styles.sidebarGlass}>
           <GlassSurface style={StyleSheet.absoluteFill} borderRadius={0} tintColor={colors.sidebarTint} flat />
         </View>
-        <View style={[styles.sidebarContent, { paddingTop: insets.top + 20 }]}>
-          <View style={styles.sidebarHeader}><View style={styles.largeAvatar}><User color={colors.textOnAccent} size={40} /></View><Text style={styles.userName}>我</Text></View>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}><Text style={styles.statNum}>{logData.length}</Text><Text style={styles.statLabel}>总印记</Text></View>
+        <View style={[styles.sidebarContent, { paddingTop: insets.top + 8 }]}>
+          <View style={styles.profileTopbar}>
+            <TouchableOpacity style={styles.profileBack} onPress={() => toggleSidebar(false)}>
+              <ChevronLeft size={22} color={colors.text} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }} />
+            <View style={{ width: 38 }} />
           </View>
-          <View style={styles.sidebarMenu}>
-            <TouchableOpacity style={styles.menuItem} onPress={openSettings}>
-              <Settings size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.menuItemText}>地图服务</Text>
-                <Text style={styles.menuItemSub}>
-                  {mapProvider === 'amap'
-                    ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 地名检索已配置' : ' · 未配置检索 Key'}`
-                    : (tdtKey ? '天地图已配置' : '天地图未配置')}
-                </Text>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.profileScrollContent}
+          >
+            <Text style={styles.profileOverline}>我的印记</Text>
+            <Text style={styles.profileH1}>我</Text>
+
+            <GlassSurface style={styles.profileCard} blur={false} borderRadius={24}>
+              <View style={styles.profileIdentity}>
+                <View style={styles.profileAvatar}>
+                  <User size={26} color={colors.textOnAccent} />
+                  <View style={styles.avatarDot} />
+                </View>
+                <View style={styles.profileCopy}>
+                  <Text style={styles.profileCopyTitle}>把日子，轻轻收好。</Text>
+                  <Text style={styles.profileCopyMeta}>印记保存在本机</Text>
+                </View>
               </View>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
-              <RefreshCw size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册照片'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup}>
-              <Upload size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>导出备份</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={handleImportBackup}>
-              <Download size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>导入备份</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache}>
-              <Eraser size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>清理缓存</Text>
-            </TouchableOpacity>
-            {/* 数据目录：副本 / 封面实际落在哪、有多少，并现场做一次写入测试 */}
-            <TouchableOpacity style={styles.menuItem} onPress={handleShowStorage}>
-              <FolderOpen size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>数据目录</Text>
-            </TouchableOpacity>
-            {/* 说明：原先散落在各页面上的提示性文字都集中到这里 */}
-            <TouchableOpacity style={styles.menuItem} onPress={() => { toggleSidebar(false); setHelpOpen(true); }}>
-              <HelpCircle size={18} color={colors.textSecondary} style={{ marginRight: 10 }} />
-              <Text style={styles.menuItemText}>说明</Text>
-            </TouchableOpacity>
-            {/* 外观：默认跟随系统（白天浅色 / 夜间深色），也可以手动固定 */}
-          </View>
+              <View style={styles.profileStats}>
+                <View style={styles.profileStat}>
+                  <Text style={styles.profileStatNum}>{profileStats.records}</Text>
+                  <Text style={styles.profileStatLabel}>印记</Text>
+                </View>
+                <View style={styles.profileStat}>
+                  <Text style={styles.profileStatNum}>{profileStats.images}</Text>
+                  <Text style={styles.profileStatLabel}>影像</Text>
+                </View>
+                <View style={[styles.profileStat, styles.profileStatLast]}>
+                  <Text style={styles.profileStatNum}>{profileStats.places}</Text>
+                  <Text style={styles.profileStatLabel}>地点</Text>
+                </View>
+              </View>
+            </GlassSurface>
+
+            <Text style={styles.groupLabel}>记录与同步</Text>
+            <GlassSurface style={styles.menuCard} blur={false} borderRadius={19}>
+              <TouchableOpacity style={styles.menuItem} onPress={openSettings}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
+                  <Settings size={17} color={colors.accent} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>地图服务</Text>
+                  <Text style={styles.menuItemSub}>
+                    {mapProvider === 'amap'
+                      ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 地名检索已配置' : ' · 未配置检索 Key'}`
+                      : (tdtKey ? '天地图已配置' : '天地图未配置')}
+                  </Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.groupNoteSoft }]}>
+                  <RefreshCw size={17} color={colors.groupNote} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册照片'}</Text>
+                  <Text style={styles.menuItemSub}>重新关联原片</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.iconTrip }]}>
+                  <Upload size={17} color={colors.orange} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>导出备份</Text>
+                  <Text style={styles.menuItemSub}>全部记录与封面</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.menuItem, styles.menuItemLast]} onPress={handleImportBackup}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
+                  <Download size={17} color={colors.accent} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>导入备份</Text>
+                  <Text style={styles.menuItemSub}>覆盖或合并本地记录</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+            </GlassSurface>
+
+            <Text style={styles.groupLabel}>外观</Text>
+            <GlassSurface style={styles.appearanceCard} blur={false} borderRadius={19}>
+              <View style={styles.appearanceOptions}>
+                {[
+                  { id: 'light', label: '浅色' },
+                  { id: 'dark', label: '深色' },
+                  { id: 'auto', label: '自动' },
+                ].map((option) => {
+                  const on = mode === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[styles.appearanceOption, on && styles.appearanceOptionOn]}
+                      onPress={() => setMode(option.id)}
+                    >
+                      <View style={[
+                        styles.themeSwatch,
+                        option.id === 'light' && styles.themeSwatchLight,
+                        option.id === 'dark' && styles.themeSwatchDark,
+                        option.id === 'auto' && styles.themeSwatchAuto,
+                      ]} />
+                      <Text style={[styles.appearanceOptionText, on && styles.appearanceOptionTextOn]}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={styles.appearanceDivider} />
+              <View style={styles.appearanceRow}>
+                <Text style={styles.appearanceRowTitle}>液态玻璃</Text>
+                <Text style={styles.appearanceRowMeta}>{isDark ? '烟熏玻璃' : '乳白玻璃'} · 深浅自适应</Text>
+              </View>
+            </GlassSurface>
+
+            <Text style={styles.groupLabel}>数据</Text>
+            <GlassSurface style={styles.menuCard} blur={false} borderRadius={19}>
+              <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
+                  <Eraser size={17} color={colors.textSecondary} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>清理缓存</Text>
+                  <Text style={styles.menuItemSub}>封面、图片与地图缓存</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.menuItem} onPress={handleShowStorage}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
+                  <FolderOpen size={17} color={colors.textSecondary} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>数据目录</Text>
+                  <Text style={styles.menuItemSub}>查看副本与封面位置</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.menuItem, styles.menuItemLast]} onPress={() => { toggleSidebar(false); setHelpOpen(true); }}>
+                <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
+                  <HelpCircle size={17} color={colors.textSecondary} />
+                </View>
+                <View style={styles.menuCopy}>
+                  <Text style={styles.menuItemText}>使用说明</Text>
+                  <Text style={styles.menuItemSub}>视图、相册与备份</Text>
+                </View>
+                <ChevronRight size={15} color={colors.textFaint} />
+              </TouchableOpacity>
+            </GlassSurface>
+
+            <Text style={styles.version}>印记 1.9.7 · 液态玻璃</Text>
+            <View style={{ height: 100 }} />
+          </ScrollView>
         </View>
       </Animated.View>
 
@@ -823,7 +977,10 @@ export default function HomeScreen({ navigation }) {
           <View style={{ width: 36 }} /> 
         </View>
 
-        <Text style={styles.largeTitle}>印记</Text>
+        <View style={styles.titleBlock}>
+          <Text style={styles.overline}>{monthStats.year} · {monthStats.month}月</Text>
+          <Text style={styles.largeTitle}>印记</Text>
+        </View>
 
         {viewMode === 'list' && (
           <View style={styles.filterBar}>
@@ -850,28 +1007,65 @@ export default function HomeScreen({ navigation }) {
         >
         <Reanimated.View style={[styles.listWrapperShell, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
-          <GlassSurface style={styles.listWrapper} blur={false} borderRadius={22}>
-            <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
-              <FlatList
-                data={filteredAndSortedData}
-                keyExtractor={rowKeyExtractor}
-                renderItem={renderItem}
-                showsVerticalScrollIndicator={false}
-                // 行高固定 → 直接给出布局，省掉逐行测量
-                getItemLayout={rowItemLayout}
-                // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
-                // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
-                // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
-                initialNumToRender={8}
-                // 每批 4 行、每 24ms 一批：一帧要挂的原生 View 少了，掉帧就从"一次卡一下"
-                // 变成看不出来。4 行/帧 ≈ 240 行/秒，远快于任何甩动速度，不会露白
-                maxToRenderPerBatch={4}
-                windowSize={6}
-                updateCellsBatchingPeriod={24}
-                removeClippedSubviews={Platform.OS === 'android'}
-              />
-            </Reanimated.View>
-          </GlassSurface>
+          <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
+            <FlatList
+              data={filteredAndSortedData}
+              keyExtractor={rowKeyExtractor}
+              renderItem={renderItem}
+              showsVerticalScrollIndicator={false}
+              // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
+              // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
+              // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
+              initialNumToRender={8}
+              // 每批 4 行、每 24ms 一批：一帧要挂的原生 View 少了，掉帧就从"一次卡一下"
+              // 变成看不出来。4 行/帧 ≈ 240 行/秒，远快于任何甩动速度，不会露白
+              maxToRenderPerBatch={4}
+              windowSize={6}
+              updateCellsBatchingPeriod={24}
+              removeClippedSubviews={Platform.OS === 'android'}
+              contentContainerStyle={styles.listContent}
+              ListHeaderComponent={(
+                <View style={styles.listHeader}>
+                  <GlassSurface style={styles.monthCard} blur={false} borderRadius={20}>
+                    <View style={styles.monthStamp}>
+                      <Text style={styles.monthNumber}>{String(monthStats.month).padStart(2, '0')}</Text>
+                      <Text style={styles.monthYear}>{MONTH_EN[monthStats.month - 1]}{'\n'}{monthStats.year}</Text>
+                    </View>
+                    <View style={styles.monthCopy}>
+                      <Text style={styles.monthTitle}>本月 {monthStats.records.length} 条印记</Text>
+                      <Text style={styles.monthMeta}>共 {monthStats.images} 张影像</Text>
+                    </View>
+                    <View style={styles.miniStack}>
+                      {monthStats.records.slice(0, 3).map((item) => (
+                        <MiniCover key={String(item.id)} item={item} />
+                      ))}
+                    </View>
+                  </GlassSurface>
+
+                  <View style={styles.sectionHead}>
+                    <Text style={styles.recentTitle}>最近</Text>
+                    <Text style={styles.sectionNote}>
+                      {searchQuery.trim() || activeFilters.length ? `找到 ${filteredAndSortedData.length} 条` : `共 ${logData.length} 条`}
+                    </Text>
+                  </View>
+
+                  {featureRecord && <FeatureCard item={featureRecord} onPress={openDetail} />}
+                </View>
+              )}
+              ListEmptyComponent={(
+                <GlassSurface style={styles.emptyCard} blur={false} borderRadius={20}>
+                  <Text style={styles.emptyText}>没有找到匹配的印记</Text>
+                </GlassSurface>
+              )}
+              ListFooterComponent={(
+                <Text style={styles.monthFoot}>
+                  {searchQuery.trim() || activeFilters.length
+                    ? `筛选结果 · ${filteredAndSortedData.length} 条`
+                    : `共 ${logData.length} 条印记 · 按日期倒序`}
+                </Text>
+              )}
+            />
+          </Reanimated.View>
         </Reanimated.View>
 
         {/* 月示图：日历 + 当月 / 当日时间线（行与列表同一套，右滑同样能改 / 删） */}
@@ -1087,7 +1281,9 @@ const makeStyles = (c) => ({
   // 全屏时让页面主体压过侧边栏（地图铺满整屏后，侧边栏/遮罩还在同一层里）
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, height: 44 },
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
-  largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
+  titleBlock: { paddingHorizontal: 16, marginTop: 10, marginBottom: 10 },
+  overline: { fontSize: 10.5, fontWeight: '600', color: c.textMuted, letterSpacing: 0.1, marginBottom: 1 },
+  largeTitle: { fontSize: 34, lineHeight: 40, fontWeight: '800', letterSpacing: -1.1, color: c.textStrong },
   segmentedControl: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: 9, padding: 2, width: 204 },
   // 药丸不要挂 elevation/阴影：Android 上移动的阴影每帧都要重画，高亮滑动会一顿一顿的
   segmentPill: { position: 'absolute', left: 2, top: 2, bottom: 2, borderRadius: 7, backgroundColor: c.bgElevated,
@@ -1102,8 +1298,25 @@ const makeStyles = (c) => ({
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
-  listWrapperShell: { flex: 1, marginHorizontal: 16, marginTop: 4, marginBottom: 20 },
-  listWrapper: { flex: 1, borderRadius: 22, overflow: 'hidden' },
+  listWrapperShell: { flex: 1 },
+  listContent: { paddingBottom: 108 },
+  listHeader: { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 13 },
+  monthCard: { minHeight: 74, borderRadius: 20, padding: 13, flexDirection: 'row', alignItems: 'center' },
+  monthStamp: { width: 57, height: 48, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  monthNumber: { fontSize: 27, lineHeight: 31, fontWeight: '800', letterSpacing: -1.1, color: c.textStrong },
+  monthYear: { fontSize: 8, lineHeight: 10, fontWeight: '650', letterSpacing: 0.8, color: c.textMuted },
+  monthCopy: { flex: 1, gap: 2, marginLeft: 2 },
+  monthTitle: { fontSize: 12.5, fontWeight: '700', color: c.text },
+  monthMeta: { fontSize: 9.5, color: c.textMuted },
+  miniStack: { flexDirection: 'row', alignItems: 'center', paddingLeft: 8, marginLeft: 'auto' },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 9, paddingHorizontal: 2 },
+  recentTitle: { fontSize: 18, fontWeight: '800', letterSpacing: -0.35, color: c.textStrong },
+  sectionNote: { fontSize: 9.5, color: c.textMuted },
+  rowSurface: { marginHorizontal: 16, overflow: 'hidden' },
+  rowFirst: { borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  rowLast: { borderBottomLeftRadius: 20, borderBottomRightRadius: 20, marginBottom: 4 },
+  emptyCard: { marginHorizontal: 16, marginTop: 13, paddingVertical: 30, alignItems: 'center', borderRadius: 20 },
+  monthFoot: { marginTop: 17, marginBottom: 10, textAlign: 'center', color: c.textMuted, fontSize: 10 },
   monthWrapper: { flex: 1, marginTop: 2, marginBottom: 20 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
@@ -1123,10 +1336,74 @@ const makeStyles = (c) => ({
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },
   exportBtnText: { color: c.textOnAccent, marginLeft: 8, fontWeight: '600' },
   sidebarOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.scrim, zIndex: 99 },
-  sidebar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH, backgroundColor: 'transparent', zIndex: 100,
-    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.glassBorder },
+  sidebar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH, backgroundColor: 'transparent', zIndex: 100 },
   sidebarGlass: { ...StyleSheet.absoluteFillObject },
-  sidebarContent: { flex: 1, paddingHorizontal: 20, zIndex: 1 },
+  sidebarContent: { flex: 1, zIndex: 1 },
+  profileTopbar: {
+    height: 44, paddingHorizontal: 16, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'space-between',
+  },
+  profileBack: {
+    width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.fill, borderWidth: 1, borderColor: c.glassBorder,
+  },
+  profileNavTitle: { fontSize: 17, fontWeight: '650', color: c.text },
+  profileScrollContent: { paddingHorizontal: 20, paddingTop: 6 },
+  profileOverline: { fontSize: 10.5, fontWeight: '650', color: c.textMuted, letterSpacing: 0.1 },
+  profileH1: { fontSize: 34, lineHeight: 40, fontWeight: '800', letterSpacing: -1.1, color: c.textStrong, marginTop: 1, marginBottom: 10 },
+  profileCard: { borderRadius: 24, padding: 18, paddingBottom: 15 },
+  profileIdentity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  profileAvatar: {
+    width: 55, height: 55, borderRadius: 28, backgroundColor: c.accent,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarDot: {
+    position: 'absolute', right: 1, bottom: 1, width: 13, height: 13, borderRadius: 7,
+    backgroundColor: c.success, borderWidth: 2, borderColor: c.glassBorder,
+  },
+  profileCopy: { flex: 1, gap: 3 },
+  profileCopyTitle: { fontSize: 13, fontWeight: '700', color: c.textStrong, letterSpacing: -0.2 },
+  profileCopyMeta: { fontSize: 9.5, color: c.textMuted },
+  profileStats: {
+    flexDirection: 'row', marginTop: 14, paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider,
+  },
+  profileStat: {
+    flex: 1, alignItems: 'center', gap: 2,
+    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.divider,
+  },
+  profileStatLast: { borderRightWidth: 0 },
+  profileStatNum: { fontSize: 18, lineHeight: 21, fontWeight: '800', color: c.textStrong },
+  profileStatLabel: { fontSize: 8.5, color: c.textMuted },
+  groupLabel: { marginTop: 18, marginBottom: 7, paddingHorizontal: 3, fontSize: 10, fontWeight: '700', color: c.textMuted },
+  menuCard: { borderRadius: 19, overflow: 'hidden' },
+  menuItem: {
+    minHeight: 55, paddingHorizontal: 12, paddingVertical: 9,
+    flexDirection: 'row', alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider,
+  },
+  menuItemLast: { borderBottomWidth: 0 },
+  menuIcon: { marginRight: 10 },
+  menuIconBox: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  menuCopy: { flex: 1, gap: 2 },
+  appearanceCard: { borderRadius: 19, padding: 11, paddingHorizontal: 12 },
+  appearanceOptions: { flexDirection: 'row', gap: 5 },
+  appearanceOption: {
+    flex: 1, height: 66, borderRadius: 12, borderWidth: 1, borderColor: c.border,
+    backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center', gap: 5,
+  },
+  appearanceOptionOn: { borderColor: c.accent, backgroundColor: c.accentSoft },
+  appearanceOptionText: { fontSize: 9, color: c.textSecondary },
+  appearanceOptionTextOn: { color: c.accent, fontWeight: '750' },
+  themeSwatch: { width: 34, height: 28, borderRadius: 7 },
+  themeSwatchLight: { backgroundColor: '#F2F5FA' },
+  themeSwatchDark: { backgroundColor: '#141922' },
+  themeSwatchAuto: { backgroundColor: '#7C8797' },
+  appearanceDivider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginTop: 10 },
+  appearanceRow: { paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  appearanceRowTitle: { fontSize: 10.5, fontWeight: '650', color: c.text },
+  appearanceRowMeta: { fontSize: 9, color: c.textMuted },
+  version: { textAlign: 'center', color: c.textMuted, fontSize: 8.5, marginTop: 19, marginBottom: 4 },
   sidebarHeader: { alignItems: 'center', marginBottom: 30 },
   largeAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   userName: { fontSize: 18, fontWeight: 'bold', color: c.text },
@@ -1141,9 +1418,8 @@ const makeStyles = (c) => ({
     paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.75)',
   },
   syncPillText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: c.divider },
-  menuItemText: { fontSize: 16, color: c.text },
-  menuItemSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+  menuItemText: { fontSize: 12, fontWeight: '600', color: c.text },
+  menuItemSub: { fontSize: 8.5, color: c.textMuted, marginTop: 1 },
   themeRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, marginBottom: 2, gap: 6 },
   themeChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border },
   themeChipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },

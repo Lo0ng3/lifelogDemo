@@ -147,7 +147,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
     >
       <PressableScale style={styles.cardRow} onPress={() => onPress?.(item)} onPressIn={armActions}>
         <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
-          <CoverIcon item={item} height={64} />
+          <CoverIcon item={item} height={52} />
           <View style={styles.itemContent}>
             <View style={styles.itemHeader}>
               <Text style={styles.itemTitle} numberOfLines={1}>{shortTicketTitle(item.title)}</Text>
@@ -175,25 +175,25 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 const makeStyles = (c) => ({
   swipeContainer: { backgroundColor: c.glassRow },
   cardRow: { backgroundColor: c.glassRow },
-  // 固定行高 = 封面 64 + 上下内边距 16×2，有无评论都一样高
-  cardItem: { flexDirection: 'row', padding: 16, height: 96, alignItems: 'center' },
+  // 固定行高 84：封面 52 + 上下 10 留白，两行文字与日期列都在这条基准线上
+  cardItem: { flexDirection: 'row', padding: 10, height: 84, alignItems: 'center' },
   cardItemBorder: { borderBottomWidth: 1, borderBottomColor: c.divider },
   itemContent: { flex: 1, justifyContent: 'center' },
-  itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
-  itemTitle: { fontSize: 16, fontWeight: '600', color: c.text, flex: 1, marginRight: 8 },
+  itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 3 },
+  itemTitle: { fontSize: 14.5, fontWeight: '700', color: c.text, flex: 1, marginRight: 8, letterSpacing: -0.15 },
   // 年份一行、月-日一行，右对齐；两行加起来 ≈ 30pt，行高固定 96 也装得下
   itemDateCol: { alignItems: 'flex-end', flexShrink: 0 },
-  itemDateYear: { fontSize: 11, color: c.textMuted, lineHeight: 14 },
-  itemDate: { fontSize: 13, color: c.textSecondary, lineHeight: 16, fontWeight: '600' },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  tag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
-  moodText: { fontSize: 12, color: c.textMuted },
+  itemDateYear: { fontSize: 9.5, color: c.textMuted, lineHeight: 12 },
+  itemDate: { fontSize: 11.5, color: c.textSecondary, lineHeight: 14, fontWeight: '650' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 3 },
+  tag: { fontSize: 9.5, paddingHorizontal: 5, paddingVertical: 1.5, borderRadius: 5, overflow: 'hidden', fontWeight: '600' },
+  moodText: { fontSize: 11, color: c.textMuted },
   starContainer: { flexDirection: 'row' },
   // 每颗星固定 14pt 宽、字形居中：5 颗 = 70pt，和原来 5 个图标（12 + 2 间距）等宽；
   // 半星就是把 14pt 的星裁掉右半边（7pt）
-  starGlyph: { width: 14, textAlign: 'center', fontSize: 12.5, lineHeight: 16, includeFontPadding: false },
-  starHalfClip: { width: 7, overflow: 'hidden' },
-  itemSubtitle: { fontSize: 14, color: c.textSecondary, lineHeight: 18 },
+  starGlyph: { width: 13, textAlign: 'center', fontSize: 11.5, lineHeight: 14, includeFontPadding: false },
+  starHalfClip: { width: 6.5, overflow: 'hidden' },
+  itemSubtitle: { fontSize: 12.5, color: c.textSecondary, lineHeight: 16 },
 
   // 右滑操作区
   swipeActions: { flexDirection: 'row', alignItems: 'stretch', width: ACTIONS_WIDTH, paddingLeft: 8 },

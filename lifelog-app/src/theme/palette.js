@@ -69,6 +69,7 @@ const light = {
   // 液态玻璃材质：底色、描边、高光与背景光团
   glassTint: 'rgba(255,255,255,0.12)',
   glassStrong: 'rgba(255,255,255,0.80)',
+  surfaceDeep: '#8A98A9',
   glassBorder: 'rgba(255,255,255,0.72)',
   glassRow: 'rgba(255,255,255,0.62)',
   glassShadow: 'rgba(38,56,84,0.18)',
@@ -82,10 +83,10 @@ const light = {
   // 地图（注入 WebView 的配色）
   map: {
     bg: '#F2F2F7',
-    controlBg: 'rgba(255,255,255,0.94)',
+    controlBg: 'rgba(255,255,255,0.72)',
     controlText: '#374151',
-    controlBorder: 'rgba(60,60,67,0.16)',
-    cardBg: '#FFFFFF',
+    controlBorder: 'rgba(255,255,255,0.72)',
+    cardBg: 'rgba(255,255,255,0.84)',
     cardText: '#1C1C1E',
     cardMeta: '#8E8E93',
     cardNote: '#374151',
@@ -155,6 +156,7 @@ const dark = {
 
   glassTint: 'rgba(8,14,24,0.18)',
   glassStrong: 'rgba(16,22,32,0.88)',
+  surfaceDeep: '#141B26',
   glassBorder: 'rgba(255,255,255,0.20)',
   glassRow: 'rgba(18,24,34,0.72)',
   glassShadow: 'rgba(0,0,0,0.50)',
@@ -167,10 +169,10 @@ const dark = {
 
   map: {
     bg: '#0F1115',
-    controlBg: 'rgba(28,30,35,0.94)',
+    controlBg: 'rgba(22,28,38,0.80)',
     controlText: '#E5E7EB',
-    controlBorder: 'rgba(255,255,255,0.12)',
-    cardBg: '#1B1D22',
+    controlBorder: 'rgba(255,255,255,0.18)',
+    cardBg: 'rgba(20,26,36,0.90)',
     cardText: '#F2F3F5',
     cardMeta: '#9BA1AC',
     cardNote: '#C7CBD3',
