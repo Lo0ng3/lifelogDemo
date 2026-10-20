@@ -112,7 +112,7 @@ export default function HomeScreen({ navigation }) {
   const {
     logData, syncMedia, importLogs, deleteLog,
     tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
-    amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
+    amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode, requestBackupSync,
   } = useContext(LogContext);
   // 外观：始终跟随系统（和开屏图保持一致）
   const { colors, isDark, mode, setMode } = useTheme();
@@ -190,6 +190,7 @@ export default function HomeScreen({ navigation }) {
     setNameEditorOpen(false);
     try {
       await saveProfile({ name: nextName, avatarUri: profileAvatarUri });
+      requestBackupSync();
     } catch {
       Alert.alert('保存失败', '名字已更新，但写入本机时出现问题。');
     }
@@ -213,6 +214,7 @@ export default function HomeScreen({ navigation }) {
       if (!saved) throw new Error('copy failed');
       setProfileAvatarUri(saved);
       await saveProfile({ name: profileName, avatarUri: saved });
+      requestBackupSync();
     } catch (e) {
       Alert.alert('头像保存失败', e?.message || '请换一张图片再试。');
     }
@@ -225,6 +227,7 @@ export default function HomeScreen({ navigation }) {
     setProfileName(nextName);
     setProfileAvatarUri(nextAvatar);
     await saveProfile({ name: nextName, avatarUri: nextAvatar });
+    requestBackupSync();
     return true;
   };
 
@@ -324,7 +327,7 @@ export default function HomeScreen({ navigation }) {
     if (result.ok) {
       Alert.alert(
         '导出成功',
-        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}${result.keys ? '、地图 Key' : ''}${result.profile ? '、头像与名字' : ''}：\n${result.name}`
+        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}${result.videoPosters ? `、${result.videoPosters} 张视频封面` : ''}${result.keys ? '、地图 Key' : ''}${result.profile ? '、头像与名字' : ''}：\n${result.name}`
       );
     } else {
       Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
@@ -372,7 +375,7 @@ export default function HomeScreen({ navigation }) {
   };
 
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
-  const doImport = async (logs, mode, coversRestored, keys, profile) => {
+  const doImport = async (logs, mode, coversRestored, postersRestored, keys, profile) => {
     const report = await importLogs(logs, mode);
     const keysRestored = applyBackupKeys(keys);
     const profileRestored = await applyBackupProfile(profile);
@@ -382,6 +385,7 @@ export default function HomeScreen({ navigation }) {
         ? `已覆盖恢复，当前共 ${report.total} 条记录。`
         : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`)
         + (coversRestored ? `\n已恢复 ${coversRestored} 张封面文件。` : '')
+        + (postersRestored ? `\n已恢复 ${postersRestored} 张视频封面。` : '')
         + (keysRestored ? '\n已恢复备份里的地图 Key。' : '')
         + (profileRestored ? '\n已恢复头像与名字。' : ''),
       [
@@ -408,8 +412,8 @@ export default function HomeScreen({ navigation }) {
       `备份文件：${result.name}\n包含 ${result.count} 条记录${result.profile ? '、头像与名字' : ''}${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored, result.keys, result.profile) },
-        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored, result.keys, result.profile) },
+        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored, result.postersRestored, result.keys, result.profile) },
+        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored, result.postersRestored, result.keys, result.profile) },
       ]
     );
   };
@@ -1038,7 +1042,7 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.version}>印记 1.9.10</Text>
+            <Text style={styles.version}>印记 1.9.11</Text>
           </ScrollView>
         </View>
       </Animated.View>
@@ -1083,6 +1087,7 @@ export default function HomeScreen({ navigation }) {
               keyExtractor={rowKeyExtractor}
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.listContent}
               bounces={false}
               overScrollMode="never"
               // 行高固定 → 直接给出布局，省掉逐行测量
@@ -1355,8 +1360,9 @@ const makeStyles = (c) => ({
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
-  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 84, borderRadius: 14, overflow: 'hidden' },
-  monthWrapper: { flex: 1, marginTop: 2, marginBottom: 84 },
+  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 0, borderRadius: 14, overflow: 'hidden' },
+  listContent: { paddingBottom: 78 },
+  monthWrapper: { flex: 1, marginTop: 2, marginBottom: 0 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
   // 全屏时把承载地图的容器抬到最上层：地图层靠负的四周补偿撑满整屏，

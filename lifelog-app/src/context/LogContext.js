@@ -1,12 +1,22 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef, useCallback } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions, withTimeout } from '../utils/search';
-import { downloadRemoteCoverVariants, cleanTransientCaches, enforceCacheCaps, clearMotionVideos } from '../utils/media';
+import {
+  downloadRemoteCoverVariants,
+  cleanTransientCaches,
+  enforceCacheCaps,
+  clearMotionVideos,
+  isVideoEntry,
+  mediaSignature,
+} from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
+import { writeInternalBackup } from '../utils/backup';
+import { loadProfile } from '../utils/profile';
+import { detectMediaMetadata } from '../utils/mediaMetadata';
 
 export const LogContext = createContext();
 
@@ -24,6 +34,48 @@ export const LogProvider = ({ children }) => {
   // 「Web 服务」key 各管一件事，互不通用。
   const [amapJsKey, setAmapJsKeyState] = useState('');
   const [amapJsCode, setAmapJsCodeState] = useState('');
+  const logDataRef = useRef([]);
+  const keysRef = useRef({});
+  const backupHydratedRef = useRef(false);
+  const backupTimerRef = useRef(null);
+  const metadataTimersRef = useRef(new Set());
+  const metadataRunningRef = useRef(new Set());
+
+  const flushInternalBackup = useCallback(async () => {
+    if (!backupHydratedRef.current) return;
+    clearTimeout(backupTimerRef.current);
+    try {
+      const profile = await loadProfile();
+      await writeInternalBackup({
+        logData: logDataRef.current,
+        keys: keysRef.current,
+        profile,
+      });
+    } catch (e) {
+      console.warn('[backup] 内部备份写入失败', e?.message || e);
+    }
+  }, []);
+
+  const scheduleInternalBackup = useCallback(() => {
+    if (!backupHydratedRef.current) return;
+    clearTimeout(backupTimerRef.current);
+    backupTimerRef.current = setTimeout(flushInternalBackup, 800);
+  }, [flushInternalBackup]);
+
+  useEffect(() => {
+    logDataRef.current = logData;
+    scheduleInternalBackup();
+  }, [logData, scheduleInternalBackup]);
+
+  useEffect(() => {
+    keysRef.current = { tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode };
+    scheduleInternalBackup();
+  }, [tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode, scheduleInternalBackup]);
+
+  useEffect(() => () => {
+    clearTimeout(backupTimerRef.current);
+    for (const timer of metadataTimersRef.current) clearTimeout(timer);
+  }, []);
 
   /* 实况照片提取出来的动效视频（motionVideos/）只是"这次会话的临时文件"：
      进后台就整体清掉（下次看再提取一遍，反正点开详情页会预热），
@@ -38,7 +90,10 @@ export const LogProvider = ({ children }) => {
     loadLogs();
     clearMotionCache();
     const appStateSub = AppState.addEventListener('change', (state) => {
-      if (state === 'background') clearMotionCache();
+      if (state === 'background') {
+        clearMotionCache();
+        flushInternalBackup();
+      }
     });
     // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
@@ -47,7 +102,7 @@ export const LogProvider = ({ children }) => {
     AsyncStorage.getItem('@amap_js_key').then(v => { if (v) setAmapJsKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_code').then(v => { if (v) setAmapJsCodeState(v); }).catch(() => {});
     return () => appStateSub.remove();
-  }, []);
+  }, [flushInternalBackup]);
 
   const setTdtKey = async (key) => {
     const next = (key || '').trim();
@@ -99,6 +154,65 @@ export const LogProvider = ({ children }) => {
     }
   };
 
+  const commitLogs = async (nextLogs) => {
+    logDataRef.current = nextLogs;
+    setLogData(nextLogs);
+    try {
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(nextLogs));
+    } catch (e) {
+      console.error('保存数据失败', e);
+    }
+    scheduleInternalBackup();
+  };
+
+  const runMediaMetadata = async (ids) => {
+    for (const id of ids) {
+      if (metadataRunningRef.current.has(id)) continue;
+      metadataRunningRef.current.add(id);
+      try {
+        const initial = logDataRef.current.find((log) => log.id === id);
+        if (!initial?.localImages?.length) continue;
+        const updates = new Map();
+        for (const entry of [...initial.localImages]) {
+          const video = isVideoEntry(entry);
+          if (video) {
+            if (entry.videoPoster?.base64 || entry.videoPoster?.uri || entry.metadataCheckedAt) continue;
+          } else if (['live', 'not-live', 'unknown'].includes(entry?.liveStatus)) {
+            continue;
+          }
+
+          const detected = await detectMediaMetadata(entry);
+          const key = mediaSignature(entry);
+          if (key) updates.set(key, detected);
+        }
+        if (updates.size) {
+          const current = logDataRef.current.find((log) => log.id === id);
+          if (!current?.localImages?.length) continue;
+          const nextEntries = current.localImages.map((entry) => (
+            updates.get(mediaSignature(entry)) || entry
+          ));
+          await commitLogs(logDataRef.current.map((log) => (
+            log.id === id ? { ...log, localImages: nextEntries } : log
+          )));
+        }
+      } catch (e) {
+        console.warn('[media] 影像元数据检测失败', id, e?.message || e);
+      } finally {
+        metadataRunningRef.current.delete(id);
+      }
+    }
+  };
+
+  const scheduleMediaMetadata = (ids = []) => {
+    const unique = [...new Set(ids.filter((id) => id != null))];
+    if (!unique.length) return;
+    const timer = setTimeout(() => {
+      metadataTimersRef.current.delete(timer);
+      runMediaMetadata(unique);
+    }, 900);
+    metadataTimersRef.current.add(timer);
+  };
+
   const loadLogs = async () => {
     try {
       const storedLogs = await AsyncStorage.getItem(LOGS_KEY);
@@ -116,6 +230,7 @@ export const LogProvider = ({ children }) => {
             } catch {}
           }
         }
+        logDataRef.current = pruned;
         setLogData(pruned);
         if (pruned !== logs) {
           await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(pruned));
@@ -123,12 +238,23 @@ export const LogProvider = ({ children }) => {
         // 延后 2 秒错峰启动：给缺封面的记录联网补一张海报
         setTimeout(() => { backfillCovers(pruned); }, 2000);
       } else {
+        logDataRef.current = initialLogData;
         setLogData(initialLogData);
         await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(initialLogData));
       }
     } catch (e) {
       console.error('加载数据失败', e);
     } finally {
+      backupHydratedRef.current = true;
+      scheduleInternalBackup();
+      const incompleteIds = logDataRef.current
+        .filter((log) => log.localImages?.some((entry) => (
+          entry.liveStatus === 'pending'
+          || (entry.liveStatus === 'not-applicable' && !entry.metadataCheckedAt)
+          || entry.liveStatus === 'unknown'
+        )))
+        .map((log) => log.id);
+      scheduleMediaMetadata(incompleteIds);
       cleanTransientCaches();
       // 封面帧/实况提取缓存超限则整体清理，防止长期使用缓存无限膨胀
       enforceCacheCaps();
@@ -158,7 +284,7 @@ export const LogProvider = ({ children }) => {
         const artwork = results[0]?.artwork;
         if (artwork) {
           const cover = await withTimeout(downloadRemoteCoverVariants(artwork));
-          updated = (updated || [...logs]).map(l =>
+          updated = (updated || [...logDataRef.current]).map(l =>
             l.id === log.id
               ? { ...l, coverUrl: cover.coverUrl, coverThumbUrl: cover.coverThumbUrl }
               : l
@@ -172,20 +298,15 @@ export const LogProvider = ({ children }) => {
       }
     }
     if (updated) {
-      setLogData(updated);
-      try {
-        await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error('保存数据失败', e);
-      }
+      await commitLogs(updated);
     }
   };
 
   const addLog = async (newLog) => {
     try {
-      const updatedLogs = [newLog, ...logData];
-      setLogData(updatedLogs);
-      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
+      const updatedLogs = [newLog, ...logDataRef.current];
+      await commitLogs(updatedLogs);
+      scheduleMediaMetadata([newLog.id]);
     } catch (e) {
       console.error('保存数据失败', e);
     }
@@ -194,9 +315,8 @@ export const LogProvider = ({ children }) => {
   // ✨ 新增：删除记录
   const deleteLog = async (id) => {
     try {
-      const updatedLogs = logData.filter(log => log.id !== id);
-      setLogData(updatedLogs);
-      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
+      const updatedLogs = logDataRef.current.filter(log => log.id !== id);
+      await commitLogs(updatedLogs);
     } catch (e) {
       console.error('删除数据失败', e);
     }
@@ -210,9 +330,9 @@ export const LogProvider = ({ children }) => {
       const patch = Object.fromEntries(
         Object.entries(updatedLog).filter(([, v]) => v !== undefined)
       );
-      const updatedLogs = logData.map(log => (log.id === updatedLog.id ? { ...log, ...patch } : log));
-      setLogData(updatedLogs);
-      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(updatedLogs));
+      const updatedLogs = logDataRef.current.map(log => (log.id === updatedLog.id ? { ...log, ...patch } : log));
+      await commitLogs(updatedLogs);
+      if (patch.localImages) scheduleMediaMetadata([updatedLog.id]);
     } catch (e) {
       console.error('更新数据失败', e);
     }
@@ -222,12 +342,8 @@ export const LogProvider = ({ children }) => {
   const syncMedia = async (onProgress) => {
     const report = await syncMediaFromGallery(logData, onProgress);
     if (report.changed) {
-      setLogData(report.logs);
-      try {
-        await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(report.logs));
-      } catch (e) {
-        console.error('保存数据失败', e);
-      }
+      await commitLogs(report.logs);
+      scheduleMediaMetadata(report.logs.filter((log) => log.localImages?.length).map((log) => log.id));
     }
     // 同步完成后立刻补拉缺失的封面，不用等下次重启
     backfillCovers(report.changed ? report.logs : logData);
@@ -242,7 +358,7 @@ export const LogProvider = ({ children }) => {
     if (mode === 'replace') {
       next = incoming.filter(l => l && l.id != null && l.date);
     } else {
-      const byId = new Map(logData.filter(l => l && l.id != null).map(l => [l.id, l]));
+      const byId = new Map(logDataRef.current.filter(l => l && l.id != null).map(l => [l.id, l]));
       const existingIds = new Set(byId.keys());
       incoming.forEach(l => {
         if (!l || l.id == null || !l.date) return;
@@ -252,23 +368,45 @@ export const LogProvider = ({ children }) => {
       });
       next = [...byId.values()];
     }
-    setLogData(next);
-    try {
-      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(next));
-    } catch (e) {
-      console.error('保存数据失败', e);
-    }
+    await commitLogs(next);
+    scheduleMediaMetadata(next.filter((log) => log.localImages?.length).map((log) => log.id));
     // 导入完成后立刻补拉缺失的封面，不用等下次重启
     backfillCovers(next);
     return { total: next.length, added, updated };
+  };
+
+  // 详情页按需生成视频封面后，把 base64 合并回当前记录。
+  // 用 logDataRef 做二次查找，避免多个视频并发完成时互相覆盖。
+  const saveVideoPoster = async (logId, entrySeed, poster) => {
+    if (!poster?.uri && !poster?.base64) return;
+    const current = logDataRef.current.find((log) => log.id === logId);
+    if (!current?.localImages?.length) return;
+    const key = mediaSignature(entrySeed);
+    let changed = false;
+    const nextImages = current.localImages.map((entry) => {
+      if (mediaSignature(entry) !== key) return entry;
+      changed = true;
+      return {
+        ...entry,
+        videoPoster: poster,
+        liveStatus: 'not-applicable',
+        metadataCheckedAt: Date.now(),
+      };
+    });
+    if (!changed) return;
+    await commitLogs(logDataRef.current.map((log) => (
+      log.id === logId ? { ...log, localImages: nextImages } : log
+    )));
   };
 
   return (
     // 记得把新方法暴露出去
     <LogContext.Provider value={{
       logData, addLog, deleteLog, updateLog, syncMedia, importLogs,
+      saveVideoPoster,
       tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
       amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
+      requestBackupSync: scheduleInternalBackup,
     }}>
       {children}
     </LogContext.Provider>

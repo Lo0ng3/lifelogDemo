@@ -70,6 +70,78 @@ const collectProfile = async (profile) => {
   return (out.name || out.avatar) ? out : null;
 };
 
+const collectVideoPosters = async (logData) => {
+  const posters = {};
+  for (const log of logData) {
+    for (const entry of log?.localImages || []) {
+      const poster = entry?.videoPoster;
+      if (!poster) continue;
+      if (poster.uri?.startsWith('file://')) {
+        const base = poster.uri.split('/').pop();
+        if (!base || posters[base]) continue;
+        try {
+          const info = await FileSystem.getInfoAsync(poster.uri);
+          if (!info.exists) continue;
+          posters[base] = await FileSystem.readAsStringAsync(poster.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+        } catch {}
+      }
+    }
+  }
+  return posters;
+};
+
+// 内部快照和手动导出共用同一个 payload 构造，字段不会各写一套。
+export const buildBackupPayload = async ({
+  logData,
+  keys = null,
+  profile = null,
+  exportedAt = new Date().toISOString(),
+}) => {
+  const covers = await collectCovers(logData);
+  const videoPosters = await collectVideoPosters(logData);
+  const keyPayload = pickKeys(keys);
+  const profilePayload = await collectProfile(profile);
+  return {
+    payload: {
+      app: 'lifelog',
+      schema: 4,
+      exportedAt,
+      count: logData.length,
+      logs: logData,
+      ...(Object.keys(covers).length ? { covers } : {}),
+      ...(Object.keys(videoPosters).length ? { videoPosters } : {}),
+      ...(keyPayload ? { keys: keyPayload } : {}),
+      ...(profilePayload ? { profile: profilePayload } : {}),
+    },
+    coversCount: Object.keys(covers).length,
+    postersCount: Object.keys(videoPosters).length,
+    hasKeys: !!keyPayload,
+    hasProfile: !!profilePayload,
+  };
+};
+
+const INTERNAL_BACKUP_DIR = `${FileSystem.documentDirectory}internal-backup`;
+const INTERNAL_BACKUP_FILE = `${INTERNAL_BACKUP_DIR}/lifelog-latest.json`;
+
+// 内部备份：和手动备份使用同一份 payload，先写临时文件再替换。
+export const writeInternalBackup = async ({ logData, keys, profile }) => {
+  await FileSystem.makeDirectoryAsync(INTERNAL_BACKUP_DIR, { intermediates: true });
+  const built = await buildBackupPayload({ logData, keys, profile });
+  const text = JSON.stringify(built.payload);
+  const tmp = `${INTERNAL_BACKUP_DIR}/lifelog-latest.tmp.json`;
+  await FileSystem.writeAsStringAsync(tmp, text, { encoding: FileSystem.EncodingType.UTF8 });
+  try {
+    await FileSystem.moveAsync({ from: tmp, to: INTERNAL_BACKUP_FILE });
+  } catch {
+    // 有些平台的 move 不覆盖已有目标：先删旧快照，再把刚写成功的临时文件换上去
+    try { await FileSystem.deleteAsync(INTERNAL_BACKUP_FILE, { idempotent: true }); } catch {}
+    await FileSystem.moveAsync({ from: tmp, to: INTERNAL_BACKUP_FILE });
+  }
+  return built;
+};
+
 export const exportBackup = async (logData, keys = null, profile = null) => {
   try {
     const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync();
@@ -77,19 +149,13 @@ export const exportBackup = async (logData, keys = null, profile = null) => {
 
     const now = new Date();
     const name = `${BACKUP_NAME_PREFIX}${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
-    const covers = await collectCovers(logData);
-    const keyPayload = pickKeys(keys);
-    const profilePayload = await collectProfile(profile);
-    const payload = JSON.stringify({
-      app: 'lifelog',
-      schema: 3,
+    const built = await buildBackupPayload({
+      logData,
+      keys,
+      profile,
       exportedAt: now.toISOString(),
-      count: logData.length,
-      logs: logData,
-      ...(Object.keys(covers).length ? { covers } : {}),
-      ...(keyPayload ? { keys: keyPayload } : {}),
-      ...(profilePayload ? { profile: profilePayload } : {}),
     });
+    const payload = JSON.stringify(built.payload);
 
     const fileUri = await StorageAccessFramework.createFileAsync(
       perms.directoryUri, name, 'application/json'
@@ -98,9 +164,10 @@ export const exportBackup = async (logData, keys = null, profile = null) => {
     return {
       ok: true,
       count: logData.length,
-      covers: Object.keys(covers).length,
-      keys: !!keyPayload,
-      profile: !!profilePayload,
+      covers: built.coversCount,
+      videoPosters: built.postersCount,
+      keys: built.hasKeys,
+      profile: built.hasProfile,
       name,
     };
   } catch (e) {
@@ -157,6 +224,54 @@ export const importBackup = async () => {
       restoredLogs.push(restoredLog);
     }
 
+    // 视频方格封面：备份里是 base64，恢复到持久 poster 目录，记录仍只存路径
+    const posterSources = payload?.videoPosters && typeof payload.videoPosters === 'object'
+      ? payload.videoPosters
+      : {};
+    const posterDir = `${FileSystem.documentDirectory}videoPosters`;
+    const posterDestByBase = new Map();
+    const restoredPosterLogs = [];
+    let postersRestored = 0;
+    for (const log of restoredLogs) {
+      if (!Array.isArray(log.localImages) || log.localImages.length === 0) {
+        restoredPosterLogs.push(log);
+        continue;
+      }
+      let changed = false;
+      const nextImages = [];
+      for (const entry of log.localImages) {
+        const poster = entry?.videoPoster;
+        if (!poster) {
+          nextImages.push(entry);
+          continue;
+        }
+        const base = poster.uri?.startsWith('file://') ? poster.uri.split('/').pop() : null;
+        const b64 = (base && posterSources[base]) || poster.base64 || null;
+        if (!b64) {
+          nextImages.push(entry);
+          continue;
+        }
+        let dest = base ? posterDestByBase.get(base) : null;
+        try {
+          if (!dest) {
+            await FileSystem.makeDirectoryAsync(posterDir, { intermediates: true });
+            const ext = String(poster.mime || 'image/jpeg').includes('png') ? 'png' : 'jpg';
+            dest = `${posterDir}/poster_import_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+            await writeFileBase64Async(dest, b64);
+            if (base) posterDestByBase.set(base, dest);
+          }
+          const posterMeta = { ...poster };
+          delete posterMeta.base64;
+          nextImages.push({ ...entry, videoPoster: { ...posterMeta, uri: dest } });
+          postersRestored++;
+          changed = true;
+        } catch {
+          nextImages.push(entry);
+        }
+      }
+      restoredPosterLogs.push(changed ? { ...log, localImages: nextImages } : log);
+    }
+
     // 头像和名字也跟着备份走：头像以 base64 写入，导入时落到应用目录
     let restoredProfile = null;
     if (payload?.profile) {
@@ -178,9 +293,10 @@ export const importBackup = async () => {
 
     return {
       ok: true,
-      logs: restoredLogs,
-      count: restoredLogs.length,
+      logs: restoredPosterLogs,
+      count: restoredPosterLogs.length,
       coversRestored,
+      postersRestored,
       keys: pickKeys(payload?.keys),
       profile: restoredProfile,
       name: file.name || nameFromUri(file.uri),

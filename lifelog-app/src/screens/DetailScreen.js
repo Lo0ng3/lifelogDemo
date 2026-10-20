@@ -19,7 +19,7 @@ import Animated, {
 import { LogContext } from '../context/LogContext';
 import { getIconConfig } from '../utils/icons';
 import { isEssay, labelOf } from '../utils/recordMeta';
-import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
+import { normalizeMediaEntry, resolveMediaUri, getVideoPoster, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
 import { fetchSuggestions, withTimeout } from '../utils/search';
@@ -50,8 +50,8 @@ const lightTap = () => { try { Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyl
 const GRID_COLS = 3;
 
 function MediaGridCell({
-  entry, displayIndex, originalIndex, coverOn, total,
-  cw, ch, onMove, onOpen, onIdleLongPress, onDragState,
+  entry, displayIndex, originalIndex, coverOn, total, maxEnabled,
+  cw, ch, onMove, onOpen, onIdleLongPress, onDragState, onPosterReady,
 }) {
   const styles = useThemedStyles(makeStyles);
   const tx = useSharedValue(0);
@@ -145,13 +145,18 @@ function MediaGridCell({
         <TouchableOpacity activeOpacity={0.85} onPress={() => onOpen(originalIndex)}>
           {isVideoEntry(entry) ? (
             <View style={styles.videoThumbnailBox}>
-              <VideoThumb entry={entry} style={styles.gridImage} enabled={displayIndex < 9} />
+              <VideoThumb
+                entry={entry}
+                style={styles.gridImage}
+                enabled={displayIndex < maxEnabled}
+                onPosterReady={onPosterReady}
+              />
               <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
             </View>
           ) : (
             <>
               <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
-              <LiveGridBadge entry={entry} enabled={displayIndex < 9} />
+              <LiveGridBadge entry={entry} enabled={displayIndex < maxEnabled} />
             </>
           )}
           {coverOn && <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>}
@@ -161,7 +166,7 @@ function MediaGridCell({
   );
 }
 
-function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder, onDragChange }) {
+function MediaGrid({ entries, coverIndex, maxEnabled = 9, onOpen, onIdleLongPress, onReorder, onDragChange, onPosterReady }) {
   const styles = useThemedStyles(makeStyles);
 
   // 顺序按"条目身份"记（相册引用 / 文件名+大小 / uri），不按下标：
@@ -270,11 +275,13 @@ function MediaGrid({ entries, coverIndex, onOpen, onIdleLongPress, onReorder, on
             originalIndex={originalIndex}
             coverOn={coverIndex === originalIndex}
             total={total}
+            maxEnabled={maxEnabled}
             cw={cw} ch={ch}
             onMove={moveTo}
             onOpen={onOpen}
             onIdleLongPress={() => onIdleLongPress(originalIndex)}
             onDragState={dragState}
+            onPosterReady={onPosterReady}
           />
         ) : null
       ))}
@@ -387,17 +394,37 @@ function ZoomableImage({ uri, active, onZoomChange, onSingleTap }) {
 }
 
 // 视频封面：只生成一次封面帧（内存缓存），避免为了一张缩略图挂载真实播放器
-function VideoThumb({ entry, style, contentFit = 'cover', enabled = true }) {
+function VideoThumb({ entry, style, contentFit = 'cover', enabled = true, onPosterReady }) {
   const [thumb, setThumb] = useState(null);
+  const embeddedPoster = entry?.videoPoster?.base64;
+  const posterUri = entry?.videoPoster?.uri;
   useEffect(() => {
+    if (embeddedPoster || posterUri) return undefined;
     if (!enabled) return undefined;
     let alive = true;
     // 等导航/布局动画结束再解码视频帧，避免一进详情就把解码器占满
     const task = InteractionManager.runAfterInteractions(() => {
-      getVideoThumbnail(entry).then(t => { if (alive && t) setThumb(t); });
+      getVideoPoster(entry).then((poster) => {
+        if (!alive || (!poster?.uri && !poster?.base64)) return;
+        setThumb(poster.uri || `data:${poster.mime || 'image/jpeg'};base64,${poster.base64}`);
+        onPosterReady?.(entry, poster);
+      });
     });
     return () => { alive = false; task.cancel(); };
-  }, [entry, enabled]);
+  }, [entry, enabled, embeddedPoster, posterUri, onPosterReady]);
+  if (posterUri) {
+    return <Image source={{ uri: posterUri }} style={style} contentFit={contentFit} cachePolicy="memory-disk" />;
+  }
+  if (embeddedPoster) {
+    return (
+      <Image
+        source={{ uri: `data:${entry.videoPoster.mime || 'image/jpeg'};base64,${embeddedPoster}` }}
+        style={style}
+        contentFit={contentFit}
+        cachePolicy="memory"
+      />
+    );
+  }
   if (!enabled) return null;
   if (!thumb) return null;
   return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} cachePolicy="memory" />;
@@ -408,6 +435,14 @@ function LiveGridBadge({ entry, enabled = true }) {
   const styles = useThemedStyles(makeStyles);
   const [live, setLive] = useState(false);
   useEffect(() => {
+    if (entry?.liveStatus === 'live') {
+      setLive(true);
+      return undefined;
+    }
+    if (entry?.liveStatus === 'not-live') {
+      setLive(false);
+      return undefined;
+    }
     if (!enabled) return undefined;
     let alive = true;
     // 网格只做廉价检测。以前这里对每张图都 full 扫描并预提取实况视频，
@@ -419,7 +454,10 @@ function LiveGridBadge({ entry, enabled = true }) {
     });
     return () => { alive = false; task.cancel(); };
   }, [entry, enabled]);
-  if (!enabled) return null;
+  if (entry?.liveStatus === 'live') {
+    return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
+  }
+  if (!enabled || entry?.liveStatus === 'not-live') return null;
   if (!live) return null;
   return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
 }
@@ -436,6 +474,10 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
     let alive = true;
     setPlayingUri(null);
     setVideoReady(false);
+    if (entry?.liveStatus === 'not-live') {
+      setInfo({ live: false });
+      return () => { alive = false; };
+    }
     getLivePhotoInfo(entry, { full: true }).then(i => {
       if (!alive) return;
       setInfo(i);
@@ -508,7 +550,7 @@ export default function DetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { logData, updateLog, deleteLog } = useContext(LogContext);
+  const { logData, updateLog, deleteLog, saveVideoPoster } = useContext(LogContext);
 
   // 通过 id 从全局数据里取，编辑/删除后页面能自动同步
   const itemId = route.params?.item?.id;
@@ -547,6 +589,22 @@ export default function DetailScreen({ route, navigation }) {
     return () => { alive = false; };
   }, [item]);
 
+  // 首屏先做前 9 张，随后每 450ms 放 6 张进来。
+  // 这样不会一次把几十个视频帧全塞给解码器，也不会出现第 10 张以后永远没有封面。
+  const [mediaReadyCount, setMediaReadyCount] = useState(9);
+  useEffect(() => {
+    const total = resolvedMedia.length;
+    setMediaReadyCount(Math.min(9, total));
+    if (total <= 9) return undefined;
+    let count = 9;
+    const timer = setInterval(() => {
+      count = Math.min(total, count + 6);
+      setMediaReadyCount(count);
+      if (count >= total) clearInterval(timer);
+    }, 450);
+    return () => clearInterval(timer);
+  }, [resolvedMedia.length, item?.id]);
+
   // 封面：手动设置（coverIndex）的相册图优先，其次豆瓣海报
   const coverEntry = item?.coverIndex != null ? resolvedMedia[item.coverIndex] : null;
   const [coverUri, setCoverUri] = useState(null);
@@ -558,6 +616,17 @@ export default function DetailScreen({ route, navigation }) {
   const coverSource = coverUri
     ? { uri: coverUri }
     : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null);
+
+  const itemIdRef = useRef(item?.id);
+  itemIdRef.current = item?.id;
+  const saveVideoPosterRef = useRef(saveVideoPoster);
+  saveVideoPosterRef.current = saveVideoPoster;
+  const handleVideoPosterReady = useCallback((entry, poster) => {
+    if (!poster?.uri && !poster?.base64) return;
+    if (itemIdRef.current != null) {
+      saveVideoPosterRef.current?.(itemIdRef.current, entry, poster);
+    }
+  }, []);
 
   // 1.9.5 及更早的爬取封面只存了 360px 小图。新记录会同时存高清封面 + 列表缩略图；
   // 老记录在第一次打开详情时后台补一次高清封面，不挡当前页面渲染。
@@ -741,6 +810,8 @@ export default function DetailScreen({ route, navigation }) {
             <MediaGrid
               entries={resolvedMedia}
               coverIndex={item.coverIndex}
+              maxEnabled={mediaReadyCount}
+              onPosterReady={handleVideoPosterReady}
               onOpen={(idx) => { setViewerIndex(idx); setCurrentViewIndex(idx); }}
               onIdleLongPress={handleGridLongPress}
               onReorder={handleMediaReorder}

@@ -7,7 +7,7 @@ import {
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, ChevronDown, PlayCircle, Maximize2
+  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Check, Star, StarHalf, ChevronRight, ChevronDown, PlayCircle, Maximize2
 } from 'lucide-react-native';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
@@ -269,8 +269,8 @@ export default function AddScreen({ navigation, route }) {
 
   // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来）
   const scrollContentStyle = useMemo(
-    () => ({ paddingBottom: keyboardOpen ? 280 : 0 }),
-    [keyboardOpen]
+    () => ({ paddingBottom: keyboardOpen ? 280 : (route.name !== 'Edit' ? 78 : 16) }),
+    [keyboardOpen, route.name]
   );
 
   useEffect(() => {
@@ -723,7 +723,10 @@ export default function AddScreen({ navigation, route }) {
       rating: baseType === 'note' ? null : (rating > 0 ? rating : null),
       start,
       end,
-      localImages: relink.entries,
+      localImages: relink.entries.map((entry) => ({
+        ...entry,
+        liveStatus: entry.liveStatus || (isVideoEntry(entry) ? 'not-applicable' : 'pending'),
+      })),
       coverUrl: coverAssets?.coverUrl || existingItem?.coverUrl || null,
       coverThumbUrl,
       coverRatio: coverAssets?.coverUrl ? coverRatio : existingItem?.coverRatio || null,
@@ -807,31 +810,41 @@ export default function AddScreen({ navigation, route }) {
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
+        <TouchableOpacity
+          style={styles.headerCircle}
+          onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}
+          accessibilityRole="button"
+          accessibilityLabel="取消"
+        >
+          <X size={19} color={colors.textSecondary} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
+          style={[styles.headerCircle, styles.headerSaveCircle]}
           onPress={() => { Keyboard.dismiss(); handleSave(); }}
           disabled={saving}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="保存"
         >
           {saving
-            ? <ActivityIndicator size="small" color={colors.accent} />
-            : <Text style={styles.saveText}>保存</Text>}
+            ? <ActivityIndicator size="small" color={colors.textOnAccent} />
+            : <Check size={19} color={colors.textOnAccent} />}
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        ref={formScrollRef}
-        style={[styles.formScroll, route.name !== 'Edit' && styles.formScrollWithTabBar]}
-        showsVerticalScrollIndicator={false}
-        bounces={false}
-        overScrollMode="never"
-        keyboardShouldPersistTaps="handled"
-        scrollEventThrottle={16}
-        onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
-        contentContainerStyle={scrollContentStyle}
-      >
-        <View style={styles.cardSection}>
+      <View style={styles.formCard}>
+        <ScrollView
+          ref={formScrollRef}
+          style={styles.formScroll}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          overScrollMode="never"
+          keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={16}
+          onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
+          contentContainerStyle={[styles.formContent, scrollContentStyle]}
+        >
           {/* 类型字段：在表单顶部就地展开大类 / 子类，避免从底部弹层再选一次 */}
           <TouchableOpacity
             style={styles.typeRow}
@@ -1234,8 +1247,8 @@ export default function AddScreen({ navigation, route }) {
               </View>
             </View>
           </View>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       {/* 评论 / 内容全屏编辑：写长文时把输入区铺满整屏 */}
       <Modal visible={fullscreenComment} animationType="slide" onRequestClose={() => setFullscreenComment(false)}>
@@ -1280,12 +1293,21 @@ const makeStyles = (c) => ({
   dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
   dupNoteHint: { fontSize: 11, color: c.warnText, marginTop: 6, opacity: 0.7 },
   container: { flex: 1, backgroundColor: c.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: 'transparent' },
+  headerCircle: {
+    width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.fill,
+  },
+  headerSaveCircle: { backgroundColor: c.accent },
   cancelText: { fontSize: 16, color: c.textSecondary },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
-  formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  formScrollWithTabBar: { marginBottom: 84 },
+  formCard: {
+    flex: 1, marginHorizontal: 16, marginTop: 10, marginBottom: 0,
+    backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden',
+  },
+  formScroll: { flex: 1 },
+  formContent: { padding: 16 },
   typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
   typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
   typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },
@@ -1326,7 +1348,6 @@ const makeStyles = (c) => ({
   chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   chipText: { fontSize: 14, color: c.textSecondary },
   chipTextActive: { color: c.accent, fontWeight: '500' },
-  cardSection: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 40 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
   input: { flex: 1, fontSize: 15, color: c.text },

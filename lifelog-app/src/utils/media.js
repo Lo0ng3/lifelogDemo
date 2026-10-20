@@ -236,6 +236,56 @@ export const getVideoThumbnail = (entry) => {
   return job;
 };
 
+// 详情页方格用的持久视频封面：宽 360、JPEG 0.7。
+// 记录里只存文件路径，备份导出时再转 base64，避免 AsyncStorage 被图片撑爆。
+export const getVideoPoster = async (entry) => {
+  if (entry?.videoPoster?.uri || entry?.videoPoster?.base64) return entry.videoPoster;
+  const thumbUri = await getVideoThumbnail(entry);
+  if (!thumbUri) return null;
+  const cacheKey = normalizeMediaEntry(entry)?.assetId || normalizeMediaEntry(entry)?.uri || thumbUri;
+  const dir = `${FileSystem.documentDirectory}videoPosters`;
+  const dest = `${dir}/poster_${hashKey(cacheKey)}_v2.jpg`;
+  try {
+    await ensureDirAsync(dir);
+    const existing = await FileSystem.getInfoAsync(dest);
+    if (existing.exists) {
+      return { uri: dest, mime: 'image/jpeg', timeMs: 1000 };
+    }
+    const dims = await new Promise((resolve) => {
+      RNImage.getSize(thumbUri, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
+    });
+    const width = 360;
+    const height = dims ? Math.max(1, Math.round((dims.h * width) / dims.w)) : 360;
+    const rendered = await ImageManipulator.manipulate(thumbUri)
+      .resize({ width, height })
+      .renderAsync();
+    const saved = await rendered.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
+    await copyFileAsync(saved.uri, dest);
+    try { await FileSystem.deleteAsync(saved.uri, { idempotent: true }); } catch {}
+    return { uri: dest, mime: 'image/jpeg', width, height, timeMs: 1000 };
+  } catch {
+    return null;
+  }
+};
+
+// 兼容旧调用：需要字节内容时再从持久文件读 base64（主要用于备份）。
+export const getVideoPosterBase64 = async (entry) => {
+  const poster = await getVideoPoster(entry);
+  if (!poster) return null;
+  if (poster.base64) return poster;
+  if (!poster.uri?.startsWith('file://')) return { ...poster, base64: null };
+  try {
+    return {
+      ...poster,
+      base64: await FileSystem.readAsStringAsync(poster.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      }),
+    };
+  } catch {
+    return { ...poster, base64: null };
+  }
+};
+
 // 判断是否视频：优先看记录时留下的类型标记，没有标记再按扩展名猜
 export const isVideoEntry = (entry) => {
   const { isVideo: flagged, uri } = normalizeMediaEntry(entry) || {};

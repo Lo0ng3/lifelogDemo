@@ -47,8 +47,6 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
             ]}
           />
         )}
-        <View style={[StyleSheet.absoluteFill, { borderRadius: 22, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }]} />
-
         {state.routes.map((item, index) => {
           const focused = state.index === index;
           const itemOptions = descriptors[item.key]?.options || {};

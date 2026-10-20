@@ -181,12 +181,14 @@ export function buildMapHtml({
           /* 右下角是一列：上面是「轨迹」点开后出现的出行方式多选，下面是两个开关。
              两个开关各自独立成胶囊，行内 gap 6px 就够；列间距留 8px，避免上下两排的
              命中矩形贴在一起 */
-          .tools { position: absolute; right: 10px; bottom: 10px; z-index: 800; display: flex;
+          /* 导航条浮在底部，筛选固定在右侧下方，纵向排列，避免挡住地图和导航 */
+          .tools { position: absolute; right: 10px; bottom: 90px; top: auto; z-index: 800; display: flex;
               flex-direction: column; align-items: flex-end; gap: 8px;
+              transform: none;
               /* 控件上不要长按选中/复制文字，也不要系统那层方形高亮 */
               -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
               -webkit-user-select: none; user-select: none; }
-          .toolsRow { display: flex; gap: 6px; }
+          .toolsRow { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
           .tool { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 8px;
               border-radius: 15px; border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg};
               color: ${c.controlText}; font-size: 12px; font-family: inherit; font-weight: 500;
@@ -203,7 +205,7 @@ export function buildMapHtml({
           .tool:active { transform: scale(0.94); }
           .tool:focus { outline: none; }
           /* 出行方式筛选（飞机 / 火车 / 汽车 / 轮船）：多选，选中态用该类型的颜色 */
-          .trajFilter { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+          .trajFilter { display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
               max-width: calc(100vw - 20px); }
           .tf { height: 26px; padding: 0 10px; border-radius: 13px;
               border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg}; color: ${c.controlText};
