@@ -8,8 +8,10 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Pencil
 } from 'lucide-react-native';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { WebView } from 'react-native-webview';
 import Reanimated, {
   useAnimatedStyle, useSharedValue, withTiming, Easing, FadeIn,
@@ -29,6 +31,7 @@ import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
+import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
 import { describeStorageAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
@@ -111,7 +114,7 @@ export default function HomeScreen({ navigation }) {
     amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,
   } = useContext(LogContext);
   // 外观：始终跟随系统（和开屏图保持一致）
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, mode, setMode } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const [syncing, setSyncing] = useState(false);
@@ -120,6 +123,21 @@ export default function HomeScreen({ navigation }) {
   const [syncProgress, setSyncProgress] = useState(null);
   // 侧边栏「说明」：页面上的说明性文字统一收进这里
   const [helpOpen, setHelpOpen] = useState(false);
+
+  // 「我的」昵称与头像：存在本机，并跟随备份导出/导入
+  const [profileName, setProfileName] = useState(DEFAULT_PROFILE_NAME);
+  const [profileAvatarUri, setProfileAvatarUri] = useState(null);
+  const [nameEditorOpen, setNameEditorOpen] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  useEffect(() => {
+    let alive = true;
+    loadProfile().then((profile) => {
+      if (!alive) return;
+      setProfileName(profile.name);
+      setProfileAvatarUri(profile.avatarUri);
+    });
+    return () => { alive = false; };
+  }, []);
 
   // 地图服务设置弹窗：天地图 / 高德二选一，两家的 Key 各自保存
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -158,6 +176,55 @@ export default function HomeScreen({ navigation }) {
         ToastAndroid.SHORT
       );
     }
+  };
+
+  const openNameEditor = () => {
+    setNameDraft(profileName);
+    setNameEditorOpen(true);
+  };
+
+  const saveProfileName = async () => {
+    const nextName = nameDraft.trim() || DEFAULT_PROFILE_NAME;
+    setProfileName(nextName);
+    setNameEditorOpen(false);
+    try {
+      await saveProfile({ name: nextName, avatarUri: profileAvatarUri });
+    } catch {
+      Alert.alert('保存失败', '名字已更新，但写入本机时出现问题。');
+    }
+  };
+
+  const pickProfileAvatar = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted && perm.accessPrivileges !== 'limited') {
+        Alert.alert('需要相册权限', '允许访问相册后才能选择头像。');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+      const saved = await persistAvatar(result.assets[0].uri);
+      if (!saved) throw new Error('copy failed');
+      setProfileAvatarUri(saved);
+      await saveProfile({ name: profileName, avatarUri: saved });
+    } catch (e) {
+      Alert.alert('头像保存失败', e?.message || '请换一张图片再试。');
+    }
+  };
+
+  const applyBackupProfile = async (profile) => {
+    if (!profile) return false;
+    const nextName = profile.name || profileName;
+    const nextAvatar = profile.avatarUri || profileAvatarUri;
+    setProfileName(nextName);
+    setProfileAvatarUri(nextAvatar);
+    await saveProfile({ name: nextName, avatarUri: nextAvatar });
+    return true;
   };
 
   // 相册同步：把断链的影像重新关联到相册原片（升级/换机/重装后的修复入口）
@@ -247,12 +314,16 @@ export default function HomeScreen({ navigation }) {
   // 备份导出：把全部记录写成 JSON 文件到用户选的文件夹
   const handleExportBackup = async () => {
     toggleSidebar(false);
-    const result = await exportBackup(logData, { tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode });
+    const result = await exportBackup(
+      logData,
+      { tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode },
+      { name: profileName, avatarUri: profileAvatarUri }
+    );
     if (result.canceled) return;
     if (result.ok) {
       Alert.alert(
         '导出成功',
-        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}${result.keys ? '、地图 Key' : ''}：\n${result.name}`
+        `已备份 ${result.count} 条记录${result.covers ? `、${result.covers} 张封面文件` : ''}${result.keys ? '、地图 Key' : ''}${result.profile ? '、头像与名字' : ''}：\n${result.name}`
       );
     } else {
       Alert.alert('导出失败', result.error || '写入备份文件时出现问题，请稍后再试。');
@@ -300,16 +371,18 @@ export default function HomeScreen({ navigation }) {
   };
 
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
-  const doImport = async (logs, mode, coversRestored, keys) => {
+  const doImport = async (logs, mode, coversRestored, keys, profile) => {
     const report = await importLogs(logs, mode);
     const keysRestored = applyBackupKeys(keys);
+    const profileRestored = await applyBackupProfile(profile);
     Alert.alert(
       '导入完成',
       (mode === 'replace'
         ? `已覆盖恢复，当前共 ${report.total} 条记录。`
         : `已合并导入：新增 ${report.added} 条、更新 ${report.updated} 条，当前共 ${report.total} 条。`)
         + (coversRestored ? `\n已恢复 ${coversRestored} 张封面文件。` : '')
-        + (keysRestored ? '\n已恢复备份里的地图 Key。' : ''),
+        + (keysRestored ? '\n已恢复备份里的地图 Key。' : '')
+        + (profileRestored ? '\n已恢复头像与名字。' : ''),
       [
         { text: '稍后', style: 'cancel' },
         { text: '立即同步', onPress: handleSync },
@@ -331,11 +404,11 @@ export default function HomeScreen({ navigation }) {
     const exportedAt = result.exportedAt ? `\n导出时间：${result.exportedAt.replace('T', ' ').slice(0, 16)}` : '';
     Alert.alert(
       '导入备份',
-      `备份文件：${result.name}\n包含 ${result.count} 条记录${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
+      `备份文件：${result.name}\n包含 ${result.count} 条记录${result.profile ? '、头像与名字' : ''}${exportedAt}\n当前有 ${logData.length} 条记录。\n\n选择导入方式：`,
       [
         { text: '取消', style: 'cancel' },
-        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored, result.keys) },
-        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored, result.keys) },
+        { text: '覆盖现有', style: 'destructive', onPress: () => doImport(result.logs, 'replace', result.coversRestored, result.keys, result.profile) },
+        { text: '合并去重', onPress: () => doImport(result.logs, 'merge', result.coversRestored, result.keys, result.profile) },
       ]
     );
   };
@@ -511,7 +584,10 @@ export default function HomeScreen({ navigation }) {
   // 地图上的「查看详情」：窗口本来就是竖屏、地图只是内容转了 90°，
   // 所以直接跳转即可（不用退全屏、不用等转屏），返回时地图仍是刚才的全屏状态。
   const openDetailFromMap = useCallback((item) => {
-    if (item) navigation.navigate('Detail', { item });
+    if (!item) return;
+    const parent = navigation.getParent?.();
+    if (parent?.push) parent.push('Detail', { item });
+    else navigation.navigate('Detail', { item });
   }, [navigation]);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -556,8 +632,14 @@ export default function HomeScreen({ navigation }) {
     (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
   );
 
+  // 日历 / 地图使用全量数据；列表的搜索与筛选只影响列表本身
+  const sortedData = useMemo(
+    () => [...logData].sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [logData]
+  );
+
   const filteredAndSortedData = useMemo(() => {
-    let result = [...logData];
+    let result = [...sortedData];
     if (searchQuery.trim().length > 0) {
       const lowerQuery = searchQuery.toLowerCase();
       result = result.filter(item => (item.title && item.title.toLowerCase().includes(lowerQuery)) || (item.subtitle && item.subtitle.toLowerCase().includes(lowerQuery)) || (item.comment && item.comment.toLowerCase().includes(lowerQuery)));
@@ -565,9 +647,8 @@ export default function HomeScreen({ navigation }) {
     if (activeFilters.length > 0) {
       result = result.filter(item => activeFilters.includes(item.subType) || activeFilters.includes(item.baseType));
     }
-    result.sort((a, b) => new Date(b.date) - new Date(a.date));
     return result;
-  }, [logData, activeFilters, searchQuery]);
+  }, [sortedData, activeFilters, searchQuery]);
 
   const profileStats = useMemo(() => ({
     records: logData.length,
@@ -585,7 +666,7 @@ export default function HomeScreen({ navigation }) {
     const anchorFor = (name, at) => anchorOf(placeAnchors, name, at);
     // 打点：地点用 coordinates；旅票用 start/end（坐标缺失的记录跳过）
     const points = [];
-    filteredAndSortedData.forEach(item => {
+    sortedData.forEach(item => {
       const note = item.comment || item.subtitle || '';
       const location = latLngOfPoint(item.coordinates);
       if (location) {
@@ -603,7 +684,7 @@ export default function HomeScreen({ navigation }) {
     // 分段键用（归位后的）坐标而不是名称：同一段被改成不同别名后仍算同一条线；
     // 两端坐标都用同名落点，弧线才会正好连到针上（同名不同坐标的两条也不再多画一段）
     const segMap = new Map();
-    filteredAndSortedData
+    sortedData
       .filter(item => item.baseType === 'ticket' && latLngOfPoint(item.start) && latLngOfPoint(item.end))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)))
       .forEach(t => {
@@ -619,7 +700,7 @@ export default function HomeScreen({ navigation }) {
       });
     const segs = [...segMap.values()];
     return { points, segs };
-  }, [filteredAndSortedData, placeAnchors]);
+  }, [sortedData, placeAnchors]);
 
   // 矢量渲染（高德官方 JS API 2.0）只在「高德 + 填了 Web端(JS API) key」时启用；
   // 一旦 JS API 没能出图就自动切回栅格底图，改 key / 换服务商会重新试一次
@@ -650,7 +731,14 @@ export default function HomeScreen({ navigation }) {
   const mapSource = useMemo(() => ({ html: mapHtml, baseUrl: 'https://localhost/' }), [mapHtml]);
 
 
-  const openDetail = useCallback((item) => navigation.navigate('Detail', { item }), [navigation]);
+  // push 而不是 navigate：navigate 遇到栈里已有的 Detail 可能直接复用，
+  // 表现就是有的记录有滑入动画、有的没有。Home 在 Tab 里，push 要从父级 Stack 拿。
+  const openDetail = useCallback((item) => {
+    if (!item) return;
+    const parent = navigation.getParent?.();
+    if (parent?.push) parent.push('Detail', { item });
+    else navigation.navigate('Detail', { item });
+  }, [navigation]);
   const editItem = useCallback((item) => navigation.navigate('Edit', { editItem: item }), [navigation]);
   // 上下文里的 deleteLog 每次 Provider 重渲染都会换新函数；用 ref 包一层保持引用稳定，
   // 这样 React.memo 的行组件不会因为"父级随便重渲染一次"就整屏跟着重渲染
@@ -784,19 +872,29 @@ export default function HomeScreen({ navigation }) {
             <View style={{ width: 38 }} />
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.profileScrollContent}>
-            <Text style={styles.profileOverline}>我的印记</Text>
-            <Text style={styles.profileH1}>我</Text>
-
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            overScrollMode="never"
+            contentContainerStyle={styles.profileScrollContent}
+          >
             <View style={styles.profileCard}>
               <View style={styles.profileIdentity}>
-                <View style={styles.profileAvatar}>
-                  <User size={26} color={colors.textOnAccent} />
-                  <View style={styles.avatarDot} />
-                </View>
+                <TouchableOpacity style={styles.profileAvatar} onPress={pickProfileAvatar} activeOpacity={0.82}>
+                  {profileAvatarUri ? (
+                    <Image source={{ uri: profileAvatarUri }} style={styles.profileAvatarImage} contentFit="cover" />
+                  ) : (
+                    <User size={26} color={colors.textOnAccent} />
+                  )}
+                  <View style={styles.avatarEditBadge}>
+                    <Pencil size={10} color="#FFF" />
+                  </View>
+                </TouchableOpacity>
                 <View style={styles.profileCopy}>
-                  <Text style={styles.profileCopyTitle}>把日子，轻轻收好。</Text>
-                  <Text style={styles.profileCopyMeta}>印记保存在本机</Text>
+                  <TouchableOpacity style={styles.profileNameRow} onPress={openNameEditor} activeOpacity={0.7}>
+                    <Text style={styles.profileName}>{profileName}</Text>
+                    <Pencil size={14} color={colors.textMuted} />
+                  </TouchableOpacity>
                 </View>
               </View>
               <View style={styles.profileStats}>
@@ -865,12 +963,30 @@ export default function HomeScreen({ navigation }) {
 
             <Text style={styles.groupLabel}>外观</Text>
             <View style={styles.appearanceCard}>
-              <View style={styles.appearanceRow}>
-                <View style={styles.appearanceSwatch} />
-                <View style={styles.menuCopy}>
-                  <Text style={styles.appearanceTitle}>跟随系统</Text>
-                  <Text style={styles.appearanceMeta}>白天浅色 · 夜间深色</Text>
-                </View>
+              <View style={styles.appearanceOptions}>
+                {[
+                  { id: 'light', label: '浅色' },
+                  { id: 'dark', label: '深色' },
+                  { id: 'auto', label: '自动' },
+                ].map((option) => {
+                  const on = mode === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[styles.appearanceOption, on && styles.appearanceOptionOn]}
+                      onPress={() => setMode(option.id)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[
+                        styles.appearanceSwatch,
+                        option.id === 'light' && styles.appearanceSwatchLight,
+                        option.id === 'dark' && styles.appearanceSwatchDark,
+                        option.id === 'auto' && styles.appearanceSwatchAuto,
+                      ]} />
+                      <Text style={[styles.appearanceOptionText, on && styles.appearanceOptionTextOn]}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
 
@@ -908,8 +1024,7 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.version}>印记 1.9.8</Text>
-            <View style={{ height: 100 }} />
+            <Text style={styles.version}>印记 1.9.9</Text>
           </ScrollView>
         </View>
       </Animated.View>
@@ -954,7 +1069,8 @@ export default function HomeScreen({ navigation }) {
               keyExtractor={rowKeyExtractor}
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.listContent}
+              bounces={false}
+              overScrollMode="never"
               // 行高固定 → 直接给出布局，省掉逐行测量
               getItemLayout={rowItemLayout}
               // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
@@ -974,7 +1090,7 @@ export default function HomeScreen({ navigation }) {
         {/* 月示图：日历 + 当月 / 当日时间线（行与列表同一套，右滑同样能改 / 删） */}
         <Reanimated.View style={[styles.monthWrapper, viewMode !== 'month' && styles.hiddenView, viewFadeStyle]}>
           <MonthView
-            records={filteredAndSortedData}
+            records={sortedData}
             onPressItem={openDetail}
             onEditItem={editItem}
             onDeleteItem={handleDeleteItem}
@@ -1139,6 +1255,33 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       </Modal>
 
+      <Modal transparent visible={nameEditorOpen} animationType="fade" onRequestClose={() => setNameEditorOpen(false)}>
+        <TouchableOpacity style={styles.nameOverlay} activeOpacity={1} onPress={() => setNameEditorOpen(false)}>
+          <TouchableOpacity style={styles.nameCard} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.nameTitle}>修改名字</Text>
+            <TextInput
+              style={styles.nameInput}
+              value={nameDraft}
+              onChangeText={setNameDraft}
+              placeholder="输入名字"
+              placeholderTextColor={colors.textMuted}
+              maxLength={20}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={saveProfileName}
+            />
+            <View style={styles.nameBtnRow}>
+              <TouchableOpacity style={[styles.nameBtn, styles.nameBtnCancel]} onPress={() => setNameEditorOpen(false)}>
+                <Text style={styles.nameBtnCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.nameBtn, styles.nameBtnSave]} onPress={saveProfileName}>
+                <Text style={styles.nameBtnSaveText}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {/* 清理缓存：二级选项，挑清哪些（都是可再生内容，不影响记录和照片引用） */}
@@ -1198,9 +1341,8 @@ const makeStyles = (c) => ({
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
-  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
-  listContent: { paddingBottom: 76 },
-  monthWrapper: { flex: 1, marginTop: 2, marginBottom: 20 },
+  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 84, borderRadius: 14, overflow: 'hidden' },
+  monthWrapper: { flex: 1, marginTop: 2, marginBottom: 84 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
   // 全屏时把承载地图的容器抬到最上层：地图层靠负的四周补偿撑满整屏，
@@ -1226,20 +1368,22 @@ const makeStyles = (c) => ({
     width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
     backgroundColor: c.fill,
   },
-  profileScrollContent: { paddingHorizontal: 20, paddingTop: 6 },
-  profileOverline: { fontSize: 10.5, fontWeight: '600', color: c.textMuted },
-  profileH1: { fontSize: 34, lineHeight: 40, fontWeight: '800', letterSpacing: -1.1, color: c.textStrong, marginTop: 1, marginBottom: 10 },
+  profileScrollContent: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 24 },
   profileCard: { backgroundColor: c.bgElevated, borderRadius: 24, padding: 18, paddingBottom: 15 },
   profileIdentity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   profileAvatar: {
     width: 55, height: 55, borderRadius: 28, backgroundColor: c.accent,
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarDot: {
-    position: 'absolute', right: 1, bottom: 1, width: 13, height: 13, borderRadius: 7,
-    backgroundColor: c.success, borderWidth: 2, borderColor: c.bgElevated,
+  profileAvatarImage: { width: 55, height: 55, borderRadius: 28 },
+  avatarEditBadge: {
+    position: 'absolute', right: -2, bottom: -2, width: 19, height: 19, borderRadius: 10,
+    backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: c.bgElevated,
   },
   profileCopy: { flex: 1, gap: 3 },
+  profileNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  profileName: { fontSize: 21, fontWeight: '700', color: c.textStrong, letterSpacing: -0.3 },
   profileCopyTitle: { fontSize: 13, fontWeight: '700', color: c.textStrong, letterSpacing: -0.2 },
   profileCopyMeta: { fontSize: 9.5, color: c.textMuted },
   profileStats: {
@@ -1278,11 +1422,32 @@ const makeStyles = (c) => ({
   menuCopy: { flex: 1, gap: 2 },
   menuItemText: { fontSize: 12, fontWeight: '600', color: c.text },
   menuItemSub: { fontSize: 8.5, color: c.textMuted, marginTop: 1 },
-  appearanceCard: { backgroundColor: c.bgElevated, borderRadius: 19, padding: 14 },
-  appearanceRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  appearanceCard: { backgroundColor: c.bgElevated, borderRadius: 19, padding: 11 },
+  appearanceOptions: { flexDirection: 'row', gap: 5 },
+  appearanceOption: {
+    flex: 1, height: 66, borderRadius: 12, borderWidth: 1, borderColor: c.border,
+    backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center', gap: 5,
+  },
+  appearanceOptionOn: { borderColor: c.accent, backgroundColor: c.accentSoft },
+  appearanceOptionText: { fontSize: 9, color: c.textSecondary },
+  appearanceOptionTextOn: { color: c.accent, fontWeight: '600' },
   appearanceSwatch: { width: 34, height: 28, borderRadius: 7, backgroundColor: c.fillStrong },
-  appearanceTitle: { fontSize: 12, fontWeight: '600', color: c.text },
-  appearanceMeta: { fontSize: 9, color: c.textMuted, marginTop: 2 },
+  appearanceSwatchLight: { backgroundColor: '#F2F5FA' },
+  appearanceSwatchDark: { backgroundColor: '#141922' },
+  appearanceSwatchAuto: { backgroundColor: '#7C8797' },
+  nameOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'center', alignItems: 'center', padding: 32 },
+  nameCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 16, padding: 18 },
+  nameTitle: { fontSize: 17, fontWeight: '600', color: c.text, marginBottom: 14 },
+  nameInput: {
+    height: 44, borderWidth: 1, borderColor: c.border, borderRadius: 10,
+    backgroundColor: c.bgSunken, paddingHorizontal: 12, fontSize: 15, color: c.text,
+  },
+  nameBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
+  nameBtn: { paddingVertical: 9, paddingHorizontal: 18, borderRadius: 8, marginLeft: 10 },
+  nameBtnCancel: { backgroundColor: c.bgSunken },
+  nameBtnCancelText: { fontSize: 14, color: c.textSecondary },
+  nameBtnSave: { backgroundColor: c.accent },
+  nameBtnSaveText: { fontSize: 14, fontWeight: '600', color: c.textOnAccent },
   version: { textAlign: 'center', color: c.textMuted, fontSize: 8.5, marginTop: 19, marginBottom: 4 },
   themeRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, marginBottom: 2, gap: 6 },
   themeChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border },

@@ -207,6 +207,15 @@ export default function AddScreen({ navigation, route }) {
     if (id !== baseType || subType !== defaultSub) applyType(id, defaultSub);
   };
 
+  const openRelatedRecord = (item) => {
+    if (typeof navigation.push === 'function') navigation.push('Detail', { item });
+    else {
+      const parent = navigation.getParent?.();
+      if (parent?.push) parent.push('Detail', { item });
+      else navigation.navigate('Detail', { item });
+    }
+  };
+
   /* ---------------- 表单键盘体验 ----------------
      ① 回车 / 键盘上的「下一项」跳到下一个字段（日期格填满也自动跳）；
      ② 聚焦的输入框如果被输入法挡住，把它滚到键盘上方。
@@ -260,7 +269,7 @@ export default function AddScreen({ navigation, route }) {
 
   // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来）
   const scrollContentStyle = useMemo(
-    () => ({ paddingBottom: keyboardOpen ? 280 : 90 }),
+    () => ({ paddingBottom: keyboardOpen ? 280 : 0 }),
     [keyboardOpen]
   );
 
@@ -813,8 +822,10 @@ export default function AddScreen({ navigation, route }) {
 
       <ScrollView
         ref={formScrollRef}
-        style={styles.formScroll}
+        style={[styles.formScroll, route.name !== 'Edit' && styles.formScrollWithTabBar]}
         showsVerticalScrollIndicator={false}
+        bounces={false}
+        overScrollMode="never"
         keyboardShouldPersistTaps="handled"
         scrollEventThrottle={16}
         onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
@@ -1107,7 +1118,7 @@ export default function AddScreen({ navigation, route }) {
             <TouchableOpacity
               style={styles.dupNote}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('Detail', { item: relatedRecords[0] })}
+              onPress={() => openRelatedRecord(relatedRecords[0])}
             >
               <Text style={styles.dupNoteTitle}>这一天已经有 {relatedRecords.length} 条相关记录</Text>
               <Text style={styles.dupNoteBody} numberOfLines={2}>
@@ -1274,6 +1285,7 @@ const makeStyles = (c) => ({
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
   formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  formScrollWithTabBar: { marginBottom: 84 },
   typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
   typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
   typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },

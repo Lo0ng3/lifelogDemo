@@ -6,8 +6,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
+import { BlurView } from 'expo-blur';
 import {
-  Star, StarHalf, X, PlayCircle, ChevronLeft, Image as ImageIcon
+  Star, StarHalf, X, PlayCircle, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -507,7 +508,7 @@ export default function DetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { logData, updateLog } = useContext(LogContext);
+  const { logData, updateLog, deleteLog } = useContext(LogContext);
 
   // 通过 id 从全局数据里取，编辑/删除后页面能自动同步
   const itemId = route.params?.item?.id;
@@ -640,6 +641,20 @@ export default function DetailScreen({ route, navigation }) {
     if (!year) return item.date || '';
     return `${year}年${month}月${day}日${timePart ? ` · ${timePart}` : ''}`;
   })();
+  const handleEdit = () => navigation.push('Edit', { editItem: item });
+  const confirmDelete = () => {
+    Alert.alert('删除印记', `确定要删除「${displayTitle}」吗？删除后无法恢复。`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteLog(item.id);
+          navigation.goBack();
+        },
+      },
+    ]);
+  };
 
   return (
     <View style={styles.container}>
@@ -647,9 +662,17 @@ export default function DetailScreen({ route, navigation }) {
 
       {/* 退出按钮固定在屏幕最上层，不跟着 ScrollView 滚走 */}
       <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
-        <TouchableOpacity style={styles.fixedBack} onPress={() => navigation.goBack()} activeOpacity={0.82}>
-          <ChevronLeft size={24} color={colors.text} />
-        </TouchableOpacity>
+        <BlurView
+          tint={isDark ? 'dark' : 'light'}
+          intensity={isDark ? 50 : 60}
+          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+          style={styles.fixedBack}
+        >
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.42)' : 'rgba(255,255,255,0.42)' }]} />
+          <TouchableOpacity style={styles.fixedBackBtn} onPress={() => navigation.goBack()} activeOpacity={0.82}>
+            <ChevronLeft size={24} color={colors.text} />
+          </TouchableOpacity>
+        </BlurView>
       </View>
 
       <ScrollView
@@ -661,8 +684,8 @@ export default function DetailScreen({ route, navigation }) {
           {coverSource ? (
             <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={160} cachePolicy="memory-disk" />
           ) : (
-            <View style={[StyleSheet.absoluteFill, styles.heroFallback, { backgroundColor: colors.bgSunken }]}>
-              <ImageIcon color={colors.textFaint} size={56} />
+            <View style={[StyleSheet.absoluteFill, styles.heroFallback, { backgroundColor: iconConfig.iconBgColor }]}>
+              <iconConfig.IconComponent color={iconConfig.iconColor} size={64} />
             </View>
           )}
           <View style={styles.heroScrim} />
@@ -739,6 +762,27 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
+      {/* 底部操作条：与底部导航同宽同高，同样用高斯模糊底 */}
+      <View pointerEvents="box-none" style={[styles.actionWrap, { bottom: Math.max(18, insets.bottom - 10) }]}>
+        <BlurView
+          tint={isDark ? 'dark' : 'light'}
+          intensity={isDark ? 50 : 60}
+          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+          style={styles.actionBar}
+        >
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.52)' }]} />
+          <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75}>
+            <Edit3 size={17} color={colors.accent} />
+            <Text style={[styles.actionText, { color: colors.accent }]}>修改</Text>
+          </TouchableOpacity>
+          <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
+          <TouchableOpacity style={styles.actionBtn} onPress={confirmDelete} activeOpacity={0.75}>
+            <Trash2 size={17} color={colors.danger} />
+            <Text style={[styles.actionText, { color: colors.danger }]}>删除</Text>
+          </TouchableOpacity>
+        </BlurView>
+      </View>
+
       {/* 全屏图片/视频查看器 */}
       <Modal
         visible={viewerIndex >= 0}
@@ -804,13 +848,14 @@ export default function DetailScreen({ route, navigation }) {
 const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   emptyText: { textAlign: 'center', color: c.textMuted, fontSize: 15 },
-  scrollContent: { paddingBottom: 30 },
+  scrollContent: { paddingBottom: 126 },
   fixedTop: { position: 'absolute', zIndex: 30, top: 0, left: 16, right: 16 },
   fixedBack: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.bgElevated, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 },
+    width: 40, height: 40, borderRadius: 20, overflow: 'hidden',
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18, shadowRadius: 10, elevation: 5,
   },
+  fixedBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   hero: { height: 320, overflow: 'hidden', backgroundColor: c.bgElevated },
   heroFallback: { alignItems: 'center', justifyContent: 'center' },
   heroScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
@@ -856,6 +901,15 @@ const makeStyles = (c) => ({
   infoItemLast: { borderRightWidth: 0 },
   infoLabel: { fontSize: 9.5, color: c.textMuted },
   infoValue: { fontSize: 12, fontWeight: '600', color: c.text },
+  actionWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 35 },
+  actionBar: {
+    width: 220, height: 56, borderRadius: 22, overflow: 'hidden', flexDirection: 'row', alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.16, shadowRadius: 20, elevation: 9,
+  },
+  actionBtn: { flex: 1, height: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  actionText: { fontSize: 12, fontWeight: '600' },
+  actionDivider: { width: StyleSheet.hairlineWidth, height: 22 },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
   liveBadge: { position: 'absolute', left: 8, top: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },

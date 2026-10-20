@@ -309,6 +309,8 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           onScroll={onListScroll}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
+          bounces={false}
+          overScrollMode="never"
           // 同首页列表：收窄虚拟化窗口、Android 裁掉屏外行，切换日历/滑动更稳
           initialNumToRender={6}
           maxToRenderPerBatch={4}
@@ -440,7 +442,7 @@ const makeStyles = (c) => ({
   tlTitle: { fontSize: 13.5, fontWeight: '600', color: c.text },
   tlCount: { fontSize: 11.5, color: c.textMuted },
   tlWrap: { flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden' },
-  tlContent: { paddingBottom: 86 },
+  tlContent: { paddingBottom: 0 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },
 });

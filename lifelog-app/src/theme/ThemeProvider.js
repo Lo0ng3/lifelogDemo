@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, useColorScheme } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { getPalette } from './palette';
 
@@ -7,18 +8,36 @@ const ThemeContext = createContext({
   colors: getPalette('light'),
   scheme: 'light',
   isDark: false,
+  mode: 'auto',
+  setMode: () => {},
 });
 
+const THEME_MODE_KEY = '@ui_theme_mode';
+
 export const ThemeProvider = ({ children }) => {
-  // 只跟随系统：白天浅色、夜间深色。
-  // 开屏图是原生启动资源，只能在系统层面切深浅，App 内再做手动固定就会和开屏不一致，所以不提供手动档
+  // 默认跟随系统，也可以在「我的 → 外观」里固定浅色或深色
+  const [mode, setModeState] = useState('auto');
   const systemScheme = useColorScheme();
-  const scheme = systemScheme === 'dark' ? 'dark' : 'light';
+  useEffect(() => {
+    AsyncStorage.getItem(THEME_MODE_KEY)
+      .then((stored) => {
+        if (stored === 'light' || stored === 'dark' || stored === 'auto') setModeState(stored);
+      })
+      .catch(() => {});
+  }, []);
+  const setMode = useCallback((next) => {
+    const value = next === 'light' || next === 'dark' ? next : 'auto';
+    setModeState(value);
+    AsyncStorage.setItem(THEME_MODE_KEY, value).catch(() => {});
+  }, []);
+  const scheme = mode === 'auto'
+    ? (systemScheme === 'dark' ? 'dark' : 'light')
+    : mode;
   const colors = getPalette(scheme);
 
   const value = useMemo(
-    () => ({ colors, scheme, isDark: scheme === 'dark' }),
-    [colors, scheme]
+    () => ({ colors, scheme, isDark: scheme === 'dark', mode, setMode }),
+    [colors, scheme, mode, setMode]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

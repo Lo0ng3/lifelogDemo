@@ -10,6 +10,7 @@ import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
 import ShareTargetScreen from '../screens/ShareTargetScreen';
+import TabBarBlur from '../components/TabBarBlur';
 import { useTheme } from '../theme/ThemeProvider';
 import { tabBarStyleFor } from './tabBarStyle';
 
@@ -32,6 +33,7 @@ function Tabs() {
         tabBarActiveTintColor: colors.accent, // 选中时的颜色
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
         tabBarStyle: tabBarStyleFor(colors),
+        tabBarBackground: () => <TabBarBlur />,
         tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: -1 },
         tabBarItemStyle: { paddingVertical: 0 },
         tabBarIconStyle: { marginBottom: -1 },

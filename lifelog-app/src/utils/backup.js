@@ -53,7 +53,24 @@ const collectCovers = async (logData) => {
   return covers;
 };
 
-export const exportBackup = async (logData, keys = null) => {
+const collectProfile = async (profile) => {
+  if (!profile) return null;
+  const out = { name: String(profile.name || '').trim() };
+  if (profile.avatarUri?.startsWith('file://')) {
+    try {
+      const info = await FileSystem.getInfoAsync(profile.avatarUri);
+      if (info.exists) {
+        out.avatar = {
+          ext: (profile.avatarUri.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg',
+          base64: await FileSystem.readAsStringAsync(profile.avatarUri, { encoding: FileSystem.EncodingType.Base64 }),
+        };
+      }
+    } catch {}
+  }
+  return (out.name || out.avatar) ? out : null;
+};
+
+export const exportBackup = async (logData, keys = null, profile = null) => {
   try {
     const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync();
     if (!perms.granted) return { ok: false, canceled: true };
@@ -62,14 +79,16 @@ export const exportBackup = async (logData, keys = null) => {
     const name = `${BACKUP_NAME_PREFIX}${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
     const covers = await collectCovers(logData);
     const keyPayload = pickKeys(keys);
+    const profilePayload = await collectProfile(profile);
     const payload = JSON.stringify({
       app: 'lifelog',
-      schema: 2,
+      schema: 3,
       exportedAt: now.toISOString(),
       count: logData.length,
       logs: logData,
       ...(Object.keys(covers).length ? { covers } : {}),
       ...(keyPayload ? { keys: keyPayload } : {}),
+      ...(profilePayload ? { profile: profilePayload } : {}),
     });
 
     const fileUri = await StorageAccessFramework.createFileAsync(
@@ -81,6 +100,7 @@ export const exportBackup = async (logData, keys = null) => {
       count: logData.length,
       covers: Object.keys(covers).length,
       keys: !!keyPayload,
+      profile: !!profilePayload,
       name,
     };
   } catch (e) {
@@ -137,12 +157,32 @@ export const importBackup = async () => {
       restoredLogs.push(restoredLog);
     }
 
+    // 头像和名字也跟着备份走：头像以 base64 写入，导入时落到应用目录
+    let restoredProfile = null;
+    if (payload?.profile) {
+      const raw = payload.profile;
+      let avatarUri = null;
+      if (raw.avatar?.base64) {
+        try {
+          const dir = `${FileSystem.documentDirectory}profile`;
+          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          const ext = String(raw.avatar.ext || 'jpg').replace(/[^a-z0-9]/gi, '') || 'jpg';
+          const dest = `${dir}/avatar_import_${Date.now()}.${ext}`;
+          await writeFileBase64Async(dest, raw.avatar.base64);
+          avatarUri = dest;
+        } catch {}
+      }
+      const name = String(raw.name || '').trim();
+      if (name || avatarUri) restoredProfile = { name: name || null, avatarUri };
+    }
+
     return {
       ok: true,
       logs: restoredLogs,
       count: restoredLogs.length,
       coversRestored,
       keys: pickKeys(payload?.keys),
+      profile: restoredProfile,
       name: file.name || nameFromUri(file.uri),
       exportedAt: payload.exportedAt || null,
     };
