@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
 import { fetchSuggestions, withTimeout } from '../utils/search';
-import { downloadRemoteCover, cleanTransientCaches, enforceCacheCaps, clearMotionVideos } from '../utils/media';
+import { downloadRemoteCoverVariants, cleanTransientCaches, enforceCacheCaps, clearMotionVideos } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 
@@ -157,9 +157,11 @@ export const LogProvider = ({ children }) => {
         const results = await withTimeout(fetchSuggestions(log.title, log.subType));
         const artwork = results[0]?.artwork;
         if (artwork) {
-          const coverUrl = await withTimeout(downloadRemoteCover(artwork));
+          const cover = await withTimeout(downloadRemoteCoverVariants(artwork));
           updated = (updated || [...logs]).map(l =>
-            l.id === log.id ? { ...l, coverUrl } : l
+            l.id === log.id
+              ? { ...l, coverUrl: cover.coverUrl, coverThumbUrl: cover.coverThumbUrl }
+              : l
           );
         } else {
           backfillAttempted.add(log.id);

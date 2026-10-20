@@ -156,7 +156,6 @@ export function buildMapHtml({
             : ''}
           /* 高德 JS API 自带版权/Logo，按规范原样保留，不做隐藏 */
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
               box-shadow: 0 6px 22px rgba(0,0,0,${isDark ? '0.55' : '0.22'}); }
           .leaflet-popup-content { margin: 11px 13px; line-height: 1.45; }
           .leaflet-popup-tip { background: ${c.cardBg}; }
@@ -164,7 +163,6 @@ export function buildMapHtml({
           /* ---- 控件：只占很小一块，尽量不挡地图 ---- */
           .zoomer { position: absolute; right: 10px; top: 10px; z-index: 800; display: flex; flex-direction: column;
               background: ${c.controlBg}; border: 0.5px solid ${c.controlBorder}; border-radius: 11px;
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
               box-shadow: 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); overflow: hidden;
               -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
               -webkit-user-select: none; user-select: none; }
@@ -192,7 +190,6 @@ export function buildMapHtml({
           .tool { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px 0 8px;
               border-radius: 15px; border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg};
               color: ${c.controlText}; font-size: 12px; font-family: inherit; font-weight: 500;
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
               box-shadow: 0 2px 10px rgba(0,0,0,${isDark ? '0.45' : '0.16'}); cursor: pointer;
               transition: background .15s, color .15s, opacity .15s, transform .09s;
               -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
@@ -211,7 +208,6 @@ export function buildMapHtml({
           .tf { height: 26px; padding: 0 10px; border-radius: 13px;
               border: 0.5px solid ${c.controlBorder}; background: ${c.controlBg}; color: ${c.controlText};
               font-size: 11.5px; font-family: inherit; font-weight: 600; cursor: pointer;
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
               box-shadow: 0 2px 8px rgba(0,0,0,${isDark ? '0.4' : '0.14'});
               transition: background .15s, color .15s, opacity .15s, transform .09s;
               -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
@@ -227,7 +223,6 @@ export function buildMapHtml({
           /* 提示挪到顶部居中：底部留给标点内容卡，避免两者叠在一起 */
           .toast { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); z-index: 950; padding: 5px 10px; border-radius: 9px;
               background: ${c.controlBg}; color: ${c.controlText}; font-size: 11.5px; border: 0.5px solid ${c.controlBorder};
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
               box-shadow: 0 3px 12px rgba(0,0,0,${isDark ? '0.45' : '0.18'}); opacity: 0; transition: opacity .18s; }
           .toast.show { opacity: 1; }
 
@@ -235,7 +230,6 @@ export function buildMapHtml({
              位置由 JS 跟着标点算，默认浮在标点上方，避免挡住标点本身影响连点两次 */
           .rcCard { position: absolute; left: 0; top: 0; z-index: 900; display: none; width: 224px;
               background: ${c.cardBg}; color: ${c.cardText}; border-radius: 13px; padding: 11px 13px;
-              backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
               box-shadow: 0 8px 26px rgba(0,0,0,${isDark ? '0.55' : '0.24'}); will-change: transform; }
           .rcCard::after { content: ""; position: absolute; left: 50%; bottom: -6px; margin-left: -6px;
               width: 12px; height: 12px; border-radius: 2px; background: ${c.cardBg}; transform: rotate(45deg); }
@@ -260,8 +254,7 @@ export function buildMapHtml({
 
           .hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 700;
               max-width: 78%; text-align: center; font-size: 12.5px; line-height: 1.7; color: ${c.cardMeta};
-              background: ${c.controlBg}; border: 0.5px solid ${c.controlBorder}; border-radius: 12px; padding: 12px 16px;
-              backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%); }
+              background: ${c.controlBg}; border: 0.5px solid ${c.controlBorder}; border-radius: 12px; padding: 12px 16px; }
           .banner { position: absolute; top: 0; left: 0; right: 0; z-index: 950; background: ${c.bannerBg};
               color: ${c.bannerText}; font-size: 12px; line-height: 1.6; padding: 6px 10px; text-align: center; }
       </style>

@@ -15,7 +15,6 @@ import { labelOf, groupColor, groupSoft } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
 import { MEDIA_DIR, deletePathAsync } from '../utils/storagePaths';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
-import { GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 
 // 应用自己复制出来的副本（MEDIA_DIR 里的）才能删；相册、用户文件绝不动
 const isAppCopy = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.startsWith(`${MEDIA_DIR}/`);
@@ -166,14 +165,13 @@ export default function ShareTargetScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      <LiquidBackground />
-      <GlassSurface style={[styles.navBar, { paddingTop: insets.top + 6 }]} borderRadius={0} flat>
+      <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
         <TouchableOpacity style={styles.navBtn} onPress={handleCancel} disabled={busy}>
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>
         <Text style={styles.navTitle}>分享到印记</Text>
         <View style={styles.navBtn} />
-      </GlassSurface>
+      </View>
 
       <View style={styles.mediaStrip}>
         {media.slice(0, 6).map((m, i) => (
@@ -233,7 +231,8 @@ const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingBottom: 8,
+    paddingHorizontal: 16, paddingBottom: 8, backgroundColor: c.bgElevated,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider,
   },
   navBtn: { minWidth: 56 },
   navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: c.text },
@@ -257,7 +256,6 @@ const makeStyles = (c) => ({
   sectionTitle: { fontSize: 15, fontWeight: '700', color: c.text },
   searchBox: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: c.fill, borderRadius: 10,
-    borderWidth: 1, borderColor: c.glassBorder,
     paddingHorizontal: 10, height: 36, marginHorizontal: 16, marginTop: 10,
   },
   searchInput: { flex: 1, fontSize: 14, color: c.text, paddingVertical: 0 },

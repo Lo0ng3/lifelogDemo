@@ -80,6 +80,48 @@ export const makeMediaIndex = (entries = []) => {
 const resolvedCache = new Map();
 
 let permissionDenied = false;
+let galleryAccessPromise = null;
+
+// 权限查询只做一次：详情页一次要解析几十张相册引用，如果每个 asset 都去
+// getPermissionsAsync / requestPermissionsAsync，主线程和原生桥都会被排队压住。
+const ensureGalleryAccess = async () => {
+  if (permissionDenied) return false;
+  if (!galleryAccessPromise) {
+    galleryAccessPromise = (async () => {
+      let perm = await MediaLibrary.getPermissionsAsync(false, ['photo', 'video']);
+      if (!hasGalleryAccess(perm)) {
+        perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
+      }
+      if (!hasGalleryAccess(perm)) {
+        permissionDenied = true;
+        return false;
+      }
+      return true;
+    })().catch(() => false);
+  }
+  return galleryAccessPromise;
+};
+
+// 相册资产解析并发上限：一次详情页几十个 assetId，不能让原生相册查询全部同时涌进来
+const ASSET_INFO_CONCURRENCY = 4;
+let assetInfoActive = 0;
+const assetInfoQueue = [];
+const pumpAssetInfo = () => {
+  while (assetInfoActive < ASSET_INFO_CONCURRENCY && assetInfoQueue.length) {
+    const job = assetInfoQueue.shift();
+    assetInfoActive += 1;
+    job.task()
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        assetInfoActive -= 1;
+        pumpAssetInfo();
+      });
+  }
+};
+const queryAssetInfo = (assetId) => new Promise((resolve, reject) => {
+  assetInfoQueue.push({ task: () => MediaLibrary.getAssetInfoAsync(assetId), resolve, reject });
+  pumpAssetInfo();
+});
 
 // expo-media-library 在"仅允许访问部分照片"时 granted 为 false 但 accessPrivileges 是 limited，
 // 这种状态下已选中的照片仍能正常查询，当作有权限处理，避免显示端一直回退到死路径
@@ -94,15 +136,8 @@ export const resolveMediaUri = async (entry) => {
   if (permissionDenied) return uri;
   try {
     // 只申请照片和视频权限；默认请求会带上 AUDIO，部分环境的 AndroidManifest 未声明会直接抛错
-    let perm = await MediaLibrary.getPermissionsAsync(false, ['photo', 'video']);
-    if (!hasGalleryAccess(perm)) {
-      perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
-      if (!hasGalleryAccess(perm)) {
-        permissionDenied = true;
-        return uri;
-      }
-    }
-    const info = await MediaLibrary.getAssetInfoAsync(assetId);
+    if (!(await ensureGalleryAccess())) return uri;
+    const info = await queryAssetInfo(assetId);
     // 拿不到 localUri（如云端照片未下载到本机）时不缓存，等下次有机会再解析
     if (info?.localUri) {
       resolvedCache.set(assetId, info.localUri);
@@ -126,12 +161,26 @@ const hashKey = (s) => {
   return h.toString(36) + '_' + s.length.toString(36);
 };
 
-export const getVideoThumbnail = async (entry) => {
-  const { uri, assetId } = normalizeMediaEntry(entry) || {};
-  if (!uri) return null;
-  const cacheKey = assetId || uri;
-  if (thumbCache.has(cacheKey)) return thumbCache.get(cacheKey);
+const thumbJobs = new Map();
+const THUMB_CONCURRENCY = 2;
+let thumbActive = 0;
+const thumbQueue = [];
+const pumpThumbs = () => {
+  while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length) {
+    const job = thumbQueue.shift();
+    thumbActive += 1;
+    job.task()
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        thumbActive -= 1;
+        pumpThumbs();
+      });
+  }
+};
 
+// 真正解码视频帧的部分：只允许 2 个同时跑。一次详情页可能挂着十几段视频，
+// 全部同时 getThumbnailAsync 会把解码器占满，返回按钮都要等它们结束。
+const generateVideoThumbnail = async (uri, cacheKey) => {
   // 封面帧落盘缓存：生成要现场解码视频，很慢；落盘后重开 App 秒出
   try {
     const dir = `${FileSystem.documentDirectory}videoThumbs`;
@@ -166,6 +215,27 @@ export const getVideoThumbnail = async (entry) => {
   }
 };
 
+export const getVideoThumbnail = (entry) => {
+  const { uri, assetId } = normalizeMediaEntry(entry) || {};
+  if (!uri) return Promise.resolve(null);
+  const cacheKey = assetId || uri;
+  if (thumbCache.has(cacheKey)) return Promise.resolve(thumbCache.get(cacheKey));
+  if (thumbJobs.has(cacheKey)) return thumbJobs.get(cacheKey);
+
+  const job = new Promise((resolve, reject) => {
+    thumbQueue.push({
+      task: () => generateVideoThumbnail(uri, cacheKey),
+      resolve,
+      reject,
+    });
+    pumpThumbs();
+  }).finally(() => {
+    thumbJobs.delete(cacheKey);
+  });
+  thumbJobs.set(cacheKey, job);
+  return job;
+};
+
 // 判断是否视频：优先看记录时留下的类型标记，没有标记再按扩展名猜
 export const isVideoEntry = (entry) => {
   const { isVideo: flagged, uri } = normalizeMediaEntry(entry) || {};
@@ -180,6 +250,8 @@ export const DOUBAN_POSTER_RATIO = 2 / 3;
 // 封面落盘的长边上限：显示端只有 46~64pt（3 倍屏 ≈ 192px），360px 有充足冗余，
 // 单张从 ~200KB 降到 ~25KB，备份体积同步受益
 const COVER_MAX_EDGE = 360;
+// 详情页 Hero 用的清晰封面：1600px 足够手机全宽显示，又不会把 4K 海报原样塞进备份
+const COVER_DISPLAY_MAX_EDGE = 1600;
 
 const ensureCoversDir = async () => {
   await ensureDirAsync(COVERS_DIR);
@@ -255,6 +327,27 @@ export const downloadRemoteCover = async (url) => {
     return moved || downloaded;
   } catch {
     return url;
+  }
+};
+
+// 新记录同时留两份：coverUrl 给详情 Hero（高分辨率），coverThumbUrl 给列表（小图）。
+// 只下载一次，避免为了两张不同尺寸反复走网络。
+export const downloadRemoteCoverVariants = async (url) => {
+  if (!url || !url.startsWith('http')) {
+    return { coverUrl: url || null, coverThumbUrl: url || null };
+  }
+  try {
+    const tmp = `${FileSystem.cacheDirectory}cover_dl_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const { uri: downloaded } = await FileSystem.downloadAsync(url, tmp, { headers: DOWNLOAD_HEADERS });
+    const large = await downscaleCover(downloaded, COVER_DISPLAY_MAX_EDGE, `${url}#display`);
+    const thumb = await downscaleCover(downloaded, COVER_MAX_EDGE, `${url}#thumb`);
+    try { await FileSystem.deleteAsync(downloaded, { idempotent: true }); } catch {}
+    return {
+      coverUrl: large || url,
+      coverThumbUrl: thumb || large || url,
+    };
+  } catch {
+    return { coverUrl: url, coverThumbUrl: url };
   }
 };
 

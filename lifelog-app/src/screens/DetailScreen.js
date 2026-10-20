@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Modal, Alert, ActivityIndicator, Platform, ToastAndroid
+  Dimensions, Modal, Alert, ActivityIndicator, Platform, ToastAndroid, InteractionManager
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
-  Star, StarHalf, X, PlayCircle, ChevronLeft, MapPin, Trash2
+  Star, StarHalf, X, PlayCircle, ChevronLeft, Image as ImageIcon
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -18,12 +17,12 @@ import Animated, {
 
 import { LogContext } from '../context/LogContext';
 import { getIconConfig } from '../utils/icons';
-import { GROUP_LABEL, isEssay, labelOf } from '../utils/recordMeta';
-import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, mediaSignature } from '../utils/media';
+import { isEssay, labelOf } from '../utils/recordMeta';
+import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
+import { fetchSuggestions, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
-import { GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -145,13 +144,13 @@ function MediaGridCell({
         <TouchableOpacity activeOpacity={0.85} onPress={() => onOpen(originalIndex)}>
           {isVideoEntry(entry) ? (
             <View style={styles.videoThumbnailBox}>
-              <VideoThumb entry={entry} style={styles.gridImage} />
+              <VideoThumb entry={entry} style={styles.gridImage} enabled={displayIndex < 9} />
               <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
             </View>
           ) : (
             <>
               <Image source={{ uri: entry.uri }} style={styles.gridImage} contentFit="cover" cachePolicy="memory" />
-              <LiveGridBadge entry={entry} />
+              <LiveGridBadge entry={entry} enabled={displayIndex < 9} />
             </>
           )}
           {coverOn && <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>}
@@ -387,32 +386,39 @@ function ZoomableImage({ uri, active, onZoomChange, onSingleTap }) {
 }
 
 // 视频封面：只生成一次封面帧（内存缓存），避免为了一张缩略图挂载真实播放器
-function VideoThumb({ entry, style, contentFit = 'cover' }) {
+function VideoThumb({ entry, style, contentFit = 'cover', enabled = true }) {
   const [thumb, setThumb] = useState(null);
   useEffect(() => {
+    if (!enabled) return undefined;
     let alive = true;
-    getVideoThumbnail(entry).then(t => { if (alive && t) setThumb(t); });
-    return () => { alive = false; };
-  }, [entry]);
+    // 等导航/布局动画结束再解码视频帧，避免一进详情就把解码器占满
+    const task = InteractionManager.runAfterInteractions(() => {
+      getVideoThumbnail(entry).then(t => { if (alive && t) setThumb(t); });
+    });
+    return () => { alive = false; task.cancel(); };
+  }, [entry, enabled]);
+  if (!enabled) return null;
   if (!thumb) return null;
   return <Image source={{ uri: thumb }} style={style} contentFit={contentFit} cachePolicy="memory" />;
 }
 
 // 实况徽标：异步检测动态照片，是实况才显示；详情内用全量模式（结果持久缓存，只算一次）
-function LiveGridBadge({ entry }) {
+function LiveGridBadge({ entry, enabled = true }) {
   const styles = useThemedStyles(makeStyles);
   const [live, setLive] = useState(false);
   useEffect(() => {
+    if (!enabled) return undefined;
     let alive = true;
-    getLivePhotoInfo(entry, { full: true }).then(i => {
-      if (!alive) return;
-      setLive(!!i?.live);
-      // 进详情页就把内嵌动效提取好（后台跑、失败不影响静帧）：点播放 / 全屏播放时直接命中。
-      // 提取只读文件尾那几 MB，成本很低；文件在进后台时会被整体清掉，不会长期占空间。
-      if (i?.live) extractMotionVideo(entry, i).catch(() => {});
+    // 网格只做廉价检测。以前这里对每张图都 full 扫描并预提取实况视频，
+    // 一组实况照片会连续读文件、写 mp4，打开详情和返回都会被拖慢。
+    const task = InteractionManager.runAfterInteractions(() => {
+      getLivePhotoInfo(entry, { full: false }).then(i => {
+        if (alive) setLive(!!i?.live);
+      });
     });
-    return () => { alive = false; };
-  }, [entry]);
+    return () => { alive = false; task.cancel(); };
+  }, [entry, enabled]);
+  if (!enabled) return null;
   if (!live) return null;
   return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
 }
@@ -425,30 +431,19 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
   const [playingUri, setPlayingUri] = useState(null);
   const [videoReady, setVideoReady] = useState(false);
   const [loading, setLoading] = useState(false);
-  // 进页面就预热好的动效地址：点播放直接命中，不用再等提取
-  const preloadRef = useRef(null);
   useEffect(() => {
     let alive = true;
     setPlayingUri(null);
     setVideoReady(false);
-    preloadRef.current = null;
     getLivePhotoInfo(entry, { full: true }).then(i => {
       if (!alive) return;
       setInfo(i);
-      // 打开全屏查看器就开始提取（后台、串行）：通常你点「实况」之前就已经备好了
-      if (i?.live) {
-        extractMotionVideo(entry, i)
-          .then(uri => { if (alive && uri) preloadRef.current = uri; })
-          .catch(() => {});
-      }
     });
     return () => { alive = false; };
   }, [entry]);
   const isLive = !!info?.live;
   const handlePlay = async () => {
     if (loading || playingUri) return;
-    // 预热好了就是纯切换，不再有任何文件 IO
-    if (preloadRef.current) { setVideoReady(false); setPlayingUri(preloadRef.current); return; }
     setLoading(true);
     try {
       const uri = await extractMotionVideo(entry, info);
@@ -512,7 +507,7 @@ export default function DetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { logData, updateLog, deleteLog } = useContext(LogContext);
+  const { logData, updateLog } = useContext(LogContext);
 
   // 通过 id 从全局数据里取，编辑/删除后页面能自动同步
   const itemId = route.params?.item?.id;
@@ -563,6 +558,28 @@ export default function DetailScreen({ route, navigation }) {
     ? { uri: coverUri }
     : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null);
 
+  // 1.9.5 及更早的爬取封面只存了 360px 小图。新记录会同时存高清封面 + 列表缩略图；
+  // 老记录在第一次打开详情时后台补一次高清封面，不挡当前页面渲染。
+  const coverUpgradeRef = useRef(new Set());
+  useEffect(() => {
+    if (!item || item.baseType !== 'media' || !item.coverUrl || item.coverThumbUrl || item.localImages?.length) return undefined;
+    if (coverUpgradeRef.current.has(item.id)) return undefined;
+    coverUpgradeRef.current.add(item.id);
+    let alive = true;
+    const timer = setTimeout(async () => {
+      try {
+        const results = await withTimeout(fetchSuggestions(item.title, item.subType));
+        const artwork = results[0]?.artwork;
+        if (!artwork) return;
+        const cover = await withTimeout(downloadRemoteCoverVariants(artwork), 12000);
+        if (alive && cover.coverUrl && cover.coverUrl !== item.coverUrl) {
+          updateLog({ ...item, coverUrl: cover.coverUrl, coverThumbUrl: cover.coverThumbUrl });
+        }
+      } catch {}
+    }, 900);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [item, updateLog]);
+
   // 封面：长按九宫格里任意一张设为/取消封面，记录在 coverIndex 上。
   // 设为封面时同步生成小图文件（covers/ 目录），列表/详情直接显示，重启无需重新解析相册
   const handleGridLongPress = (idx) => {
@@ -605,7 +622,6 @@ export default function DetailScreen({ route, navigation }) {
   if (!item) {
     return (
       <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
-        <LiquidBackground />
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <Text style={styles.emptyText}>这条印记已不存在</Text>
       </View>
@@ -624,34 +640,17 @@ export default function DetailScreen({ route, navigation }) {
     if (!year) return item.date || '';
     return `${year}年${month}月${day}日${timePart ? ` · ${timePart}` : ''}`;
   })();
-  const metaLine = `${GROUP_LABEL[item.baseType] || '记录'}${
-    item.coordinates ? ' · 已记录坐标' : item.start?.name && item.end?.name ? ' · 已记录行程' : ''
-  }`;
-  const extraLine = item.baseType === 'ticket'
-    ? (item.subtitle || '')
-    : item.baseType === 'note'
-      ? [item.mood, item.weather].filter(Boolean).join(' · ')
-      : '';
-
-  const handleEdit = () => navigation.navigate('Edit', { editItem: item });
-  const confirmDelete = () => {
-    Alert.alert('删除印记', `确定要删除「${displayTitle}」吗？删除后无法恢复。`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteLog(item.id);
-          navigation.goBack();
-        },
-      },
-    ]);
-  };
 
   return (
     <View style={styles.container}>
-      <LiquidBackground />
       <StatusBar style={viewerIndex >= 0 ? 'light' : (isDark ? 'light' : 'dark')} />
+
+      {/* 退出按钮固定在屏幕最上层，不跟着 ScrollView 滚走 */}
+      <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
+        <TouchableOpacity style={styles.fixedBack} onPress={() => navigation.goBack()} activeOpacity={0.82}>
+          <ChevronLeft size={24} color={colors.text} />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -660,120 +659,69 @@ export default function DetailScreen({ route, navigation }) {
       >
         <View style={styles.hero}>
           {coverSource ? (
-            <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={180} />
+            <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={160} cachePolicy="memory-disk" />
           ) : (
-            <LinearGradient colors={[iconConfig.iconBgColor, colors.surfaceDeep, '#101722']} style={StyleSheet.absoluteFill}>
-              <iconConfig.IconComponent color={iconConfig.iconColor} size={74} style={{ marginTop: 108, alignSelf: 'center' }} />
-            </LinearGradient>
+            <View style={[StyleSheet.absoluteFill, styles.heroFallback, { backgroundColor: colors.bgSunken }]}>
+              <ImageIcon color={colors.textFaint} size={56} />
+            </View>
           )}
-          <LinearGradient
-            colors={['rgba(3,7,13,0.22)', 'rgba(3,7,13,0)', 'rgba(3,7,13,0.68)']}
-            locations={[0, 0.3, 1]}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={[styles.heroTop, { paddingTop: insets.top + 8 }]}>
-            <GlassSurface style={styles.heroBack} borderRadius={20} tintColor="rgba(8,14,22,0.38)" flat>
-              <TouchableOpacity style={styles.heroBackBtn} onPress={() => navigation.goBack()}>
-                <ChevronLeft size={22} color="#FFF" />
-              </TouchableOpacity>
-            </GlassSurface>
-          </View>
-          <View style={styles.heroCaption}>
-            <View style={styles.heroTypePill}>
-              <View style={[styles.heroTypeDot, { backgroundColor: iconConfig.iconColor }]} />
-              <Text style={styles.heroTypeText}>{labelOf(item)}</Text>
+          <View style={styles.heroScrim} />
+          <View style={styles.heroMeta}>
+            <View style={[styles.heroTypePill, { backgroundColor: iconConfig.iconBgColor }]}>
+              <Text style={[styles.heroTypeText, { color: iconConfig.iconColor }]}>{labelOf(item)}</Text>
             </View>
             <Text style={styles.heroDate}>{heroDate}</Text>
           </View>
         </View>
 
-        <GlassSurface style={styles.sheet} borderRadius={30}>
+        <View style={styles.sheet}>
           <View style={styles.grabber} />
-          <View style={styles.kickerRow}>
-            <Text style={styles.kicker}>{metaLine}</Text>
-            {!!extraLine && <Text style={styles.kickerExtra}>{extraLine}</Text>}
-          </View>
           <Text style={styles.detailTitle}>{displayTitle}</Text>
+          <View style={styles.detailMetaRow}>
+            <Text style={styles.detailDate}>{heroDate}</Text>
+          </View>
 
-          <View style={styles.ratingRow}>
+          <View style={styles.reviewRow}>
             {essay ? (
               <>
                 <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
-                {!!item.weather && <Text style={styles.ratingText}>天气 {item.weather}</Text>}
+                {!!item.weather && <Text style={styles.moodWeather}>天气 {item.weather}</Text>}
               </>
             ) : item.rating ? (
               <>
                 {[1, 2, 3, 4, 5].map((i) => {
                   const isFull = i <= item.rating;
                   const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                  if (isHalf) return <StarHalf key={i} size={17} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
-                  return <Star key={i} size={17} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
+                  if (isHalf) return <StarHalf key={i} size={18} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
+                  return <Star key={i} size={18} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
                 })}
-                <Text style={styles.ratingText}>{item.rating} 分 · 评分</Text>
+                <Text style={styles.reviewScore}>{item.rating} 分</Text>
               </>
             ) : (
-              <Text style={styles.ratingText}>未评分</Text>
+              <Text style={styles.mutedScore}>未评分</Text>
             )}
           </View>
 
-          {!!noteText && <Text style={styles.note}>{noteText}</Text>}
-
-          {!!item.coordinates && (
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>地图位置</Text>
-                <Text style={styles.sectionAction}>已记录坐标</Text>
-              </View>
-              <View style={styles.mapPreview}>
-                <LinearGradient colors={['#E9E5DB', '#DCE7E6', '#C7D8DA']} style={StyleSheet.absoluteFill} />
-                <View style={styles.mapRoadH} />
-                <View style={styles.mapRoadV} />
-                <View style={styles.mapPinHalo}>
-                  <MapPin size={17} color="#E86F56" fill="#E86F56" />
-                </View>
-                <Text style={styles.mapCoord}>
-                  {Number(item.coordinates.latitude).toFixed(4)}, {Number(item.coordinates.longitude).toFixed(4)}
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {!!(item.start?.name && item.end?.name) && (
-            <GlassSurface style={styles.routeCard} blur={false} borderRadius={18}>
-              <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>出发</Text>
-                <Text style={styles.routeName} numberOfLines={1}>{item.start.name}</Text>
-              </View>
-              <View style={styles.routeTrack}>
-                <View style={styles.routeDot} />
-                <View style={styles.routeStroke} />
-                <View style={styles.routeDot} />
-              </View>
-              <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>到达</Text>
-                <Text style={styles.routeName} numberOfLines={1}>{item.end.name}</Text>
-              </View>
-            </GlassSurface>
-          )}
+          {!!noteText && <Text style={styles.reviewText}>{noteText}</Text>}
 
           {resolvedMedia.length > 0 && (
-            <View style={styles.sectionBlock}>
+            <View style={styles.section}>
               <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>影像</Text>
-                <Text style={styles.sectionAction}>{resolvedMedia.length} 张</Text>
+                <Text style={styles.sectionTitle}>照片</Text>
+                <Text style={styles.sectionCount}>{resolvedMedia.length} 张</Text>
               </View>
-              <MediaGrid
-                entries={resolvedMedia}
-                coverIndex={item.coverIndex}
-                onOpen={(idx) => { setViewerIndex(idx); setCurrentViewIndex(idx); }}
-                onIdleLongPress={handleGridLongPress}
-                onReorder={handleMediaReorder}
-                onDragChange={setGridDragging}
-              />
+            <MediaGrid
+              entries={resolvedMedia}
+              coverIndex={item.coverIndex}
+              onOpen={(idx) => { setViewerIndex(idx); setCurrentViewIndex(idx); }}
+              onIdleLongPress={handleGridLongPress}
+              onReorder={handleMediaReorder}
+              onDragChange={setGridDragging}
+            />
             </View>
           )}
 
-          <GlassSurface style={styles.infoCard} blur={false} borderRadius={18}>
+          <View style={styles.infoCard}>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>类型</Text>
               <Text style={styles.infoValue}>{labelOf(item)}</Text>
@@ -783,27 +731,13 @@ export default function DetailScreen({ route, navigation }) {
               <Text style={styles.infoValue}>{essay ? (item.mood || '—') : (item.rating ? `${item.rating} 分` : '未评分')}</Text>
             </View>
             <View style={[styles.infoItem, styles.infoItemLast]}>
-              <Text style={styles.infoLabel}>影像</Text>
+              <Text style={styles.infoLabel}>照片</Text>
               <Text style={styles.infoValue}>{resolvedMedia.length} 张</Text>
             </View>
-          </GlassSurface>
-
-          <Text style={styles.footnote}>日期 · {heroDate}</Text>
-          <View style={{ height: 104 }} />
-        </GlassSurface>
+          </View>
+          <View style={{ height: 28 }} />
+        </View>
       </ScrollView>
-
-      <GlassSurface
-        style={[styles.actionBar, { height: 60 + insets.bottom, paddingBottom: Math.max(22, insets.bottom + 8) }]}
-        borderRadius={0}
-      >
-        <TouchableOpacity style={styles.primaryAction} onPress={handleEdit} activeOpacity={0.86}>
-          <Text style={styles.primaryActionText}>编辑印记</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.deleteAction} onPress={confirmDelete} activeOpacity={0.8}>
-          <Trash2 size={19} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </GlassSurface>
 
       {/* 全屏图片/视频查看器 */}
       <Modal
@@ -870,99 +804,58 @@ export default function DetailScreen({ route, navigation }) {
 const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   emptyText: { textAlign: 'center', color: c.textMuted, fontSize: 15 },
-  scrollContent: { paddingBottom: 0 },
-  hero: { height: 340, backgroundColor: '#8E8E93', overflow: 'hidden' },
-  heroTop: {
-    position: 'absolute', top: 0, left: 16, right: 16,
-    flexDirection: 'row', justifyContent: 'space-between',
+  scrollContent: { paddingBottom: 30 },
+  fixedTop: { position: 'absolute', zIndex: 30, top: 0, left: 16, right: 16 },
+  fixedBack: {
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.bgElevated, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18, shadowRadius: 10, elevation: 5,
   },
-  heroBack: { width: 39, height: 39, borderRadius: 20 },
-  heroBackBtn: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center' },
-  heroCaption: {
-    position: 'absolute', left: 20, right: 20, bottom: 48,
+  hero: { height: 320, overflow: 'hidden', backgroundColor: c.bgElevated },
+  heroFallback: { alignItems: 'center', justifyContent: 'center' },
+  heroScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
+  heroMeta: {
+    position: 'absolute', left: 18, right: 18, bottom: 42,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
-  heroTypePill: {
-    height: 25, paddingHorizontal: 9, borderRadius: 13,
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(6,11,18,0.42)',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.24)',
+  heroTypePill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  heroTypeText: { fontSize: 10.5, fontWeight: '650' },
+  heroDate: {
+    color: 'rgba(255,255,255,0.94)', fontSize: 11, fontWeight: '600',
+    textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 4,
   },
-  heroTypeDot: { width: 6, height: 6, borderRadius: 3 },
-  heroTypeText: { color: '#FFF', fontSize: 9.5, fontWeight: '600' },
-  heroDate: { color: 'rgba(255,255,255,0.82)', fontSize: 10.5, fontWeight: '600' },
-  sheet: { marginTop: -32, paddingHorizontal: 20, paddingTop: 8, borderRadius: 30, minHeight: 560 },
+  sheet: {
+    marginTop: -28, backgroundColor: c.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 20, paddingTop: 10, minHeight: 520,
+  },
   grabber: {
-    width: 36, height: 4, borderRadius: 2, alignSelf: 'center',
-    backgroundColor: c.textMuted, opacity: 0.35, marginTop: 2, marginBottom: 14,
+    width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 14,
+    backgroundColor: c.sheetHandle, opacity: 0.6,
   },
-  kickerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  kicker: { fontSize: 10.5, color: c.textMuted },
-  kickerExtra: { fontSize: 10.5, color: c.textSecondary },
-  detailTitle: {
-    fontSize: 30, lineHeight: 34, fontWeight: '800', letterSpacing: -1.2,
-    color: c.textStrong, marginTop: 5, marginBottom: 7,
-  },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 2, minHeight: 24 },
-  ratingText: { marginLeft: 7, fontSize: 10.5, fontWeight: '650', color: c.textSecondary },
-  moodEmoji: { fontSize: 25, lineHeight: 31, marginRight: 6 },
-  note: { fontSize: 15.5, lineHeight: 23, color: c.text, marginTop: 16, marginBottom: 18 },
-  sectionBlock: { marginTop: 4 },
+  detailTitle: { fontSize: 28, lineHeight: 34, fontWeight: '800', letterSpacing: -1, color: c.textStrong },
+  detailMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 10 },
+  detailDate: { fontSize: 11.5, color: c.textMuted },
+  reviewRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 12, minHeight: 24 },
+  reviewScore: { marginLeft: 8, fontSize: 12, fontWeight: '700', color: c.textSecondary },
+  mutedScore: { fontSize: 12, color: c.textMuted },
+  moodEmoji: { fontSize: 24, lineHeight: 30, marginRight: 6 },
+  moodWeather: { fontSize: 13, color: c.textSecondary },
+  reviewText: { fontSize: 15.5, color: c.text, lineHeight: 23, marginBottom: 18 },
+  section: { marginTop: 4 },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  sectionTitle: { fontSize: 13.5, fontWeight: '700', color: c.text },
-  sectionAction: { fontSize: 9.5, color: c.textMuted },
-  mapPreview: {
-    height: 132, borderRadius: 16, overflow: 'hidden',
-    borderWidth: 1, borderColor: c.glassBorder,
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: c.text },
+  sectionCount: { fontSize: 10, color: c.textMuted },
+  infoCard: {
+    flexDirection: 'row', backgroundColor: c.bgElevated, borderRadius: 16,
+    paddingVertical: 12, marginTop: 16,
   },
-  mapRoadH: {
-    position: 'absolute', left: -20, right: -20, top: 44, height: 9,
-    borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.82)', transform: [{ rotate: '-6deg' }],
-  },
-  mapRoadV: {
-    position: 'absolute', top: -20, bottom: -20, left: '43%', width: 7,
-    borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.76)', transform: [{ rotate: '8deg' }],
-  },
-  mapPinHalo: {
-    position: 'absolute', left: '50%', top: '50%', width: 26, height: 26,
-    marginLeft: -13, marginTop: -13, borderRadius: 13,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(232,111,86,0.18)',
-  },
-  mapCoord: {
-    position: 'absolute', right: 9, bottom: 8, paddingHorizontal: 6, paddingVertical: 3,
-    borderRadius: 6, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.56)',
-    color: '#596264', fontSize: 8.5, fontWeight: '600',
-  },
-  routeCard: { marginTop: 12, padding: 14, borderRadius: 18 },
-  routeRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  routeLabel: { width: 30, fontSize: 9.5, color: c.textMuted },
-  routeName: { flex: 1, fontSize: 12.5, fontWeight: '650', color: c.text },
-  routeTrack: { flexDirection: 'row', alignItems: 'center', marginLeft: 34, marginVertical: 6 },
-  routeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.accent },
-  routeStroke: { flex: 1, height: 1, backgroundColor: c.borderSoft, marginHorizontal: 8 },
-  infoCard: { flexDirection: 'row', marginTop: 16, paddingVertical: 13, borderRadius: 18 },
   infoItem: {
     flex: 1, alignItems: 'center', gap: 3,
     borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.divider,
   },
   infoItemLast: { borderRightWidth: 0 },
-  infoLabel: { fontSize: 9, color: c.textMuted },
-  infoValue: { fontSize: 11.5, fontWeight: '650', color: c.text },
-  footnote: { textAlign: 'center', color: c.textMuted, fontSize: 9.5, paddingTop: 5, paddingBottom: 20 },
-  actionBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0, height: 82,
-    paddingTop: 11, paddingHorizontal: 18, paddingBottom: 22,
-    flexDirection: 'row', alignItems: 'center', gap: 9,
-  },
-  primaryAction: {
-    flex: 1, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.accent,
-  },
-  primaryActionText: { color: c.textOnAccent, fontSize: 13, fontWeight: '750' },
-  deleteAction: {
-    width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.fillStrong, borderWidth: 1, borderColor: c.glassBorder,
-  },
+  infoLabel: { fontSize: 9.5, color: c.textMuted },
+  infoValue: { fontSize: 12, fontWeight: '600', color: c.text },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
   liveBadge: { position: 'absolute', left: 8, top: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },

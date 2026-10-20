@@ -1,10 +1,9 @@
 import React from 'react';
-import { View, Text, Modal, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
-import { GlassSurface, LiquidBackground } from './LiquidGlass';
 
 /* ------------------------------------------------------------------ *
  * 侧边栏「说明」
@@ -124,7 +123,7 @@ const SECTIONS = [
   {
     title: '外观',
     items: [
-      '默认跟随系统深浅色：白天浅色、夜间深色；也可以在「我的 → 外观」里手动固定浅色 / 深色。液态玻璃会随主题切换乳白或烟熏材质。',
+      '跟随系统深浅色：白天浅色、夜间深色。开屏图与页面底色一致，启动不会先闪一下再跳色。',
     ],
   },
 ];
@@ -137,14 +136,13 @@ export default function HelpModal({ visible, onClose }) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <LiquidBackground />
-        <GlassSurface style={styles.header} borderRadius={0} flat>
+        <View style={styles.header}>
           <View style={styles.headerSide} />
           <Text style={styles.headerTitle}>说明</Text>
           <TouchableOpacity style={styles.headerSide} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <X size={22} color={colors.textSecondary} />
           </TouchableOpacity>
-        </GlassSurface>
+        </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           {SECTIONS.map((section) => (
@@ -165,13 +163,13 @@ const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
+    paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
   },
   headerSide: { width: 32, alignItems: 'flex-end' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   content: { padding: 16, paddingBottom: 40 },
-  card: { backgroundColor: c.bgElevated, borderRadius: 20, padding: 16, marginBottom: 12,
-    borderWidth: 1, borderColor: c.glassBorder },
+  card: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 12 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 10 },
   item: { fontSize: 13.5, lineHeight: 21, color: c.textSecondary, marginBottom: 8 },
 });

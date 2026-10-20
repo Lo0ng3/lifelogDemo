@@ -8,7 +8,6 @@ import Reanimated, {
 
 import RecordRow from './RecordRow';
 import PressableScale from './PressableScale';
-import { GlassSurface } from './LiquidGlass';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { groupColor } from '../utils/recordMeta';
 
@@ -301,7 +300,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
       </View>
 
       {/* 日历跟列表在同一个滚动容器里：上滑就把日历顶上去，记录多时列表能占满整屏 */}
-      <GlassSurface style={styles.tlWrap} blur={false} borderRadius={20}>
+      <View style={styles.tlWrap}>
         <Reanimated.FlatList
           ref={listRef}
           data={timeline}
@@ -389,7 +388,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
             </GestureDetector>
           )}
         />
-      </GlassSurface>
+      </View>
     </View>
   );
 }
@@ -440,8 +439,8 @@ const makeStyles = (c) => ({
   tlHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6, borderTopWidth: 1, borderTopColor: c.divider },
   tlTitle: { fontSize: 13.5, fontWeight: '600', color: c.text },
   tlCount: { fontSize: 11.5, color: c.textMuted },
-  tlWrap: { flex: 1, marginHorizontal: TL_PAD_H, borderRadius: 20, overflow: 'hidden' },
-  tlContent: { paddingBottom: 104 },
+  tlWrap: { flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden' },
+  tlContent: { paddingBottom: 86 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },
 });

@@ -7,10 +7,9 @@ import {
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, PlayCircle, Maximize2
+  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Star, StarHalf, ChevronRight, ChevronDown, PlayCircle, Maximize2
 } from 'lucide-react-native';
-import { BottomSheetModal, BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
-import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCover, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
+import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { deletePathAsync } from '../utils/storagePaths';
 import { onAddDraftReset } from '../utils/draftReset';
@@ -18,16 +17,15 @@ import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
-import { GlassSheetBackground, GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
 // 二级类型选择：第一级大类 → 第二级子类；地点无子类
 const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐', note: '随笔' };
-const TYPE_CARDS = [
-  { id: 'ticket', label: '旅票', hint: '航班 · 列车', Icon: Plane, bgKey: 'iconTicket', colorKey: 'groupTicket' },
-  { id: 'location', label: '地点', hint: '城市 · 小店', Icon: MapPin, bgKey: 'groupPlaceSoft', colorKey: 'groupPlace' },
-  { id: 'media', label: '娱乐', hint: '电影 · 阅读', Icon: Film, bgKey: 'iconMedia', colorKey: 'groupMedia' },
-  { id: 'note', label: '随笔', hint: '日记 · 想法', Icon: NotebookPen, bgKey: 'groupNoteSoft', colorKey: 'groupNote' },
+const TYPE_MENU = [
+  { id: 'ticket', label: '旅票', Icon: Plane },
+  { id: 'location', label: '地点', Icon: MapPin },
+  { id: 'media', label: '娱乐', Icon: Film },
+  { id: 'note', label: '随笔', Icon: NotebookPen },
 ];
 const SUB_OPTIONS = {
   ticket: TICKET_SUB_OPTIONS,
@@ -175,12 +173,9 @@ export default function AddScreen({ navigation, route }) {
   const [destFocused, setDestFocused] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
-  // 类型选择的底部弹层（二级：大类 → 子类）
-  const typeSheetRef = useRef(null);
-  const [sheetBase, setSheetBase] = useState('ticket'); // 弹层里正在浏览的大类
-  const renderTypeBackdrop = useCallback(
-    (props) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />, []
-  );
+  // 类型选择改成表单顶部的内联面板：大类 → 子类都在上方展开，不再从底部弹
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const [sheetBase, setSheetBase] = useState('ticket');
 
   const clearForm = () => {
     setEditId(null);
@@ -201,12 +196,15 @@ export default function AddScreen({ navigation, route }) {
     setSubType(sub);
   };
 
-  // 首页四大类卡片：先落到该类默认子类，再打开二级选择（地点没有子类，直接选中）
-  const chooseBaseType = (base) => {
-    const defaultSub = base === 'ticket' ? 'flight' : base === 'media' ? 'movie' : base === 'note' ? 'diary' : 'location';
-    if (base !== baseType || subType !== defaultSub) applyType(base, defaultSub);
-    setSheetBase(base);
-    if (base !== 'location') typeSheetRef.current?.present();
+  const chooseCategory = (id) => {
+    setSheetBase(id);
+    if (id === 'location') {
+      applyType('location', 'location');
+      setTypeMenuOpen(false);
+      return;
+    }
+    const defaultSub = id === 'ticket' ? 'flight' : id === 'media' ? 'movie' : 'diary';
+    if (id !== baseType || subType !== defaultSub) applyType(id, defaultSub);
   };
 
   /* ---------------- 表单键盘体验 ----------------
@@ -262,7 +260,7 @@ export default function AddScreen({ navigation, route }) {
 
   // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来）
   const scrollContentStyle = useMemo(
-    () => (keyboardOpen ? { paddingBottom: 280 } : undefined),
+    () => ({ paddingBottom: keyboardOpen ? 280 : 90 }),
     [keyboardOpen]
   );
 
@@ -639,9 +637,17 @@ export default function AddScreen({ navigation, route }) {
 
     // 豆瓣/Steam/百科的海报下载到本地持久目录，列表封面离线也能显示。
     // 限时 8 秒：网络卡住时不能让"保存"一直没反应（超时就先存网络地址，之后还能显示）
-    const savedCoverUrl = baseType === 'media' && coverUrl
-      ? await withTimeout(downloadRemoteCover(coverUrl), 8000).catch(() => coverUrl)
+    const coverAssets = baseType === 'media' && coverUrl
+      ? await withTimeout(downloadRemoteCoverVariants(coverUrl), 10000)
+        .catch(() => ({ coverUrl, coverThumbUrl: coverUrl }))
       : null;
+    const existingItem = route.params?.editItem || null;
+    // 编辑时如果封面没换，保留原来的小图；换封面才用这次下载的新尺寸
+    const coverThumbUrl = coverAssets
+      ? (coverAssets.coverUrl === existingItem?.coverUrl
+        ? (existingItem?.coverThumbUrl || null)
+        : coverAssets.coverThumbUrl)
+      : existingItem?.coverThumbUrl || null;
 
     // 只有存在本地副本（旧数据/系统选择器时代）才需要重链；
     // 应用内选图器产物是纯相册引用，保存零扫描零等待
@@ -709,8 +715,9 @@ export default function AddScreen({ navigation, route }) {
       start,
       end,
       localImages: relink.entries,
-      coverUrl: savedCoverUrl,
-      coverRatio: savedCoverUrl ? coverRatio : null,
+      coverUrl: coverAssets?.coverUrl || existingItem?.coverUrl || null,
+      coverThumbUrl,
+      coverRatio: coverAssets?.coverUrl ? coverRatio : existingItem?.coverRatio || null,
       // 随笔不自动指定封面（在详情里长按照片才会设）；编辑时照片没变就保留原来选的封面
       coverIndex: baseType !== 'note' ? undefined
         : (editId ? (editCoverIndex != null && editPhotoCount === relink.entries.length ? editCoverIndex : null) : undefined),
@@ -790,8 +797,7 @@ export default function AddScreen({ navigation, route }) {
 
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <LiquidBackground />
-      <GlassSurface style={styles.header} borderRadius={0} flat>
+      <View style={styles.header}>
         <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
@@ -803,7 +809,7 @@ export default function AddScreen({ navigation, route }) {
             ? <ActivityIndicator size="small" color={colors.accent} />
             : <Text style={styles.saveText}>保存</Text>}
         </TouchableOpacity>
-      </GlassSurface>
+      </View>
 
       <ScrollView
         ref={formScrollRef}
@@ -814,44 +820,58 @@ export default function AddScreen({ navigation, route }) {
         onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
         contentContainerStyle={scrollContentStyle}
       >
-        <View style={styles.formIntro}>
-          <Text style={styles.formKicker}>记录一个瞬间</Text>
-          <Text style={styles.formTitle}>今天，想留下什么？</Text>
-        </View>
-
-        <GlassSurface style={styles.typePicker} blur={false} borderRadius={21}>
-          {TYPE_CARDS.map((card) => {
-            const on = baseType === card.id;
-            const Icon = card.Icon;
-            return (
-              <TouchableOpacity
-                key={card.id}
-                style={[styles.typeCard, on && styles.typeCardActive]}
-                onPress={() => chooseBaseType(card.id)}
-                activeOpacity={0.82}
-              >
-                <View style={[styles.typeIcon, { backgroundColor: on ? colors.accentSoft : colors[card.bgKey] }]}>
-                  <Icon size={18} color={on ? colors.accent : colors[card.colorKey]} />
-                </View>
-                <Text style={[styles.typeCardLabel, on && styles.typeCardLabelActive]}>{card.label}</Text>
-                <Text style={styles.typeCardHint}>{card.hint}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </GlassSurface>
-
-        <GlassSurface style={styles.cardSection} blur={false} borderRadius={20}>
+        <View style={styles.cardSection}>
+          {/* 类型字段：在表单顶部就地展开大类 / 子类，避免从底部弹层再选一次 */}
           <TouchableOpacity
-            style={styles.subtypeRow}
-            onPress={() => { setSheetBase(baseType); typeSheetRef.current?.present(); }}
+            style={styles.typeRow}
+            onPress={() => { setSheetBase(baseType); setTypeMenuOpen(v => !v); }}
             activeOpacity={0.75}
           >
-            <Text style={styles.subtypeLabel}>
+            <Text style={styles.typeLabel}>类型</Text>
+            <Text style={styles.typeValue}>
               {baseType === 'location' ? '地点' : `${BASE_LABEL[baseType] || ''} · ${SUB_LABEL[subType] || ''}`}
             </Text>
-            <Text style={styles.subtypeAction}>切换</Text>
-            <ChevronRight size={14} color={colors.textFaint} />
+            {typeMenuOpen
+              ? <ChevronDown size={16} color={colors.textFaint} />
+              : <ChevronRight size={16} color={colors.textFaint} />}
           </TouchableOpacity>
+
+          {typeMenuOpen && (
+            <View style={styles.typeMenu}>
+              <View style={styles.typeMenuCats}>
+                {TYPE_MENU.map((cat) => {
+                  const on = sheetBase === cat.id;
+                  const Icon = cat.Icon;
+                  return (
+                    <TouchableOpacity
+                      key={cat.id}
+                      style={[styles.typeMenuCat, on && styles.typeMenuCatOn]}
+                      onPress={() => chooseCategory(cat.id)}
+                    >
+                      <Icon size={15} color={on ? colors.accent : colors.textSecondary} />
+                      <Text style={[styles.typeMenuCatText, on && styles.typeMenuCatTextOn]}>{cat.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {sheetBase !== 'location' && (
+                <View style={styles.typeMenuSubs}>
+                  {SUB_OPTIONS[sheetBase].map((opt) => {
+                    const active = sheetBase === baseType && subType === opt.id;
+                    return (
+                      <TouchableOpacity
+                        key={opt.id}
+                        style={[styles.typeMenuSub, active && styles.typeMenuSubOn]}
+                        onPress={() => { applyType(sheetBase, opt.id); setTypeMenuOpen(false); }}
+                      >
+                        <Text style={[styles.typeMenuSubText, active && styles.typeMenuSubTextOn]}>{opt.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          )}
           {baseType === 'ticket' && (
             <View style={{ zIndex: 10 }}>
               <Text style={styles.inputLabel}>出发地</Text>
@@ -1203,68 +1223,8 @@ export default function AddScreen({ navigation, route }) {
               </View>
             </View>
           </View>
-        </GlassSurface>
+        </View>
       </ScrollView>
-
-      {/* 二级类型选择：第一级大类卡片，第二级子类 chips；地点无子类直接选中 */}
-      <BottomSheetModal
-        ref={typeSheetRef}
-        backdropComponent={renderTypeBackdrop}
-        backgroundComponent={GlassSheetBackground}
-        handleIndicatorStyle={{ backgroundColor: colors.sheetHandle }}
-      >
-        <BottomSheetView style={styles.sheetContent}>
-          <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>选择类型</Text>
-            <TouchableOpacity onPress={() => typeSheetRef.current?.dismiss()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <X size={20} color={colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.catRow}>
-            {[
-              { id: 'ticket', label: '旅票', Icon: Plane, color: colors.groupTicket, bg: colors.groupTicketSoft },
-              { id: 'location', label: '地点', Icon: MapPin, color: colors.groupPlace, bg: colors.groupPlaceSoft },
-              { id: 'media', label: '娱乐', Icon: Film, color: colors.groupMedia, bg: colors.groupMediaSoft },
-              { id: 'note', label: '随笔', Icon: NotebookPen, color: colors.groupNote, bg: colors.groupNoteSoft },
-            ].map(cat => (
-              <TouchableOpacity
-                key={cat.id}
-                style={[styles.catCard, sheetBase === cat.id && styles.catCardActive]}
-                onPress={() => {
-                  if (cat.id === 'location') {
-                    applyType('location', 'location');
-                    typeSheetRef.current?.dismiss();
-                    return;
-                  }
-                  setSheetBase(cat.id);
-                }}
-              >
-                <View style={[styles.catIconBox, { backgroundColor: cat.bg }]}><cat.Icon size={18} color={cat.color} /></View>
-                <Text style={[styles.catLabel, sheetBase === cat.id && styles.catLabelActive]}>{cat.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* 地点不分子类：点上方卡片就直接选中并关闭弹层，没有第二级可选 */}
-          {sheetBase !== 'location' && (
-            <View style={styles.chipWrap}>
-              {SUB_OPTIONS[sheetBase].map(opt => {
-                const active = sheetBase === baseType && subType === opt.id;
-                return (
-                  <TouchableOpacity
-                    key={opt.id}
-                    style={[styles.chip, active && styles.chipActive]}
-                    onPress={() => { applyType(sheetBase, opt.id); typeSheetRef.current?.dismiss(); }}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-        </BottomSheetView>
-      </BottomSheetModal>
 
       {/* 评论 / 内容全屏编辑：写长文时把输入区铺满整屏 */}
       <Modal visible={fullscreenComment} animationType="slide" onRequestClose={() => setFullscreenComment(false)}>
@@ -1272,8 +1232,7 @@ export default function AddScreen({ navigation, route }) {
           style={[styles.fullscreenWrap, { paddingTop: insets.top }]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <LiquidBackground />
-          <GlassSurface style={styles.fullscreenHeader} borderRadius={0} flat>
+          <View style={styles.fullscreenHeader}>
             <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={styles.cancelText}>返回</Text>
             </TouchableOpacity>
@@ -1281,7 +1240,7 @@ export default function AddScreen({ navigation, route }) {
             <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={styles.saveText}>完成</Text>
             </TouchableOpacity>
-          </GlassSurface>
+          </View>
           <TextInput
             style={styles.fullscreenInput}
             multiline
@@ -1310,28 +1269,36 @@ const makeStyles = (c) => ({
   dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
   dupNoteHint: { fontSize: 11, color: c.warnText, marginTop: 6, opacity: 0.7 },
   container: { flex: 1, backgroundColor: c.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
   cancelText: { fontSize: 16, color: c.textSecondary },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
   formScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  formIntro: { paddingHorizontal: 1, paddingTop: 8, paddingBottom: 15 },
-  formKicker: { fontSize: 10.5, fontWeight: '650', color: c.textMuted, letterSpacing: 0.1 },
-  formTitle: { marginTop: 2, fontSize: 27, lineHeight: 32, fontWeight: '800', letterSpacing: -0.9, color: c.textStrong },
-  typePicker: { flexDirection: 'row', gap: 4, padding: 5, borderRadius: 21, marginBottom: 12 },
-  typeCard: { flex: 1, height: 88, paddingVertical: 8, paddingHorizontal: 3, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'transparent' },
-  typeCardActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
-  typeIcon: { width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
-  typeCardLabel: { fontSize: 11, fontWeight: '650', color: c.textSecondary },
-  typeCardLabelActive: { color: c.accent, fontWeight: '750' },
-  typeCardHint: { fontSize: 8, color: c.textMuted, marginTop: 1 },
-  subtypeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16 },
-  subtypeLabel: { fontSize: 10.5, fontWeight: '650', color: c.textMuted },
-  subtypeAction: { marginLeft: 'auto', fontSize: 10, fontWeight: '650', color: c.accent },
   typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
   typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
   typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },
+  typeMenu: {
+    marginTop: -6, marginBottom: 16, padding: 10,
+    backgroundColor: c.bgSunken, borderRadius: 14,
+    borderWidth: 1, borderColor: c.border,
+  },
+  typeMenuCats: { flexDirection: 'row', gap: 6 },
+  typeMenuCat: {
+    flex: 1, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', gap: 4, borderWidth: 1, borderColor: c.borderSoft,
+    backgroundColor: c.bgElevated,
+  },
+  typeMenuCatOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  typeMenuCatText: { fontSize: 12, color: c.textSecondary, fontWeight: '500' },
+  typeMenuCatTextOn: { color: c.accent, fontWeight: '650' },
+  typeMenuSubs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  typeMenuSub: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14,
+    backgroundColor: c.bgElevated, borderWidth: 1, borderColor: c.borderSoft,
+  },
+  typeMenuSubOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  typeMenuSubText: { fontSize: 12.5, color: c.textSecondary },
+  typeMenuSubTextOn: { color: c.accent, fontWeight: '600' },
   sheetContent: { paddingHorizontal: 16, paddingBottom: 24 },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
@@ -1347,11 +1314,11 @@ const makeStyles = (c) => ({
   chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   chipText: { fontSize: 14, color: c.textSecondary },
   chipTextActive: { color: c.accent, fontWeight: '500' },
-  cardSection: { borderRadius: 20, padding: 16, marginBottom: 40 },
+  cardSection: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 40 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
   input: { flex: 1, fontSize: 15, color: c.text },
-  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.glassStrong, borderRadius: 14, shadowColor: c.shadow, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 18, elevation: 6, zIndex: 99, overflow: 'hidden' },
+  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.bgElevated, borderRadius: 10, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
   autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft },
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
   autoCompleteText: { fontSize: 15, color: c.text },
@@ -1384,7 +1351,7 @@ const makeStyles = (c) => ({
   expandBtnText: { fontSize: 11.5, color: c.accent, fontWeight: '600' },
   fullscreenWrap: { flex: 1, backgroundColor: c.bg },
   fullscreenHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
-    paddingVertical: 14 },
+    paddingVertical: 14, backgroundColor: c.bgElevated, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
   fullscreenInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, lineHeight: 24, color: c.text, textAlignVertical: 'top' },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
   imageGridItem: { width: '33.33%', padding: 4 },
