@@ -17,6 +17,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LogContext } from '../context/LogContext';
 import { hasGalleryAccess } from '../utils/media';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 
 // 系统微缩略图原生模块（仅 Android 打包内置）：走系统相册同款的微缩略图管道，
 // 毫秒级出图且原生侧有缓存；模块缺失（旧构建/iOS）时回退原图显示
@@ -641,7 +642,8 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
+      <LiquidBackground />
+      <GlassSurface style={[styles.navBar, { paddingTop: insets.top + 6 }]} borderRadius={0} flat>
         <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>
@@ -656,7 +658,7 @@ export default function MediaPickerScreen({ route, navigation }) {
             {confirming ? '处理中…' : (selected.size > 0 ? `完成(${selected.size})` : '完成')}
           </Text>
         </TouchableOpacity>
-      </View>
+      </GlassSurface>
 
       {status === 'checking' && (
         <View style={styles.deniedBox}>
@@ -804,8 +806,8 @@ export default function MediaPickerScreen({ route, navigation }) {
 const keyExtractor = (a) => a.id;
 
 const makeStyles = (c) => ({
-  container: { flex: 1, backgroundColor: c.bgElevated },
-  navBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider, backgroundColor: c.bgElevated, zIndex: 20 },
+  container: { flex: 1, backgroundColor: c.bg },
+  navBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8, zIndex: 20 },
   navBtn: { minWidth: 60 },
   albumBtn: { flexDirection: 'row', alignItems: 'center', maxWidth: 160 },
   cancelText: { fontSize: 16, color: c.textSecondary },
@@ -813,7 +815,7 @@ const makeStyles = (c) => ({
   confirmText: { fontSize: 16, fontWeight: '600', color: c.accent, textAlign: 'right' },
   confirmDisabled: { color: c.textFaint },
 
-  gridWrap: { flex: 1, backgroundColor: c.bgElevated },
+  gridWrap: { flex: 1, backgroundColor: 'transparent' },
   cell: { width: CELL, height: CELL, padding: 1.5 },
   thumb: { flex: 1, borderRadius: 4, backgroundColor: c.mediaPlaceholder },
   thumbLoading: { backgroundColor: c.mediaPlaceholder },
@@ -831,7 +833,7 @@ const makeStyles = (c) => ({
   // 再配合"轻点不算拖动"，最右边那张也能正常点选
   fastTrack: { position: 'absolute', right: 0, top: 10, bottom: 10, width: 20, zIndex: 5 },
   fastThumb: { position: 'absolute', right: 5, top: 10, width: 9, height: THUMB_H, borderRadius: THUMB_H / 2, borderWidth: 2.5, borderColor: '#FFF', backgroundColor: 'rgba(120,120,128,0.18)', elevation: 2, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, zIndex: 6 },
-  fastBubble: { position: 'absolute', right: 28, top: 10, minWidth: 72, maxWidth: 150, backgroundColor: c.bgElevated, borderRadius: 9, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, zIndex: 6 },
+  fastBubble: { position: 'absolute', right: 28, top: 10, minWidth: 72, maxWidth: 150, backgroundColor: c.glassStrong, borderRadius: 12, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, zIndex: 6 },
   fastBubbleText: { color: c.text, fontSize: 12, fontWeight: '600' },
 
   previewFooter: { alignItems: 'center', paddingBottom: 24 },
@@ -840,7 +842,7 @@ const makeStyles = (c) => ({
   previewSelectDisabled: { backgroundColor: c.fillStrong },
   previewSelectText: { color: '#FFF', fontSize: 15, fontWeight: '600' },
 
-  albumPanel: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: c.bgElevated, zIndex: 10, paddingTop: 8 },
+  albumPanel: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: c.glassStrong, zIndex: 10, paddingTop: 8 },
   albumRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider },
   albumName: { flex: 1, fontSize: 15, color: c.text, marginRight: 12 },
   albumNameActive: { color: c.accent, fontWeight: '600' },

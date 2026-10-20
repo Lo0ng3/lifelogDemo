@@ -173,8 +173,8 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 });
 
 const makeStyles = (c) => ({
-  swipeContainer: { backgroundColor: c.bgElevated },
-  cardRow: { backgroundColor: c.bgElevated },
+  swipeContainer: { backgroundColor: c.glassRow },
+  cardRow: { backgroundColor: c.glassRow },
   // 固定行高 = 封面 64 + 上下内边距 16×2，有无评论都一样高
   cardItem: { flexDirection: 'row', padding: 16, height: 96, alignItems: 'center' },
   cardItemBorder: { borderBottomWidth: 1, borderBottomColor: c.divider },

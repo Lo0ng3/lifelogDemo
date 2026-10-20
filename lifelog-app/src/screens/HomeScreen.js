@@ -37,10 +37,12 @@ import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
 import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { GlassSheetBackground, GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 import { NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 import { tabBarStyleFor, HIDDEN_TAB_BAR } from '../navigation/tabBarStyle';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const SIDEBAR_WIDTH = SCREEN_WIDTH * 0.58;
 
 const subTypeOptions = { ticket: TICKET_SUB_OPTIONS, media: MEDIA_SUB_OPTIONS };
 
@@ -461,7 +463,7 @@ export default function HomeScreen({ navigation }) {
   }, [mapFullscreen, winW, winH]);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const sidebarAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.5)).current;
+  const sidebarAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
   const toggleSidebar = useCallback((open) => {
@@ -471,7 +473,7 @@ export default function HomeScreen({ navigation }) {
     if (open) Keyboard.dismiss();
     Animated.spring(sidebarAnim,
       {
-        toValue: open ? 0 : -SCREEN_WIDTH * 0.5,
+        toValue: open ? 0 : -SIDEBAR_WIDTH,
         useNativeDriver: true,
         stiffness: 230,  // 更硬：弹出更快，点了马上有反馈
         damping: 24,     // 阻尼跟着加，避免快到末端时抖
@@ -753,6 +755,7 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <View style={styles.container} ref={rootRef} collapsable={false}>
+      <LiquidBackground />
       {/* 地图全屏时把状态栏也收起来，才是真正的整屏 */}
       <StatusBar hidden={mapFullscreen} />
 
@@ -762,6 +765,9 @@ export default function HomeScreen({ navigation }) {
         </Animated.View>
       )}
       <Animated.View style={[styles.sidebar, { transform: [{ translateX: sidebarAnim }] }]}>
+        <View pointerEvents="none" style={styles.sidebarGlass}>
+          <GlassSurface style={StyleSheet.absoluteFill} borderRadius={0} tintColor={colors.sidebarTint} flat />
+        </View>
         <View style={[styles.sidebarContent, { paddingTop: insets.top + 20 }]}>
           <View style={styles.sidebarHeader}><View style={styles.largeAvatar}><User color={colors.textOnAccent} size={40} /></View><Text style={styles.userName}>我</Text></View>
           <View style={styles.statsRow}>
@@ -842,28 +848,30 @@ export default function HomeScreen({ navigation }) {
           collapsable={false}
           onLayout={() => setTimeout(measureMapRect, 0)}
         >
-        <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
+        <Reanimated.View style={[styles.listWrapperShell, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
-          <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
-            <FlatList
-              data={filteredAndSortedData}
-              keyExtractor={rowKeyExtractor}
-              renderItem={renderItem}
-              showsVerticalScrollIndicator={false}
-              // 行高固定 → 直接给出布局，省掉逐行测量
-              getItemLayout={rowItemLayout}
-              // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
-              // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
-              // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
-              initialNumToRender={8}
-              // 每批 4 行、每 24ms 一批：一帧要挂的原生 View 少了，掉帧就从"一次卡一下"
-              // 变成看不出来。4 行/帧 ≈ 240 行/秒，远快于任何甩动速度，不会露白
-              maxToRenderPerBatch={4}
-              windowSize={6}
-              updateCellsBatchingPeriod={24}
-              removeClippedSubviews={Platform.OS === 'android'}
-            />
-          </Reanimated.View>
+          <GlassSurface style={styles.listWrapper} blur={false} borderRadius={22}>
+            <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
+              <FlatList
+                data={filteredAndSortedData}
+                keyExtractor={rowKeyExtractor}
+                renderItem={renderItem}
+                showsVerticalScrollIndicator={false}
+                // 行高固定 → 直接给出布局，省掉逐行测量
+                getItemLayout={rowItemLayout}
+                // 虚拟化：默认 windowSize=21 会把上下各 10 屏的行都挂出来（每行还有一个
+                // 滑动手势 + 封面），滚动时不断挂载/卸载就是掉帧的来源。收到 7 屏，
+                // 首屏 8 行、每批 8 行，Android 上再裁掉屏幕外的行
+                initialNumToRender={8}
+                // 每批 4 行、每 24ms 一批：一帧要挂的原生 View 少了，掉帧就从"一次卡一下"
+                // 变成看不出来。4 行/帧 ≈ 240 行/秒，远快于任何甩动速度，不会露白
+                maxToRenderPerBatch={4}
+                windowSize={6}
+                updateCellsBatchingPeriod={24}
+                removeClippedSubviews={Platform.OS === 'android'}
+              />
+            </Reanimated.View>
+          </GlassSurface>
         </Reanimated.View>
 
         {/* 月示图：日历 + 当月 / 当日时间线（行与列表同一套，右滑同样能改 / 删） */}
@@ -937,7 +945,7 @@ export default function HomeScreen({ navigation }) {
         index={0}
         snapPoints={snapPoints}
         backdropComponent={renderBackdrop}
-        backgroundStyle={{ backgroundColor: colors.bgElevated }}
+        backgroundComponent={GlassSheetBackground}
         handleIndicatorStyle={{ backgroundColor: colors.sheetHandle }}
         animationConfigs={{ damping: 24, stiffness: 220, mass: 0.9 }}
         onChange={(index) => setSheetOpen(index != null && index >= 0)}
@@ -1088,12 +1096,14 @@ const makeStyles = (c) => ({
   segmentText: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
   segmentTextActive: { color: c.textStrong, fontWeight: '600' },
   filterBar: { flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 8, alignItems: 'center' },
-  searchContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: c.fill, borderRadius: 10, paddingHorizontal: 10, height: 36, marginRight: 10 },
+  searchContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: c.fill, borderRadius: 12, paddingHorizontal: 10, height: 36, marginRight: 10,
+    borderWidth: 1, borderColor: c.glassBorder },
   searchInput: { flex: 1, fontSize: 14, color: c.text, paddingVertical: 0 },
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
-  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 20, borderRadius: 14, overflow: 'hidden' },
+  listWrapperShell: { flex: 1, marginHorizontal: 16, marginTop: 4, marginBottom: 20 },
+  listWrapper: { flex: 1, borderRadius: 22, overflow: 'hidden' },
   monthWrapper: { flex: 1, marginTop: 2, marginBottom: 20 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
@@ -1111,10 +1121,12 @@ const makeStyles = (c) => ({
   emptyText: { fontSize: 14, color: c.textMuted },
   map: { flex: 1 },
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },
-  exportBtnText: { color: c.bgElevated, marginLeft: 8, fontWeight: '600' },
+  exportBtnText: { color: c.textOnAccent, marginLeft: 8, fontWeight: '600' },
   sidebarOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.scrim, zIndex: 99 },
-  sidebar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: SCREEN_WIDTH * 0.5, backgroundColor: c.bgElevated, zIndex: 100 },
-  sidebarContent: { flex: 1, paddingHorizontal: 20 },
+  sidebar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH, backgroundColor: 'transparent', zIndex: 100,
+    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.glassBorder },
+  sidebarGlass: { ...StyleSheet.absoluteFillObject },
+  sidebarContent: { flex: 1, paddingHorizontal: 20, zIndex: 1 },
   sidebarHeader: { alignItems: 'center', marginBottom: 30 },
   largeAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   userName: { fontSize: 18, fontWeight: 'bold', color: c.text },
@@ -1138,7 +1150,7 @@ const makeStyles = (c) => ({
   themeChipText: { fontSize: 11, color: c.textSecondary },
   themeChipTextActive: { color: c.accent, fontWeight: '600' },
   settingsOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'center', alignItems: 'center', padding: 32 },
-  settingsCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 14, padding: 18 },
+  settingsCard: { width: '100%', backgroundColor: c.glassStrong, borderRadius: 20, padding: 18 },
   settingsTitle: { fontSize: 17, fontWeight: '600', color: c.text, marginBottom: 14 },
   settingsLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
   providerRow: { flexDirection: 'row', gap: 8 },
@@ -1154,7 +1166,7 @@ const makeStyles = (c) => ({
   settingsBtnCancelText: { fontSize: 14, color: c.textSecondary },
   settingsBtnSave: { backgroundColor: c.accent },
   settingsBtnSaveText: { fontSize: 14, fontWeight: '600', color: c.textOnAccent },
-  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft, backgroundColor: c.bgElevated, zIndex: 10 },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft, backgroundColor: 'transparent', zIndex: 10 },
   headerHitSlop: { padding: 10, margin: -10 },
   sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   sheetBtnTextGray: { fontSize: 16, color: c.textSecondary },

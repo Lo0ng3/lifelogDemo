@@ -10,6 +10,7 @@ import AddScreen from '../screens/AddScreen';
 import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
 import ShareTargetScreen from '../screens/ShareTargetScreen';
+import { TabBarGlass } from '../components/LiquidGlass';
 import { useTheme } from '../theme/ThemeProvider';
 import { tabBarStyleFor } from './tabBarStyle';
 
@@ -32,6 +33,7 @@ function Tabs() {
         tabBarActiveTintColor: colors.accent, // 选中时的颜色
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
         tabBarStyle: tabBarStyleFor(colors),
+        tabBarBackground: () => <TabBarGlass />,
         headerShown: false, // 隐藏默认的顶部标题栏，我们后续自己画
       }}
     >

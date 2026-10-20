@@ -23,6 +23,7 @@ import { normalizeMediaEntry, resolveMediaUri, getVideoThumbnail, isVideoEntry, 
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -604,6 +605,7 @@ export default function DetailScreen({ route, navigation }) {
   if (!item) {
     return (
       <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
+        <LiquidBackground />
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <Text style={styles.emptyText}>这条印记已不存在</Text>
       </View>
@@ -616,16 +618,17 @@ export default function DetailScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
+      <LiquidBackground />
       <StatusBar style={viewerIndex >= 0 ? 'light' : (isDark ? 'light' : 'dark')} />
 
       {/* 顶部导航栏 */}
-      <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
+      <GlassSurface style={[styles.navBar, { paddingTop: insets.top + 6 }]} borderRadius={0} flat>
         <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
           <ChevronLeft size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.navTitle} numberOfLines={1}>{displayTitle}</Text>
         <View style={styles.navBtn} />
-      </View>
+      </GlassSurface>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -760,17 +763,19 @@ const makeStyles = (c) => ({
   emptyText: { textAlign: 'center', color: c.textMuted, fontSize: 15 },
   navBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: c.bg, paddingHorizontal: 12, paddingBottom: 8
+    paddingHorizontal: 12, paddingBottom: 8
   },
   navBtn: { width: 36, alignItems: 'center' },
   navTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: c.text, marginHorizontal: 4 },
-  detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgElevated, borderRadius: 14, padding: 14, gap: 12 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgElevated, borderRadius: 20, padding: 14, gap: 12,
+    borderWidth: 1, borderColor: c.glassBorder, shadowColor: c.glassShadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.8, shadowRadius: 22, elevation: 5 },
   iconBox: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   detailMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' },
   detailTitle: { fontSize: 19, fontWeight: '700', color: c.text },
   typeTag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden', flexShrink: 0 },
   detailDate: { fontSize: 13, color: c.textMuted },
-  reviewBox: { backgroundColor: c.bgElevated, borderRadius: 12, padding: 16, marginTop: 12 },
+  reviewBox: { backgroundColor: c.bgElevated, borderRadius: 20, padding: 16, marginTop: 12,
+    borderWidth: 1, borderColor: c.glassBorder, shadowColor: c.glassShadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.8, shadowRadius: 22, elevation: 5 },
   reviewRatingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   reviewScore: { marginLeft: 10, fontSize: 16, fontWeight: '700', color: c.star },
   moodEmoji: { fontSize: 26, lineHeight: 32, marginRight: 8 },

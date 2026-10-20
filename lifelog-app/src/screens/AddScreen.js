@@ -18,6 +18,7 @@ import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { GlassSheetBackground, GlassSurface, LiquidBackground } from '../components/LiquidGlass';
 import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
 // 二级类型选择：第一级大类 → 第二级子类；地点无子类
@@ -775,7 +776,8 @@ export default function AddScreen({ navigation, route }) {
 
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={styles.header}>
+      <LiquidBackground />
+      <GlassSurface style={styles.header} borderRadius={0} flat>
         <TouchableOpacity onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}><Text style={styles.cancelText}>取消</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
@@ -787,7 +789,7 @@ export default function AddScreen({ navigation, route }) {
             ? <ActivityIndicator size="small" color={colors.accent} />
             : <Text style={styles.saveText}>保存</Text>}
         </TouchableOpacity>
-      </View>
+      </GlassSurface>
 
       <ScrollView
         ref={formScrollRef}
@@ -798,7 +800,7 @@ export default function AddScreen({ navigation, route }) {
         onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
         contentContainerStyle={scrollContentStyle}
       >
-        <View style={styles.cardSection}>
+        <GlassSurface style={styles.cardSection} blur={false} borderRadius={20}>
           {/* 类型字段：点开底部弹层做二级选择（大类 → 子类） */}
           <TouchableOpacity
             style={styles.typeRow}
@@ -1161,14 +1163,14 @@ export default function AddScreen({ navigation, route }) {
               </View>
             </View>
           </View>
-        </View>
+        </GlassSurface>
       </ScrollView>
 
       {/* 二级类型选择：第一级大类卡片，第二级子类 chips；地点无子类直接选中 */}
       <BottomSheetModal
         ref={typeSheetRef}
         backdropComponent={renderTypeBackdrop}
-        backgroundStyle={{ backgroundColor: colors.bgElevated }}
+        backgroundComponent={GlassSheetBackground}
         handleIndicatorStyle={{ backgroundColor: colors.sheetHandle }}
       >
         <BottomSheetView style={styles.sheetContent}>
@@ -1230,7 +1232,8 @@ export default function AddScreen({ navigation, route }) {
           style={[styles.fullscreenWrap, { paddingTop: insets.top }]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={styles.fullscreenHeader}>
+          <LiquidBackground />
+          <GlassSurface style={styles.fullscreenHeader} borderRadius={0} flat>
             <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={styles.cancelText}>返回</Text>
             </TouchableOpacity>
@@ -1238,7 +1241,7 @@ export default function AddScreen({ navigation, route }) {
             <TouchableOpacity onPress={() => setFullscreenComment(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={styles.saveText}>完成</Text>
             </TouchableOpacity>
-          </View>
+          </GlassSurface>
           <TextInput
             style={styles.fullscreenInput}
             multiline
@@ -1267,7 +1270,7 @@ const makeStyles = (c) => ({
   dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
   dupNoteHint: { fontSize: 11, color: c.warnText, marginTop: 6, opacity: 0.7 },
   container: { flex: 1, backgroundColor: c.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.bgElevated },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
   cancelText: { fontSize: 16, color: c.textSecondary },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
@@ -1290,11 +1293,11 @@ const makeStyles = (c) => ({
   chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   chipText: { fontSize: 14, color: c.textSecondary },
   chipTextActive: { color: c.accent, fontWeight: '500' },
-  cardSection: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 40 },
+  cardSection: { borderRadius: 20, padding: 16, marginBottom: 40 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
   input: { flex: 1, fontSize: 15, color: c.text },
-  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.bgElevated, borderRadius: 10, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
+  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.glassStrong, borderRadius: 14, shadowColor: c.shadow, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 18, elevation: 6, zIndex: 99, overflow: 'hidden' },
   autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft },
   autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
   autoCompleteText: { fontSize: 15, color: c.text },
@@ -1327,7 +1330,7 @@ const makeStyles = (c) => ({
   expandBtnText: { fontSize: 11.5, color: c.accent, fontWeight: '600' },
   fullscreenWrap: { flex: 1, backgroundColor: c.bg },
   fullscreenHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
-    paddingVertical: 14, backgroundColor: c.bgElevated, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    paddingVertical: 14 },
   fullscreenInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, lineHeight: 24, color: c.text, textAlignVertical: 'top' },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
   imageGridItem: { width: '33.33%', padding: 4 },

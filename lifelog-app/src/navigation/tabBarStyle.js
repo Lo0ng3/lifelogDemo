@@ -4,8 +4,8 @@
 import { StyleSheet } from 'react-native';
 
 export const tabBarStyleFor = (colors) => ({
-  backgroundColor: colors.bgElevated,
-  borderTopColor: colors.border,
+  backgroundColor: 'transparent',
+  borderTopColor: colors.glassBorder,
   borderTopWidth: StyleSheet.hairlineWidth,
 });
 
