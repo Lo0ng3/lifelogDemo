@@ -1038,7 +1038,7 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.version}>印记 1.9.9</Text>
+            <Text style={styles.version}>印记 1.9.10</Text>
           </ScrollView>
         </View>
       </Animated.View>
