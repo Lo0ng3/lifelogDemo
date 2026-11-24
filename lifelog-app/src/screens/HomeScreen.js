@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } 
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   Dimensions, Animated, TextInput, Alert, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
-  useWindowDimensions, Keyboard
+  useWindowDimensions, Keyboard, Linking
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,7 +32,7 @@ import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
-import { describeStorageAsync } from '../utils/storagePaths';
+import { describeStorageAsync, clearWebKitCacheAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { requestAddDraftReset } from '../utils/draftReset';
@@ -200,7 +200,10 @@ export default function HomeScreen({ navigation }) {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted && perm.accessPrivileges !== 'limited') {
-        Alert.alert('需要相册权限', '允许访问相册后才能选择头像。');
+        Alert.alert('需要相册权限', '允许访问相册后才能选择头像。', [
+          { text: '取消', style: 'cancel' },
+          { text: '前往设置', onPress: () => Linking.openSettings() },
+        ]);
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -243,7 +246,11 @@ export default function HomeScreen({ navigation }) {
         const state = report.permState || {};
         Alert.alert(
           '无法同步',
-          `需要相册访问权限才能把记录和相册里的原片重新关联，请在系统设置中授权。\n（当前权限状态：granted=${state.granted}, accessPrivileges=${state.accessPrivileges}）`
+          `需要相册访问权限才能把记录和相册里的原片重新关联，请在系统设置中授权。\n（当前权限状态：granted=${state.granted}, accessPrivileges=${state.accessPrivileges}）`,
+          [
+            { text: '取消', style: 'cancel' },
+            { text: '前往设置', onPress: () => Linking.openSettings() },
+          ]
         );
         return;
       }
@@ -444,9 +451,9 @@ export default function HomeScreen({ navigation }) {
       if (t.motion) clearMotionVideoCache();
       if (t.map) {
         try {
-          // clearCache(true) 连磁盘里的地图缓存一起清；地图还活着也没关系，
-          // 只是下次进地图要重新下载瓦片 / SDK
-          mapRef.current?.clearCache?.(true);
+          // Android 走 WebView.clearCache(true)；iOS 走原生 WKWebsiteDataStore 清理磁盘/内存缓存
+          if (Platform.OS === 'ios') await clearWebKitCacheAsync();
+          else mapRef.current?.clearCache?.(true);
         } catch {}
       }
       const mb = Math.round((res.freed / 1024 / 1024) * 10) / 10;
@@ -892,7 +899,7 @@ export default function HomeScreen({ navigation }) {
             showsVerticalScrollIndicator={false}
             bounces={false}
             overScrollMode="never"
-            contentContainerStyle={styles.profileScrollContent}
+            contentContainerStyle={[styles.profileScrollContent, { paddingBottom: Math.max(24, insets.bottom + 16) }]}
           >
             <View style={styles.profileCard}>
               <View style={styles.profileIdentity}>
@@ -1087,7 +1094,7 @@ export default function HomeScreen({ navigation }) {
               keyExtractor={rowKeyExtractor}
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.listContent}
+              contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(78, insets.bottom + 68) }]}
               bounces={false}
               overScrollMode="never"
               // 行高固定 → 直接给出布局，省掉逐行测量
@@ -1138,6 +1145,10 @@ export default function HomeScreen({ navigation }) {
                 source={mapSource}
                 style={styles.map}
                 scrollEnabled={false}
+                bounces={false}
+                allowsInlineMediaPlayback
+                allowsLinkPreview={false}
+                contentInsetAdjustmentBehavior="never"
                 onMessage={(e) => {
                   // 地图弹窗里点「查看详情」→ 跳转到对应印记的详情页
                   try {
@@ -1164,7 +1175,7 @@ export default function HomeScreen({ navigation }) {
 
       {/* 同步进度条：常驻底部，同步结束就消失，不跟结果弹窗抢屏幕 */}
       {syncing && (
-        <View style={styles.syncPill} pointerEvents="none">
+        <View style={[styles.syncPill, { bottom: Math.max(28, insets.bottom + 16) }]} pointerEvents="none">
           <ActivityIndicator size="small" color="#FFF" />
           <Text style={styles.syncPillText}>
             正在同步照片{syncProgress ? ` ${syncProgress.done}/${syncProgress.total}` : ''}

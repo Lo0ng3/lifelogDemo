@@ -9,7 +9,18 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jiyin.lifelog",
+      "buildNumber": "45",
+      "infoPlist": {
+        "CFBundleDevelopmentRegion": "zh_CN",
+        "CFBundleLocalizations": ["zh-Hans"],
+        "NSPhotoLibraryUsageDescription": "需要访问相册权限，App 将直接读取相册中的照片和视频，不会在应用内重复保存副本。",
+        "NSPhotoLibraryAddUsageDescription": "允许将照片保存到相册。",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -46,9 +57,21 @@
       [
         "expo-share-intent",
         {
+          "iosAppGroupIdentifier": "group.com.jiyin.lifelog",
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsImageWithMaxCount": 50,
+            "NSExtensionActivationSupportsMovieWithMaxCount": 20
+          },
           "androidIntentFilters": ["image/*", "video/*"],
-          "androidMultiIntentFilters": ["image/*", "video/*"],
-          "disableIOS": true
+          "androidMultiIntentFilters": ["image/*", "video/*"]
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "需要访问相册权限以选择头像。",
+          "cameraPermission": false,
+          "microphonePermission": false
         }
       ],
       [

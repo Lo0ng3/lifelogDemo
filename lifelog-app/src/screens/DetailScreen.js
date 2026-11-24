@@ -10,7 +10,7 @@ import { BlurView } from 'expo-blur';
 import {
   Star, StarHalf, X, PlayCircle, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Audio, Video, ResizeMode } from 'expo-av';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue, useAnimatedStyle, withTiming, runOnJS,
@@ -19,7 +19,7 @@ import Animated, {
 import { LogContext } from '../context/LogContext';
 import { getIconConfig } from '../utils/icons';
 import { isEssay, labelOf } from '../utils/recordMeta';
-import { normalizeMediaEntry, resolveMediaUri, getVideoPoster, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
+import { normalizeMediaEntry, resolveMediaUri, getVideoPoster, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
 import { fetchSuggestions, withTimeout } from '../utils/search';
@@ -478,6 +478,12 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
       setInfo({ live: false });
       return () => { alive = false; };
     }
+    // iOS 已知是实况的照片不再提前调用 getAssetInfoAsync 导出配对 .mov，
+    // 直接展示「实况」角标，等用户真正点击播放时再按需拉取
+    if (Platform.OS === 'ios' && entry?.liveStatus === 'live') {
+      setInfo({ live: true, source: 'ios' });
+      return () => { alive = false; };
+    }
     getLivePhotoInfo(entry, { full: true }).then(i => {
       if (!alive) return;
       setInfo(i);
@@ -494,6 +500,8 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
       else if (Platform.OS === 'android') {
         // 提取失败别静默：以前失败在这里被吞掉，用户只看到"点了没反应"
         ToastAndroid.show('实况动效读取失败，先看静帧吧（可在侧边栏「数据目录」查看）', ToastAndroid.LONG);
+      } else {
+        Alert.alert('无法播放实况', '实况动效读取失败，可能尚未从 iCloud 下载或已移除。');
       }
     } finally {
       setLoading(false);
@@ -561,6 +569,12 @@ export default function DetailScreen({ route, navigation }) {
 
   const [viewerIndex, setViewerIndex] = useState(-1);
   const [currentViewIndex, setCurrentViewIndex] = useState(-1);
+
+  // iOS 静音开关打开时 expo-av 默认静音；打开详情页配置音频会话，确保视频与实况照片正常出声
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => {});
+  }, []);
   // 图片放大后要禁用横向翻页，否则捏合/拖动会和翻页抢手势
   const [viewerZoomed, setViewerZoomed] = useState(false);
   // 九宫格正在拖动排序：期间锁住外层 ScrollView，不然滚动容器会把手势抢走
@@ -665,8 +679,17 @@ export default function DetailScreen({ route, navigation }) {
           let coverThumbUrl = null;
           try {
             const entry = normalizeMediaEntry(item.localImages?.[idx]);
-            const resolved = await resolveMediaUri(entry);
-            coverThumbUrl = await downscaleCover(resolved || entry?.uri);
+            let coverInput = null;
+            if (isVideoEntry(entry)) {
+              coverInput = entry?.videoPoster?.uri || await getVideoThumbnail(entry);
+            } else if (Platform.OS === 'ios' && entry?.assetId) {
+              // iOS 相册图直接传 ph:// 给 downscaleCover（走 PhotoKit/ImageManipulator，避开 DCIM 沙盒权限限制）
+              coverInput = `ph://${entry.assetId}`;
+            } else {
+              const resolved = await resolveMediaUri(entry);
+              coverInput = resolved || entry?.uri;
+            }
+            if (coverInput) coverThumbUrl = await downscaleCover(coverInput);
           } catch {}
           updateLog({ ...item, coverIndex: idx, coverThumbUrl: coverThumbUrl || null });
         },
@@ -899,14 +922,20 @@ export default function DetailScreen({ route, navigation }) {
                     // 播放器底下垫一层封面帧，首帧解码完成前不会黑屏闪烁
                     <View style={{ width: '100%', height: '80%' }}>
                       <VideoThumb entry={entry} style={StyleSheet.absoluteFill} contentFit="contain" />
-                      <Video
-                        source={{ uri: entry.uri }}
-                        style={{ width: '100%', height: '100%' }}
-                        useNativeControls
-                        resizeMode={ResizeMode.CONTAIN}
-                        shouldPlay
-                        onError={(e) => console.warn('[video] 播放失败', entry.uri, e)}
-                      />
+                      {entry.uri && !entry.uri.startsWith('ph://') ? (
+                        <Video
+                          source={{ uri: entry.uri }}
+                          style={{ width: '100%', height: '100%' }}
+                          useNativeControls
+                          resizeMode={ResizeMode.CONTAIN}
+                          shouldPlay
+                          onError={(e) => console.warn('[video] 播放失败', entry.uri, e)}
+                        />
+                      ) : (
+                        <View style={styles.playOverlay}>
+                          <ActivityIndicator size="large" color="#FFF" />
+                        </View>
+                      )}
                     </View>
                   ) : (
                     <View style={{ width: '100%', height: '80%', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
@@ -945,7 +974,7 @@ const makeStyles = (c) => ({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   heroTypePill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  heroTypeText: { fontSize: 10.5, fontWeight: '650' },
+  heroTypeText: { fontSize: 10.5, fontWeight: '600' },
   heroDate: {
     color: 'rgba(255,255,255,0.94)', fontSize: 11, fontWeight: '600',
     textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 4,

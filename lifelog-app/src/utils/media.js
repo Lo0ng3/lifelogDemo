@@ -5,9 +5,14 @@ import * as MediaLibrary from 'expo-media-library';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
-import { Image as RNImage } from 'react-native';
+import * as RN from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync, deletePathAsync } from './storagePaths';
+import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync, deletePathAsync, rebaseAppFileUri } from './storagePaths';
+
+const RNImage = RN.Image;
+const isIOS = () => RN.Platform?.OS === 'ios';
+const thumbsNative = requireOptionalNativeModule('Thumbs');
 
 // 兼容两种历史数据形态：纯 URI 字符串（旧记录 / 网络图）和 { uri, assetId } 对象
 export const normalizeMediaEntry = (entry) =>
@@ -128,7 +133,8 @@ const queryAssetInfo = (assetId) => new Promise((resolve, reject) => {
 export const hasGalleryAccess = (perm) => !!perm && (perm.granted || perm.accessPrivileges === 'limited');
 
 export const resolveMediaUri = async (entry) => {
-  const { uri, assetId } = normalizeMediaEntry(entry) || {};
+  const { uri: rawUri, assetId } = normalizeMediaEntry(entry) || {};
+  const uri = rebaseAppFileUri(rawUri);
   if (!assetId) return uri;
   if (resolvedCache.has(assetId)) return resolvedCache.get(assetId);
 
@@ -180,7 +186,7 @@ const pumpThumbs = () => {
 
 // 真正解码视频帧的部分：只允许 2 个同时跑。一次详情页可能挂着十几段视频，
 // 全部同时 getThumbnailAsync 会把解码器占满，返回按钮都要等它们结束。
-const generateVideoThumbnail = async (uri, cacheKey) => {
+const generateVideoThumbnail = async (uri, cacheKey, assetId = null) => {
   // 封面帧落盘缓存：生成要现场解码视频，很慢；落盘后重开 App 秒出
   try {
     const dir = `${FileSystem.documentDirectory}videoThumbs`;
@@ -195,7 +201,37 @@ const generateVideoThumbnail = async (uri, cacheKey) => {
   try {
     // quality 压低：默认按视频原始分辨率出高质量 JPEG，4K 视频一张能到几 MB，
     // 封面帧只用于小格子展示，低质量足够且落盘体积小一个数量级
-    const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(uri, { time: 1000, quality: 0.3 });
+    // iOS 相册视频：expo-video-thumbnails 无法读取 ph://，且会因沙盒校验拒绝 DCIM 路径。
+    // 优先走 PhotoKit 原生 Thumbs 出帧（支持本地与 iCloud 视频），再落盘到 videoThumbs。
+    if (isIOS() && assetId && thumbsNative?.getThumbnailAsync) {
+      try {
+        const res = await thumbsNative.getThumbnailAsync(String(assetId), true, 512);
+        if (res?.uri) {
+          try {
+            const dir = `${FileSystem.documentDirectory}videoThumbs`;
+            if (!(await FileSystem.getInfoAsync(dir)).exists) {
+              await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+            }
+            const dest = `${dir}/${hashKey(cacheKey)}.jpg`;
+            await copyFileAsync(res.uri, dest);
+            thumbCache.set(cacheKey, dest);
+            return dest;
+          } catch {
+            thumbCache.set(cacheKey, res.uri);
+            return res.uri;
+          }
+        }
+      } catch {}
+    }
+    let sourceUri = uri;
+    if (sourceUri?.startsWith('ph://') && assetId) {
+      sourceUri = await resolveMediaUri({ uri: sourceUri, assetId });
+    }
+    if (!sourceUri || sourceUri.startsWith('ph://')) {
+      thumbCache.set(cacheKey, null);
+      return null;
+    }
+    const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(sourceUri, { time: 1000, quality: 0.3 });
     try {
       const dir = `${FileSystem.documentDirectory}videoThumbs`;
       if (!(await FileSystem.getInfoAsync(dir)).exists) {
@@ -216,15 +252,16 @@ const generateVideoThumbnail = async (uri, cacheKey) => {
 };
 
 export const getVideoThumbnail = (entry) => {
-  const { uri, assetId } = normalizeMediaEntry(entry) || {};
-  if (!uri) return Promise.resolve(null);
+  const { uri: rawUri, assetId } = normalizeMediaEntry(entry) || {};
+  const uri = rebaseAppFileUri(rawUri);
+  if (!uri && !assetId) return Promise.resolve(null);
   const cacheKey = assetId || uri;
   if (thumbCache.has(cacheKey)) return Promise.resolve(thumbCache.get(cacheKey));
   if (thumbJobs.has(cacheKey)) return thumbJobs.get(cacheKey);
 
   const job = new Promise((resolve, reject) => {
     thumbQueue.push({
-      task: () => generateVideoThumbnail(uri, cacheKey),
+      task: () => generateVideoThumbnail(uri, cacheKey, assetId),
       resolve,
       reject,
     });
@@ -314,13 +351,19 @@ const ensureCoversDir = async () => {
 // nameKey：封面文件的命名依据（网络海报传原始 URL、自选封面传相册原片路径）。
 // 不传就用 uri 本身。同一个来源永远落到同一个文件名——重复保存同一张封面只会覆盖，
 // 不会像以前那样（时间戳+随机数）越存越多、留下同一张图的多个副本。
-export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE, nameKey = null) => {
+export const downscaleCover = async (rawUri, maxEdge = COVER_MAX_EDGE, nameKey = null) => {
+  const uri = rebaseAppFileUri(rawUri);
+  if (!uri) return null;
+  const isPh = uri.startsWith('ph://');
   try {
     // 已经在 covers 目录里的小图：直接原样返回，避免每次启动迁移都复制出重复文件
     const dir = await ensureCoversDir();
     if (uri.startsWith(dir + '/')) return uri;
-    const stat = await FileSystem.getInfoAsync(uri);
-    if (!stat.exists) return null;
+    if (!isPh) {
+      const stat = await FileSystem.getInfoAsync(uri);
+      if (!stat.exists) return null;
+    }
+
     const dest0 = `${dir}/cover_${hashKey(nameKey || uri)}`;
     // 已经存过这一张（上一次保存/回填留下的）：直接用现成的，省一次缩放和复制
     for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
@@ -329,10 +372,28 @@ export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE, nameKey = nu
       }
     }
     const dims = await new Promise((resolve) => {
-      RNImage.getSize(uri, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
+      if (isPh) resolve(null); else RNImage.getSize(uri, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
     });
     let workUri = uri;
-    if (dims) {
+    if (isPh) {
+      const assetId = uri.slice('ph://'.length);
+      let produced = null;
+      if (thumbsNative?.getThumbnailAsync) {
+        try {
+          const r = await thumbsNative.getThumbnailAsync(assetId, false, Math.min(1024, Math.max(maxEdge, 360)));
+          if (r?.uri) produced = r.uri;
+        } catch {}
+      }
+      if (!produced) {
+        const rendered = await ImageManipulator.manipulate(uri)
+          .resize({ width: maxEdge })
+          .renderAsync();
+        const saved = await rendered.saveAsync({ compress: 0.85, format: SaveFormat.JPEG });
+        produced = saved.uri;
+      }
+      workUri = produced;
+    }
+    if (dims && !isPh) {
       const long = Math.max(dims.w, dims.h);
       if (long > maxEdge * 2) {
         const scale = maxEdge / long;
@@ -346,7 +407,7 @@ export const downscaleCover = async (uri, maxEdge = COVER_MAX_EDGE, nameKey = nu
     const ext = (workUri.split('?')[0].match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
     const dest = `${dest0}.${ext}`;
     await copyFileAsync(workUri, dest);
-    if (workUri !== uri) {
+    if (workUri !== uri && !workUri.includes('/thumbs/')) {
       try { await FileSystem.deleteAsync(workUri, { idempotent: true }); } catch {}
     }
     return dest;
@@ -461,7 +522,12 @@ export const cleanupMediaCaches = async (logs = [], { thumbs = true, motion = tr
   let freed = 0;
   const dirs = [];
   if (thumbs) {
-    dirs.push(`${FileSystem.documentDirectory}videoThumbs`, `${FileSystem.cacheDirectory}VideoThumbnails`);
+    dirs.push(
+      `${FileSystem.documentDirectory}videoThumbs`,
+      `${FileSystem.cacheDirectory}VideoThumbnails`,
+      `${FileSystem.cacheDirectory}thumbs`,
+      `${FileSystem.cacheDirectory}backups`
+    );
   }
   if (motion) dirs.push(`${FileSystem.documentDirectory}motionVideos`);
   for (const dir of dirs) {
@@ -781,4 +847,4 @@ export const cleanTransientCaches = async () => {
 // 应用私有的媒体副本目录（MEDIA_DIR，默认内部存储、可用时是 Android/data）。
 // 只有这里的文件在重链到相册原片后可以放心删掉——相册里的、用户自己的文件绝不动。
 export const isAppOwnedMediaPath = (uri) =>
-  !!uri && uri.startsWith('file://') && uri.startsWith(`${MEDIA_DIR}/`);
+  !!rebaseAppFileUri(uri) && rebaseAppFileUri(uri).startsWith('file://') && rebaseAppFileUri(uri).startsWith(`${MEDIA_DIR}/`);

@@ -16,7 +16,7 @@ import { useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { navigationRef } from '../navigation/AppNavigator';
-import { MEDIA_DIR, copyFileAsync, ensureDirAsync } from '../utils/storagePaths';
+import { MEDIA_DIR, copyFileAsync, deletePathAsync, ensureDirAsync, getFileSizeAsync } from '../utils/storagePaths';
 
 // 文件名里的非法字符换成下划线，其余（含中文）保留，方便和相册原片按名字匹配
 const safeName = (name, index, video) => {
@@ -31,8 +31,10 @@ async function importSharedFiles(files) {
   const entries = [];
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
-    const from = f?.path;
-    if (!from) continue;
+    const rawFrom = f?.path;
+    if (!rawFrom) continue;
+    // iOS 偶尔给出不带 file:// 的绝对路径，统一补齐协议头
+    const from = rawFrom.startsWith('/') ? `file://${rawFrom}` : rawFrom;
     const video = String(f.mimeType || '').startsWith('video/');
     const name = safeName(f.fileName, i, video);
     let to = `${MEDIA_DIR}/${name}`;
@@ -42,20 +44,27 @@ async function importSharedFiles(files) {
       const exist = await FileSystem.getInfoAsync(to).catch(() => ({ exists: false }));
       if (exist.exists) to = `${MEDIA_DIR}/${Date.now()}_${i}_${name}`;
       await copyFileAsync(from, to);
-      // 复制完就把系统缓存里那份删掉：记录用的是 media/ 里这份，
-      // 缓存那份只服务于"这一次分享"，留着纯属白占空间（缓存目录 App 不会自己扫）
-      await FileSystem.deleteAsync(from, { idempotent: true }).catch(() => {});
+      // 复制完就把系统缓存 / iOS App Group 容器里那份删掉（走原生 deletePathAsync 绕开沙盒限制）
+      await deletePathAsync(from).catch(() => {});
     } catch (e) {
       console.warn('[share] 复制分享的影像失败', from, e?.message || e);
       continue;
     }
+    const w = typeof f.width === 'number' && f.width > 0 ? f.width : null;
+    const h = typeof f.height === 'number' && f.height > 0 ? f.height : null;
+    const size = typeof f.size === 'number' && f.size > 0
+      ? f.size
+      : await getFileSizeAsync(to);
     entries.push({
       uri: to,
       isVideo: video,
       // filename 记"相册原名"（不是落盘时可能加了时间戳的那个），
       // 这样：① 重链回相册时按名字匹配更容易命中；② 同一张图重复分享能被识别成重复
       filename: String(f.fileName || '').trim() || name,
-      size: typeof f.size === 'number' ? f.size : undefined,
+      size: typeof size === 'number' ? size : undefined,
+      ...(w ? { w } : {}),
+      ...(h ? { h } : {}),
+      ...(w && h ? { ratio: w / h } : {}),
     });
   }
   return entries;

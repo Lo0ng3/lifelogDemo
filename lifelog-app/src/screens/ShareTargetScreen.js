@@ -219,7 +219,7 @@ export default function ShareTargetScreen({ route, navigation }) {
         keyExtractor={(item) => String(item.id)}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(24, insets.bottom + 12) }]}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={<Text style={styles.emptyText}>没有匹配的记录</Text>}
       />

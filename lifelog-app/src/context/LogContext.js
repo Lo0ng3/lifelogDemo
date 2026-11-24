@@ -17,6 +17,7 @@ import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
 import { writeInternalBackup } from '../utils/backup';
 import { loadProfile } from '../utils/profile';
 import { detectMediaMetadata } from '../utils/mediaMetadata';
+import { rebaseLogFileUris } from '../utils/storagePaths';
 
 export const LogContext = createContext();
 
@@ -217,7 +218,15 @@ export const LogProvider = ({ children }) => {
     try {
       const storedLogs = await AsyncStorage.getItem(LOGS_KEY);
       if (storedLogs) {
-        const logs = JSON.parse(storedLogs);
+        const rawLogs = JSON.parse(storedLogs);
+        // iOS 升级/重装会改变应用容器 UUID：先将旧路径重定位到当前 documentDirectory，
+        // 避免误判封面/视频封面/本地副本已丢失而被清掉
+        let rebasedChanged = false;
+        const logs = rawLogs.map((l) => {
+          const next = rebaseLogFileUris(l);
+          if (next !== l) rebasedChanged = true;
+          return next;
+        });
         // 封面文件不在了（换机导入、手删）就清掉，交给下面的回填按标题重新联网补一张
         let pruned = logs;
         for (const log of logs) {
@@ -232,7 +241,7 @@ export const LogProvider = ({ children }) => {
         }
         logDataRef.current = pruned;
         setLogData(pruned);
-        if (pruned !== logs) {
+        if (rebasedChanged || pruned !== logs) {
           await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(pruned));
         }
         // 延后 2 秒错峰启动：给缺封面的记录联网补一张海报

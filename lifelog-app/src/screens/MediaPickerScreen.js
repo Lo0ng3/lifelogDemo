@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useContext, useRef } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Dimensions, Platform
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Dimensions, Platform, Linking
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
@@ -16,13 +16,14 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { LogContext } from '../context/LogContext';
 import { hasGalleryAccess } from '../utils/media';
+import { getFileSizeAsync } from '../utils/storagePaths';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
-// 系统微缩略图原生模块（仅 Android 打包内置）：走系统相册同款的微缩略图管道，
-// 毫秒级出图且原生侧有缓存；模块缺失（旧构建/iOS）时回退原图显示
+// 双端系统微缩略图原生模块（Android: MediaStore loadThumbnail / iOS: PhotoKit requestImage）：
+// 毫秒级出图且原生侧有缓存；模块缺失时回退原图显示
 let Thumbs = null;
 try {
-  Thumbs = require('../modules/thumbs').default;
+  Thumbs = require('../../modules/thumbs').default;
 } catch {}
 
 const COLS = 3;
@@ -35,7 +36,10 @@ const THUMB_H = 44;          // 快速定位条滑块高度
 const FAST_TRACK_ROWS = 2;   // 超过约两屏才出现快速定位条
 
 // 常用相册白名单：相册面板默认只展示这些，其余收进「更多相册」
-const COMMON_ALBUM_KEYWORDS = ['camera', '相机', 'video', '视频', 'screenshot', '截图', 'screenshots'];
+const COMMON_ALBUM_KEYWORDS = [
+  'camera', '相机', 'video', '视频', 'screenshot', '截图', 'screenshots', '截屏',
+  'recents', '最近项目', 'favorites', '个人收藏', 'live photos', '实况', 'selfies', '自拍',
+];
 const isCommonAlbum = (title) => {
   const t = String(title || '').toLowerCase();
   return COMMON_ALBUM_KEYWORDS.some(k => t.includes(k));
@@ -240,6 +244,7 @@ export default function MediaPickerScreen({ route, navigation }) {
 
   const [status, setStatus] = useState('checking'); // checking | granted | denied | error
   const [errorMsg, setErrorMsg] = useState('');
+  const [canAskAgain, setCanAskAgain] = useState(true);
   const [limited, setLimited] = useState(false);
   const [albums, setAlbums] = useState([]);
   const [albumId, setAlbumId] = useState(null); // null = 全部照片
@@ -369,12 +374,16 @@ export default function MediaPickerScreen({ route, navigation }) {
       // 只申请照片和视频权限；默认请求会带上 AUDIO，部分环境的
       // AndroidManifest 未声明该权限会直接抛错
       const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
+      setCanAskAgain(perm?.canAskAgain !== false);
       if (hasGalleryAccess(perm)) {
         setLimited(perm.accessPrivileges === 'limited');
         setStatus('granted');
         load(null, null);
-        // 相册列表按媒体数排序；缓存相册在展示层过滤（可用"显示全部"找回）
-        MediaLibrary.getAlbumsAsync({ mediaType: ['photo', 'video'] })
+        // 相册列表按媒体数排序；iOS 需打开 includeSmartAlbums 才能拿到「最近项目 / 个人收藏 / 视频 / 截屏」等智能相册
+        const albumOpts = Platform.OS === 'ios'
+          ? { includeSmartAlbums: true }
+          : { mediaType: ['photo', 'video'] };
+        MediaLibrary.getAlbumsAsync(albumOpts)
           .then(list => {
             setAlbums(list
               .filter(a => a.assetCount > 0)
@@ -397,6 +406,23 @@ export default function MediaPickerScreen({ route, navigation }) {
   }, [load]);
 
   useEffect(() => { init(); }, [init]);
+
+  // iOS 14+「仅部分照片」模式下，用户通过系统选择器增选照片后会触发 mediaLibraryDidChange，自动刷新列表
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !limited) return undefined;
+    const sub = MediaLibrary.addListener(() => {
+      load(null, albumIdRef.current);
+    });
+    return () => sub?.remove?.();
+  }, [limited, load]);
+
+  const handleManageLimitedPhotos = useCallback(async () => {
+    try {
+      await MediaLibrary.presentPermissionsPickerAsync();
+      // 某些 iOS 版本在用户点完成后不会立刻触发回调，补刷一次
+      setTimeout(() => load(null, albumIdRef.current), 400);
+    } catch {}
+  }, [load]);
 
   // 资产变化后同步给 UI 线程：内容总高度 + 每月文案表（快速定位气泡）
   useEffect(() => {
@@ -447,12 +473,24 @@ export default function MediaPickerScreen({ route, navigation }) {
           return own || { assetId: id };
         }
         // 相册元数据没有文件大小，选中的少数几个逐个补上，供跨设备同步匹配用。
-        // 直接 stat 相册文件路径（getAssetInfoAsync 在部分设备会因 ACCESS_MEDIA_LOCATION 缺失被拒）
+        // Android 直接 stat 文件路径；iOS 上 asset.uri 是 ph://，优先走原生 PHAssetResource 取体积
         let size = null;
         try {
-          const stat = await FileSystem.getInfoAsync(a.uri);
-          if (stat.exists && typeof stat.size === 'number') size = stat.size;
+          if (Platform.OS === 'ios') {
+            if (Thumbs?.getAssetFileSizeAsync) {
+              size = await Thumbs.getAssetFileSizeAsync(a.id).catch(() => null);
+            }
+            if (size == null) {
+              const info = await MediaLibrary.getAssetInfoAsync(a.id, { shouldDownloadFromNetwork: false }).catch(() => null);
+              if (info?.localUri) size = await getFileSizeAsync(info.localUri);
+            }
+          } else {
+            const stat = await FileSystem.getInfoAsync(a.uri);
+            if (stat.exists && typeof stat.size === 'number') size = stat.size;
+          }
         } catch {}
+        const isLiveIos = Platform.OS === 'ios' && Array.isArray(a.mediaSubtypes)
+          && (a.mediaSubtypes.includes('livePhoto') || a.mediaSubtypes.includes('photoLive'));
         return {
           assetId: a.id,
           uri: a.uri,
@@ -463,6 +501,13 @@ export default function MediaPickerScreen({ route, navigation }) {
           size,
           w: a.width || null,
           h: a.height || null,
+          ...(Platform.OS === 'ios' && a.mediaType !== 'video'
+            ? {
+                mediaSubtypes: a.mediaSubtypes || [],
+                liveStatus: isLiveIos ? 'live' : 'not-live',
+                liveSource: 'ios',
+              }
+            : {}),
         };
       }));
       if (typeof route.params?.onDone === 'function') {
@@ -667,8 +712,11 @@ export default function MediaPickerScreen({ route, navigation }) {
       {status === 'denied' && (
         <View style={styles.deniedBox}>
           <Text style={styles.deniedText}>需要相册权限才能选择照片</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={init}>
-            <Text style={styles.retryText}>重新授权</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => (canAskAgain ? init() : Linking.openSettings())}
+          >
+            <Text style={styles.retryText}>{canAskAgain ? '重新授权' : '前往系统设置'}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -684,7 +732,16 @@ export default function MediaPickerScreen({ route, navigation }) {
 
       {status === 'granted' && (
         <View style={styles.gridWrap}>
-          {limited && <Text style={styles.limitedHint}>仅可访问部分照片</Text>}
+          {limited && (
+            <View style={styles.limitedBanner}>
+              <Text style={styles.limitedHint}>仅可访问部分照片</Text>
+              {Platform.OS === 'ios' && (
+                <TouchableOpacity onPress={handleManageLimitedPhotos} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={styles.limitedBtn}>选择更多</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
           <View style={{ flex: 1 }} onLayout={onGridLayout}>
             <Reanimated.FlatList
               ref={listRef}
@@ -780,13 +837,13 @@ export default function MediaPickerScreen({ route, navigation }) {
         imageIndex={previewPos}
         visible={previewVisible}
         onRequestClose={() => setPreviewVisible(false)}
-        Footer={({ imageIndex }) => {
+        FooterComponent={({ imageIndex }) => {
           const a = previewAssets[imageIndex];
           if (!a) return null;
           const isSel = selected.has(a.id);
           const isUsed = isUsedElsewhere(a);
           return (
-            <View style={styles.previewFooter}>
+            <View style={[styles.previewFooter, { paddingBottom: Math.max(24, insets.bottom + 12) }]}>
               <TouchableOpacity
                 style={[styles.previewSelectBtn, isSel && styles.previewSelectBtnOn, isUsed && styles.previewSelectDisabled]}
                 onPress={() => { if (!isUsed) toggle(a); }}
@@ -852,7 +909,9 @@ const makeStyles = (c) => ({
   albumFilterText: { fontSize: 12, color: c.textMuted },
   albumFilterBtn: { fontSize: 13, color: c.accent, fontWeight: '600' },
 
-  limitedHint: { fontSize: 12, color: c.warnText, backgroundColor: c.warnSoft, margin: 8, padding: 10, borderRadius: 8, textAlign: 'center' },
+  limitedBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: c.warnSoft, margin: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8 },
+  limitedHint: { fontSize: 12, color: c.warnText },
+  limitedBtn: { fontSize: 12.5, fontWeight: '600', color: c.accent },
   footer: { height: 44 },
   emptyText: { textAlign: 'center', color: c.textMuted, marginTop: 40 },
   deniedBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },

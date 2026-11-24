@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { getLivePhotoInfo } from './livePhoto';
 import {
   getVideoPoster,
@@ -24,8 +25,10 @@ export const detectMediaMetadata = async (rawEntry) => {
   }
 
   try {
-    const uri = await resolveMediaUri(entry);
-    const info = await getLivePhotoInfo({ ...entry, uri }, { full: true });
+    // iOS 上直接查相册元数据即可判定实况（不触发 iCloud 下载配对视频，播时再拉）
+    const info = Platform.OS === 'ios' && entry.assetId
+      ? await getLivePhotoInfo(entry, { full: false })
+      : await getLivePhotoInfo({ ...entry, uri: await resolveMediaUri(entry) }, { full: true });
     return {
       ...entry,
       liveStatus: info?.live ? 'live' : 'not-live',

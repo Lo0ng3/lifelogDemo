@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
@@ -68,6 +69,7 @@ const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, 
  * 左右滑动日历换月；点日期只看当天，再点一次回到整月。
  * ------------------------------------------------------------------ */
 export default function MonthView({ records, onPressItem, onEditItem, onDeleteItem }) {
+  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
@@ -318,7 +320,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           updateCellsBatchingPeriod={24}
           removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
-          contentContainerStyle={styles.tlContent}
+          contentContainerStyle={[styles.tlContent, { paddingBottom: Math.max(78, insets.bottom + 68) }]}
           ListHeaderComponent={(
             <GestureDetector gesture={swipeMonth}>
               <Reanimated.View

@@ -11,4 +11,10 @@ export default {
     const id = Platform.OS === 'ios' ? String(assetId) : Number(assetId);
     return native.getThumbnailAsync(id, isVideo, size);
   },
+  getAssetFileSizeAsync(assetId) {
+    if (Platform.OS !== 'ios' || typeof native?.getAssetFileSizeAsync !== 'function') {
+      return Promise.resolve(null);
+    }
+    return native.getAssetFileSizeAsync(String(assetId));
+  },
 };

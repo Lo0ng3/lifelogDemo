@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { rebaseAppFileUri } from './storagePaths';
 
 export const PROFILE_NAME_KEY = '@profile_name';
 export const PROFILE_AVATAR_KEY = '@profile_avatar';
@@ -11,9 +12,13 @@ export const loadProfile = async () => {
       AsyncStorage.getItem(PROFILE_NAME_KEY),
       AsyncStorage.getItem(PROFILE_AVATAR_KEY),
     ]);
+    const avatarUri = storedAvatar ? rebaseAppFileUri(storedAvatar) : null;
+    if (avatarUri && avatarUri !== storedAvatar) {
+      AsyncStorage.setItem(PROFILE_AVATAR_KEY, avatarUri).catch(() => {});
+    }
     return {
       name: (storedName || '').trim() || DEFAULT_PROFILE_NAME,
-      avatarUri: storedAvatar || null,
+      avatarUri,
     };
   } catch {
     return { name: DEFAULT_PROFILE_NAME, avatarUri: null };

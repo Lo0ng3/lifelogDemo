@@ -1,9 +1,10 @@
 // 备份导出/导入：把全部记录写成 JSON 文件备份，或从备份文件恢复/迁入。
-// - 导出：走 SAF 文件夹选择器，用户选一个文件夹，写入 lifelog-backup-<时间戳>.json
+// - 导出：Android 走 SAF 文件夹选择器；iOS 写入临时文件后唤起系统分享面板（可存储到「文件」/ AirDrop / iCloud）
 // - 导入：系统文件选择器直接挑一份备份 JSON，所见即所得，不依赖备份放在哪个文件夹
 // - 封面文件（豆瓣海报等本地文件）以 base64 随备份带走，换机恢复后无需重新搜索下载；
 //   老备份没有 covers 字段也能正常导入（缺失封面交给回填机制兜底）
 // 备份里的媒体条目带着相册指纹（文件名/大小/尺寸），换机导入后跑一次"同步相册影像"即可重新关联。
+import { Platform, Share } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { COVERS_DIR, ensureDirAsync, writeFileBase64Async } from './storagePaths';
 
@@ -144,11 +145,39 @@ export const writeInternalBackup = async ({ logData, keys, profile }) => {
 
 export const exportBackup = async (logData, keys = null, profile = null) => {
   try {
+    const now = new Date();
+    const name = `${BACKUP_NAME_PREFIX}${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
+
+    if (Platform.OS === 'ios') {
+      const built = await buildBackupPayload({
+        logData,
+        keys,
+        profile,
+        exportedAt: now.toISOString(),
+      });
+      const payload = JSON.stringify(built.payload);
+      const exportDir = `${FileSystem.cacheDirectory}backups`;
+      // 每次导出前清掉上一次留下的临时备份文件，避免缓存越积越多
+      try { await FileSystem.deleteAsync(exportDir, { idempotent: true }); } catch {}
+      await FileSystem.makeDirectoryAsync(exportDir, { intermediates: true });
+      const tmpFile = `${exportDir}/${name}`;
+      await FileSystem.writeAsStringAsync(tmpFile, payload, { encoding: FileSystem.EncodingType.UTF8 });
+      const res = await Share.share({ url: tmpFile, title: name });
+      if (res?.action === Share.dismissedAction) return { ok: false, canceled: true };
+      return {
+        ok: true,
+        count: logData.length,
+        covers: built.coversCount,
+        videoPosters: built.postersCount,
+        keys: built.hasKeys,
+        profile: built.hasProfile,
+        name,
+      };
+    }
+
     const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync();
     if (!perms.granted) return { ok: false, canceled: true };
 
-    const now = new Date();
-    const name = `${BACKUP_NAME_PREFIX}${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
     const built = await buildBackupPayload({
       logData,
       keys,
@@ -188,11 +217,18 @@ export const importBackup = async () => {
     }
     // 不按 MIME 过滤：部分机型的文件管理器会把 .json 标成 application/octet-stream，
     // 过滤严了反而选不到备份文件，合法性交给内容校验
-    const picked = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: false });
+    const picked = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      multiple: false,
+      copyToCacheDirectory: true,
+    });
     if (picked.canceled || !picked.assets?.length) return { ok: false, canceled: true };
 
     const file = picked.assets[0];
     const content = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.UTF8 });
+    if (FileSystem.cacheDirectory && file.uri?.startsWith(FileSystem.cacheDirectory)) {
+      FileSystem.deleteAsync(file.uri, { idempotent: true }).catch(() => {});
+    }
     const payload = JSON.parse(content);
     const logs = Array.isArray(payload?.logs)
       ? payload.logs.filter(l => l && l.id != null && l.date)

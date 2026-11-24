@@ -5,13 +5,18 @@
 //   3. 条目断链（assetId 失效或备用文件丢失）→ 按文件名 + 大小 + 尺寸指纹重新关联；
 //   4. 都匹配不上且确实无法显示 → 记为"无法自动恢复"，由用户在对应记录里重新添加。
 // 依赖的指纹（filename/size/w/h）在挑选媒体时（AddScreen.pickImage）和旧数据迁移时写入记录。
+import * as RN from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   normalizeMediaEntry, isVideoEntry, isAppOwnedMediaPath, hasGalleryAccess,
   pruneOrphanMediaCopies, pruneOrphanCovers, referencedMediaNames, entriesMediaNames, mediaNameOfUri,
 } from './media';
-import { deletePathAsync } from './storagePaths';
+import { deletePathAsync, getFileSizeAsync } from './storagePaths';
+
+const isIOS = () => RN.Platform?.OS === 'ios';
+const thumbsNative = requireOptionalNativeModule('Thumbs');
 
 const PAGE_SIZE = 500;
 // 单个条目最多核对的候选数量：文件大小要逐个 getAssetInfoAsync 读，候选太多时截断避免卡死。
@@ -71,11 +76,33 @@ const makeStatCache = () => {
     calls++;
     let out = null;
     try {
-      const target = asset.uri;
-      if (target) {
-        const stat = await FileSystem.getInfoAsync(target);
-        if (stat.exists && typeof stat.size === 'number' && stat.size >= 0) {
-          out = { size: stat.size, localUri: target };
+      if (isIOS()) {
+        // iOS 上 asset.uri 是 ph://，FileSystem.getInfoAsync 不可用；
+        // 优先通过原生 PHAssetResource 读取体积（纯元数据、不触发 iCloud 下载），
+        // 模块不可用时再退回 getAssetInfoAsync(shouldDownloadFromNetwork: false) + 原生 stat
+        if (thumbsNative?.getAssetFileSizeAsync) {
+          const size = await thumbsNative.getAssetFileSizeAsync(String(asset.id)).catch(() => null);
+          if (typeof size === 'number' && size >= 0) {
+            out = { size, localUri: asset.uri };
+          }
+        }
+        if (!out) {
+          const info = await MediaLibrary.getAssetInfoAsync(asset.id, { shouldDownloadFromNetwork: false }).catch(() => null);
+          const target = info?.localUri;
+          if (target) {
+            const size = await getFileSizeAsync(target);
+            if (typeof size === 'number' && size >= 0) {
+              out = { size, localUri: target };
+            }
+          }
+        }
+      } else {
+        const target = asset.uri;
+        if (target) {
+          const stat = await FileSystem.getInfoAsync(target);
+          if (stat.exists && typeof stat.size === 'number' && stat.size >= 0) {
+            out = { size: stat.size, localUri: target };
+          }
         }
       }
     } catch {}
@@ -227,17 +254,30 @@ const matchAssetForEntry = async (entry, mediaType, index, statCap) => {
   return null;
 };
 
-// 匹配成功后的条目改写：指向相册原片，指纹以相册为准补全
-const relinkedEntry = (entry, hit) => ({
-  ...entry,
-  uri: hit.localUri || hit.uri || entry.uri,
-  assetId: hit.id,
-  filename: hit.filename || entry.filename || null,
-  size: entry.size || null,
-  w: entry.w || hit.width || null,
-  h: entry.h || hit.height || null,
-  ratio: entry.ratio || (hit.width && hit.height ? hit.width / hit.height : null),
-});
+// 匹配成功后的条目改写：指向相册原片，指纹以相册为准补全；
+// iOS 上顺手利用相册资产自带的 mediaSubtypes 填好 liveStatus，省掉后续二次检测
+const relinkedEntry = (entry, hit) => {
+  const iosLiveMeta = isIOS() && hit.mediaType !== 'video' && Array.isArray(hit.mediaSubtypes)
+    ? {
+        mediaSubtypes: hit.mediaSubtypes,
+        liveStatus: (hit.mediaSubtypes.includes('livePhoto') || hit.mediaSubtypes.includes('photoLive'))
+          ? 'live'
+          : 'not-live',
+        liveSource: 'ios',
+      }
+    : null;
+  return {
+    ...entry,
+    uri: hit.localUri || hit.uri || entry.uri,
+    assetId: hit.id,
+    filename: hit.filename || entry.filename || null,
+    size: entry.size || null,
+    w: entry.w || hit.width || null,
+    h: entry.h || hit.height || null,
+    ratio: entry.ratio || (hit.width && hit.height ? hit.width / hit.height : null),
+    ...(iosLiveMeta || {}),
+  };
+};
 
 // 条目上所有指向应用私有 media/ 的字符串字段（目前就是主 uri；将来多挂别的
 // 字段时也不会漏删）。重链成功后这些副本都该从磁盘上消失

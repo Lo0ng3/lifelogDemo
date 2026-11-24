@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useContext, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ScrollView, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator,
+  ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
   BackHandler, ToastAndroid, Modal, Keyboard
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -562,9 +563,14 @@ export default function AddScreen({ navigation, route }) {
         const info = await MediaLibrary.getAssetInfoAsync(entry.assetId);
         const loc = info?.location;
         if (loc && loc.latitude != null && loc.longitude != null) {
-          setPhotoCoord({ longitude: loc.longitude, latitude: loc.latitude });
-          if (Platform.OS === 'android') ToastAndroid.show('已从照片读取位置', ToastAndroid.SHORT);
-          return;
+          // iOS 的 expo-media-library 返回字符串形式的经纬度，这里统一转成有限数字
+          const lat = Number(loc.latitude);
+          const lng = Number(loc.longitude);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            setPhotoCoord({ longitude: lng, latitude: lat });
+            if (Platform.OS === 'android') ToastAndroid.show('已从照片读取位置', ToastAndroid.SHORT);
+            return;
+          }
         }
       }
     } catch {}
@@ -841,6 +847,7 @@ export default function AddScreen({ navigation, route }) {
           bounces={false}
           overScrollMode="never"
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
           scrollEventThrottle={16}
           onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
           contentContainerStyle={[styles.formContent, scrollContentStyle]}
@@ -1233,7 +1240,7 @@ export default function AddScreen({ navigation, route }) {
                   {isVideoEntry(entry) ? (
                     <VideoPreview entry={entry} />
                   ) : (
-                    <Image source={{ uri: mediaUri(entry) }} style={styles.imageGridImage} />
+                    <Image source={{ uri: mediaUri(entry) }} style={styles.imageGridImage} contentFit="cover" cachePolicy="memory" />
                   )}
                   <TouchableOpacity style={styles.removeImageBtn} onPress={() => { const n = [...selectedImages]; n.splice(idx,1); setSelectedImages(n); }}>
                     <X size={12} color="#FFF" />
@@ -1324,7 +1331,7 @@ const makeStyles = (c) => ({
   },
   typeMenuCatOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   typeMenuCatText: { fontSize: 12, color: c.textSecondary, fontWeight: '500' },
-  typeMenuCatTextOn: { color: c.accent, fontWeight: '650' },
+  typeMenuCatTextOn: { color: c.accent, fontWeight: '600' },
   typeMenuSubs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   typeMenuSub: {
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14,

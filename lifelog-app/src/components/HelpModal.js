@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -94,7 +94,9 @@ const SECTIONS = [
   {
     title: '备份与恢复',
     items: [
-      '导出备份：把全部记录（含封面小图）和地图 Key 写成一个 JSON 文件，存到指定目录。',
+      Platform.OS === 'ios'
+        ? '导出备份：把全部记录（含封面小图）和地图 Key 写成一个 JSON 文件，通过系统分享面板存储到「文件」App、iCloud 或隔空投送。'
+        : '导出备份：把全部记录（含封面小图）和地图 Key 写成一个 JSON 文件，存到指定目录。',
       '导入备份：可选「覆盖现有」或「合并去重」（同 id 以备份里的为准），备份里的地图 Key 会一并恢复；换机后导入完建议再点一次「同步相册照片」把照片重新关联回相册。',
       '注意：备份里只有记录和封面，照片/视频本体不在其中——导入后靠系统相册里的原片重新挂上，相册里已经删掉的那些恢复不了。',
     ],
@@ -102,7 +104,9 @@ const SECTIONS = [
   {
     title: '数据目录',
     items: [
-      '分享进来的副本、封面小图存在应用专属外部目录（Android/data/<包名>/files/），手机文件管理器里能翻到、能手动拷走；系统不允许访问该目录的机型会退回应用内部存储（没有 root 看不到）。',
+      Platform.OS === 'ios'
+        ? '分享进来的副本、封面小图存在应用文档目录，可在系统「文件」App → 我的 iPhone → 印记中直接查看或拷走。'
+        : '分享进来的副本、封面小图存在应用专属外部目录（Android/data/<包名>/files/），手机文件管理器里能翻到、能手动拷走；系统不允许访问该目录的机型会退回应用内部存储（没有 root 看不到）。',
       '视频封面帧是纯缓存，留在内部存储，有体积上限（30MB）、删掉会自动重建。',
       '实况照片提取出来的动效视频（motionVideos）只算"这次会话的临时文件"：进后台或下次启动就整体清空，删掉不占长期存储；下次看那张照片时会重新提取（打开详情页就提前备好，点播放即可，不用等）。',
       '侧边栏「数据目录」可以查看当前落在哪、各有多少文件，并现场做一次写入测试。',

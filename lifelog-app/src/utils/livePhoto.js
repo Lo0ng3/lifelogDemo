@@ -25,8 +25,14 @@ const STORE_CAP = 5000;
 
 // 会话内存缓存 + 持久化存储（AsyncStorage 单键 JSON，约 150B/条）
 const infoCache = new Map();
+// iOS 配对视频路径落在系统 temporaryDirectory，重启/进后台可能被清理，只放内存不持久化
+const iosPairedVideoCache = new Map();
 let storePromise = null;
 let persistTimer = null;
+
+// expo-media-library v18（SDK 54）返回 'livePhoto'；兼容旧版可能的 'photoLive'
+const isIosLiveSubtype = (subtypes) =>
+  Array.isArray(subtypes) && (subtypes.includes('livePhoto') || subtypes.includes('photoLive'));
 
 const ensureStore = () => {
   if (!storePromise) {
@@ -220,24 +226,42 @@ export const getLivePhotoInfo = async (entry, { full = false } = {}) => {
 
   // ① iOS：相册元数据直接标记，并给出配对视频（系统判定即最终结论）
   if (Platform.OS === 'ios' && assetId) {
-    if (infoCache.has(baseKey)) return infoCache.get(baseKey);
+    const normalized = normalizeEntry(entry) || {};
+    const memPaired = iosPairedVideoCache.get(baseKey) || null;
+    if (infoCache.has(baseKey)) {
+      const cached = infoCache.get(baseKey);
+      // 兼容老版本持久化过 pairedVideoUri 的缓存：不盲信旧 tmp 路径，只附带本次会话有效的路径
+      return {
+        live: !!cached?.live,
+        source: cached?.source || 'ios',
+        scanned: true,
+        ...(cached?.live && memPaired ? { pairedVideoUri: memPaired } : {}),
+      };
+    }
+    // 选图时已经带了 mediaSubtypes 且非详情页全量查：直接判断，省一次原生调用
+    if (!full && Array.isArray(normalized.mediaSubtypes)) {
+      const live = isIosLiveSubtype(normalized.mediaSubtypes);
+      const out = { live, source: 'ios', scanned: true };
+      infoCache.set(baseKey, out);
+      schedulePersist();
+      return out;
+    }
     let out = { live: false, source: 'ios', scanned: true };
+    let pairedVideoUri = null;
     try {
-      const info = await MediaLibrary.getAssetInfoAsync(assetId);
-      if (info?.mediaSubtypes?.includes?.('photoLive')) {
-        out = {
-          live: true,
-          pairedVideoUri: info.pairedVideoAsset?.localUri || info.pairedVideoAsset?.uri || null,
-          source: 'ios',
-          scanned: true,
-        };
+      // 网格徽标不触发 iCloud 下载；详情页允许联网拉取配对视频
+      const info = await MediaLibrary.getAssetInfoAsync(assetId, { shouldDownloadFromNetwork: !!full });
+      if (isIosLiveSubtype(info?.mediaSubtypes)) {
+        pairedVideoUri = info.pairedVideoAsset?.localUri || info.pairedVideoAsset?.uri || null;
+        if (pairedVideoUri) iosPairedVideoCache.set(baseKey, pairedVideoUri);
+        out = { live: true, source: 'ios', scanned: true };
       }
     } catch (e) {
       console.warn('[livePhoto] iOS 检测失败', e?.message || e);
     }
     infoCache.set(baseKey, out);
     schedulePersist();
-    return out;
+    return pairedVideoUri ? { ...out, pairedVideoUri } : out;
   }
 
   // Android：文件级检测。键带文件大小，照片被替换后旧结果自动失效
@@ -297,6 +321,7 @@ const pendingCache = new Map();
 export const clearMotionVideoCache = () => {
   readyCache.clear();
   pendingCache.clear();
+  iosPairedVideoCache.clear();
 };
 
 // 把窗口里的那一段 mp4 写出去（末尾按 box 结构裁到最后一个完整 box）
@@ -315,13 +340,40 @@ const writeMotionClip = async (win, startInWin, dest) => {
 export const extractMotionVideo = async (entry, info) => {
   const normalized = normalizeEntry(entry) || {};
   const uri = normalized.uri;
-  if (!uri) return null;
-
-  // iOS Live Photo：相册直接给出配对视频，无需解析
-  if (info?.pairedVideoUri) return info.pairedVideoUri;
-  if (!uri.startsWith('file://')) return null;
-
   const key = normalized.assetId || uri;
+  if (!key) return null;
+
+  // iOS Live Photo：相册配对视频写在系统 tmp 目录，可能被系统清理；
+  // 先校验现有路径是否还活着，不在的话重新向相册请求一次（支持从 iCloud 拉取）
+  if (Platform.OS === 'ios') {
+    const candidate = info?.pairedVideoUri || iosPairedVideoCache.get(key) || null;
+    if (candidate) {
+      try {
+        if ((await FileSystem.getInfoAsync(candidate)).exists) return candidate;
+      } catch {}
+      iosPairedVideoCache.delete(key);
+    }
+    if (normalized.assetId) {
+      try {
+        const freshInfo = await MediaLibrary.getAssetInfoAsync(normalized.assetId, { shouldDownloadFromNetwork: true });
+        const freshUri = freshInfo?.pairedVideoAsset?.localUri || freshInfo?.pairedVideoAsset?.uri || null;
+        if (freshUri) {
+          iosPairedVideoCache.set(key, freshUri);
+          setLivePhotoError(null);
+          return freshUri;
+        }
+      } catch (e) {
+        console.warn('[livePhoto] iOS 获取配对视频失败', e?.message || e);
+        setLivePhotoError(`iOS 获取配对视频失败：${e?.message || e}`);
+      }
+      if (!uri || !uri.startsWith('file://')) return null;
+    }
+  } else if (info?.pairedVideoUri) {
+    return info.pairedVideoUri;
+  }
+
+  if (!uri || !uri.startsWith('file://')) return null;
+
   if (readyCache.has(key)) return readyCache.get(key);
   const inflight = pendingCache.get(key);
   if (inflight) return inflight;

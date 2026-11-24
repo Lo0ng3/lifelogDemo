@@ -7,10 +7,12 @@
 // （有体积上限、删了自动重建），继续留在内部目录，不占 Android/data 的位置。
 //
 // 外部目录不可用（未挂载、iOS、同步调用失败）时不报错，静默回退内部目录。
+import * as RN from 'react-native';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import * as FileSystem from 'expo-file-system/legacy';
 import { getLivePhotoError } from './diag';
 
+const isIOS = () => RN.Platform?.OS === 'ios';
 const native = requireOptionalNativeModule('Paths');
 
 const readExternalRoot = () => {
@@ -34,6 +36,90 @@ export const IS_EXTERNAL_STORAGE = !!externalFilesDir;
 export const MEDIA_DIR = `${STORAGE_ROOT}media`;
 // 封面小图（网络海报、自选封面）
 export const COVERS_DIR = `${STORAGE_ROOT}covers`;
+
+// iOS 每次更新/重装应用时，沙盒容器的 UUID 都会变化（/Containers/Data/Application/<UUID>/Documents/）。
+// 把持久化在 AsyncStorage 里的绝对 file:// 路径重新锚定到当前 documentDirectory，
+// 防止升级后封面、头像、视频封面和本地副本全部断链。
+const APP_DOC_SUBDIR_RE = /\/Documents\/((?:covers|media|videoPosters|videoThumbs|motionVideos|profile|internal-backup)\/.+)$/;
+export const rebaseAppFileUri = (uri) => {
+  if (typeof uri !== 'string' || !uri.startsWith('file://') || !FileSystem.documentDirectory) return uri;
+  if (uri.startsWith(FileSystem.documentDirectory) || uri.startsWith(STORAGE_ROOT)) return uri;
+  const match = uri.match(APP_DOC_SUBDIR_RE);
+  if (!match) return uri;
+  return `${FileSystem.documentDirectory}${match[1]}`;
+};
+
+export const rebaseLogFileUris = (log) => {
+  if (!log || typeof log !== 'object') return log;
+  let changed = false;
+  const next = { ...log };
+  for (const field of ['coverUrl', 'coverThumbUrl']) {
+    if (typeof next[field] === 'string') {
+      const rebased = rebaseAppFileUri(next[field]);
+      if (rebased !== next[field]) {
+        next[field] = rebased;
+        changed = true;
+      }
+    }
+  }
+  if (Array.isArray(next.localImages) && next.localImages.length) {
+    let imgsChanged = false;
+    const nextImages = next.localImages.map((raw) => {
+      if (typeof raw === 'string') {
+        const r = rebaseAppFileUri(raw);
+        if (r !== raw) { imgsChanged = true; return r; }
+        return raw;
+      }
+      if (!raw || typeof raw !== 'object') return raw;
+      let entryChanged = false;
+      const e = { ...raw };
+      if (typeof e.uri === 'string') {
+        const r = rebaseAppFileUri(e.uri);
+        if (r !== e.uri) { e.uri = r; entryChanged = true; }
+      }
+      if (e.videoPoster && typeof e.videoPoster.uri === 'string') {
+        const r = rebaseAppFileUri(e.videoPoster.uri);
+        if (r !== e.videoPoster.uri) {
+          e.videoPoster = { ...e.videoPoster, uri: r };
+          entryChanged = true;
+        }
+      }
+      if (entryChanged) imgsChanged = true;
+      return entryChanged ? e : raw;
+    });
+    if (imgsChanged) {
+      next.localImages = nextImages;
+      changed = true;
+    }
+  }
+  return changed ? next : log;
+};
+
+// 读取文件大小（原生优先：绕过 expo-file-system 对 iOS App Group / DCIM 等沙盒外路径的限制）
+export const getFileSizeAsync = async (uri) => {
+  if (!uri) return null;
+  if (native?.getFileSize) {
+    try {
+      const size = await native.getFileSize(uri);
+      if (typeof size === 'number' && size >= 0) return size;
+    } catch {}
+  }
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (info?.exists && typeof info.size === 'number') return info.size;
+  } catch {}
+  return null;
+};
+
+// iOS 清理 WKWebView 缓存（react-native-webview 的 clearCache 仅支持 Android）
+export const clearWebKitCacheAsync = async () => {
+  if (!native?.clearWebKitCache) return false;
+  try {
+    return !!(await native.clearWebKitCache());
+  } catch {
+    return false;
+  }
+};
 
 /* ------------------------------------------------------------------ *
  * 写文件为什么绕到原生去
@@ -188,7 +274,13 @@ const CACHE_DIR_LABELS = {
   image_cache: '图片缓存 image_cache（列表封面缩略图）',
   VideoThumbnails: '临时缩略图 VideoThumbnails',
   WebView: '地图/网页缓存 WebView',
+  WebKit: '地图/网页缓存 WebKit',
   'expo-image': '图片缓存 expo-image',
+  'com.hackemist.SDImageCache': '图片缓存 SDImageCache',
+  'org.hackemist.SDImageCache': '图片缓存 SDImageCache',
+  thumbs: '选图器缩略图 thumbs',
+  ImageManipulator: '图片处理临时缓存 ImageManipulator',
+  backups: '备份导出临时文件 backups',
 };
 
 // 「数据目录」诊断：根目录、副本/封面目录、各类缓存（封面帧 / 实况视频 / 图片 / 地图 /
@@ -197,7 +289,9 @@ export const describeStorageAsync = async () => {
   const lines = [
     IS_EXTERNAL_STORAGE
       ? '数据目录：应用外部目录（Android/data，文件管理器能看到）'
-      : '数据目录：内部存储（没有 root 看不到）',
+      : isIOS()
+        ? '数据目录：应用文档目录（可在系统「文件」App → 我的 iPhone → 印记中查看）'
+        : '数据目录：内部存储（没有 root 看不到）',
     STORAGE_ROOT,
   ];
   // ① 持久目录：影像副本 / 封面小图，这两样删了记录就看不了了，单独列
