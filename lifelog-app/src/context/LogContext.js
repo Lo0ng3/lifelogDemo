@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useRef, useCallback } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initialLogData } from '../data/mockData';
@@ -38,11 +38,14 @@ export const LogProvider = ({ children }) => {
   const logDataRef = useRef([]);
   const keysRef = useRef({});
   const backupHydratedRef = useRef(false);
+  const backupDirtyRef = useRef(false);
   const backupTimerRef = useRef(null);
   const metadataTimersRef = useRef(new Set());
   const metadataRunningRef = useRef(new Set());
 
   const flushInternalBackup = useCallback(async () => {
+    if (!backupDirtyRef.current) return;
+    backupDirtyRef.current = false;
     if (!backupHydratedRef.current) return;
     clearTimeout(backupTimerRef.current);
     try {
@@ -60,7 +63,8 @@ export const LogProvider = ({ children }) => {
   const scheduleInternalBackup = useCallback(() => {
     if (!backupHydratedRef.current) return;
     clearTimeout(backupTimerRef.current);
-    backupTimerRef.current = setTimeout(flushInternalBackup, 800);
+    backupDirtyRef.current = true;
+    backupTimerRef.current = setTimeout(flushInternalBackup, 2500);
   }, [flushInternalBackup]);
 
   useEffect(() => {
@@ -178,7 +182,7 @@ export const LogProvider = ({ children }) => {
           const video = isVideoEntry(entry);
           if (video) {
             if (entry.videoPoster?.base64 || entry.videoPoster?.uri || entry.metadataCheckedAt) continue;
-          } else if (['live', 'not-live', 'unknown'].includes(entry?.liveStatus)) {
+          } else if (['live', 'not-live', 'unknown'].includes(entry?.liveStatus) && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios')) {
             continue;
           }
 
@@ -255,12 +259,13 @@ export const LogProvider = ({ children }) => {
       console.error('加载数据失败', e);
     } finally {
       backupHydratedRef.current = true;
-      scheduleInternalBackup();
+      // 启动加载完成，只有后续数据真正变动时才写内部备份（避免冷启动 800ms 读全量封面卡顿）
       const incompleteIds = logDataRef.current
         .filter((log) => log.localImages?.some((entry) => (
           entry.liveStatus === 'pending'
           || (entry.liveStatus === 'not-applicable' && !entry.metadataCheckedAt)
           || entry.liveStatus === 'unknown'
+          || (Platform.OS === 'ios' && !isVideoEntry(entry) && entry.assetId && entry.liveSource !== 'ios')
         )))
         .map((log) => log.id);
       scheduleMediaMetadata(incompleteIds);
@@ -270,7 +275,7 @@ export const LogProvider = ({ children }) => {
       // 静默预热相册索引（不弹权限窗）：保存记录时把媒体重链成相册引用可以零等待
       // 但不要卡在启动那一刻：首屏渲染和用户开始滑列表都是这几秒，
       // 一次全量扫相册（分页拉几千条）会把 JS 线程挤得一顿一顿，晚几秒再跑
-      setTimeout(warmGalleryIndex, 6000);
+      if (Platform.OS !== 'ios') setTimeout(warmGalleryIndex, 6000);
     }
   };
 

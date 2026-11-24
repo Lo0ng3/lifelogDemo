@@ -165,6 +165,22 @@ writePkg('expo-modules-core', {
             const a = globalThis.__iosTest.assets.find((x) => x.id === assetId);
             return a ? a._fileSize : null;
           },
+          getLivePhotoStatusAsync: async (assetId) => {
+            const a = globalThis.__iosTest.assets.find((x) => x.id === assetId);
+            return !!a?.mediaSubtypes?.includes('livePhoto');
+          },
+          getLivePhotoVideoUriAsync: async (assetId) => {
+            const a = globalThis.__iosTest.assets.find((x) => x.id === assetId);
+            if (!a?.mediaSubtypes?.includes('livePhoto')) return null;
+            const out = 'file:///tmp/livePhotos/live_' + globalThis.__iosTest.assetInfoCalls.length + '_' + Date.now() + '.mov';
+            store().set(out, { dir: false, size: 500000, mtime: 1700000000 });
+            return out;
+          },
+          getPlayableVideoUriAsync: async (assetId) => {
+            const out = 'file:///tmp/playableVideos/vid_' + String(assetId).replace(/[/:]/g, '_') + '.mov';
+            store().set(out, { dir: false, size: 9876543, mtime: 1700000000 });
+            return out;
+          },
         };
       }
       return null;
@@ -233,7 +249,7 @@ const backupPath = copySource('src/utils/backup.js');
 
 const { rebaseAppFileUri, rebaseLogFileUris, clearWebKitCacheAsync, describeStorageAsync } = await import(pathToFileURL(storagePathsPath).href);
 const { getLivePhotoInfo, extractMotionVideo, clearMotionVideoCache } = await import(pathToFileURL(livePhotoPath).href);
-const { getVideoThumbnail, downscaleCover } = await import(pathToFileURL(mediaPath).href);
+const { getVideoThumbnail, downscaleCover, resolveMediaUri, resolvePlayableVideoUri } = await import(pathToFileURL(mediaPath).href);
 const { syncMediaFromGallery } = await import(pathToFileURL(mediaSyncPath).href);
 const { exportBackup } = await import(pathToFileURL(backupPath).href);
 
@@ -278,15 +294,29 @@ globalThis.__iosTest.assets = [
 ];
 
 const liveInfo = await getLivePhotoInfo({ assetId: liveId, uri: `ph://${liveId}` }, { full: true });
-if (!liveInfo.live || !liveInfo.pairedVideoUri) {
-  fail.push(`iOS livePhoto 未被正确识别：${JSON.stringify(liveInfo)}`);
+if (!liveInfo.live || assetInfoCalls.length !== 0) {
+  fail.push(`iOS livePhoto 应走原生 PhotoKit 判定且零 getAssetInfoAsync：${JSON.stringify(liveInfo)}, calls=${assetInfoCalls.length}`);
+}
+const firstMov = await extractMotionVideo({ assetId: liveId, uri: `ph://${liveId}` }, liveInfo);
+if (!firstMov || !firstMov.startsWith('file:///tmp/livePhotos/')) {
+  fail.push(`iOS 实况未走原生 PHAssetResourceManager 导出配对视频：${firstMov}`);
 }
 // 模拟系统清掉了 tmp 里的配对视频，且清掉了内存缓存（重开 App）
-files.delete(liveInfo.pairedVideoUri);
+files.delete(firstMov);
 clearMotionVideoCache();
 const freshMov = await extractMotionVideo({ assetId: liveId, uri: `ph://${liveId}` }, liveInfo);
-if (!freshMov || freshMov === liveInfo.pairedVideoUri) {
+if (!freshMov || !freshMov.startsWith('file:///tmp/livePhotos/')) {
   fail.push(`iOS 实况 tmp 失效后未重新拉取配对视频：${freshMov}`);
+}
+
+/* ③-b iOS 照片直读 ph://（不调 getAssetInfoAsync）+ 视频按需导出沙盒可播放地址 */
+const resolvedPhoto = await resolveMediaUri({ assetId: liveId, uri: `ph://${liveId}` });
+if (resolvedPhoto !== `ph://${liveId}` || assetInfoCalls.length !== 0) {
+  fail.push(`iOS 照片解析应直接返回 ph:// 避免卡顿：${resolvedPhoto}`);
+}
+const playableVid = await resolvePlayableVideoUri({ assetId: vidId, uri: `ph://${vidId}`, isVideo: true });
+if (!playableVid || !playableVid.startsWith('file:///tmp/playableVideos/')) {
+  fail.push(`iOS 视频未导出为沙盒可播放路径：${playableVid}`);
 }
 
 /* ④ iOS 视频封面（走 Thumbs）与 ph:// 设封面 */
@@ -336,6 +366,7 @@ for (const mod of ['paths', 'thumbs']) {
   }
 }
 if (!existsSync(join(root, 'modules/paths/ios/PathsModule.swift'))) fail.push('缺少 PathsModule.swift');
+if (!existsSync(join(root, 'modules/paths/ios/LiquidGlassView.swift'))) fail.push('缺少 LiquidGlassView.swift');
 if (!existsSync(join(root, 'modules/paths/ios/Paths.podspec'))) fail.push('缺少 Paths.podspec');
 const thumbsSwift = readFileSync(join(root, 'modules/thumbs/ios/ThumbsModule.swift'), 'utf8');
 if (!thumbsSwift.includes('replacingOccurrences(of: "/"')) {

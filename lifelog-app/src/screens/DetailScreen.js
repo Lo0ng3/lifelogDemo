@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import { BlurView } from 'expo-blur';
+import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import {
   Star, StarHalf, X, PlayCircle, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
@@ -19,7 +19,7 @@ import Animated, {
 import { LogContext } from '../context/LogContext';
 import { getIconConfig } from '../utils/icons';
 import { isEssay, labelOf } from '../utils/recordMeta';
-import { normalizeMediaEntry, resolveMediaUri, getVideoPoster, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
+import { normalizeMediaEntry, resolveMediaUri, resolvePlayableVideoUri, getVideoPoster, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
 import { fetchSuggestions, withTimeout } from '../utils/search';
@@ -439,7 +439,8 @@ function LiveGridBadge({ entry, enabled = true }) {
       setLive(true);
       return undefined;
     }
-    if (entry?.liveStatus === 'not-live') {
+    // iOS 上如果 liveSource 不是 'ios'（例如老数据或从 Android 导入的备份），不信任旧的 'not-live'，用 PhotoKit 重检一次
+    if (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios')) {
       setLive(false);
       return undefined;
     }
@@ -457,7 +458,7 @@ function LiveGridBadge({ entry, enabled = true }) {
   if (entry?.liveStatus === 'live') {
     return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
   }
-  if (!enabled || entry?.liveStatus === 'not-live') return null;
+  if (!enabled || (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios'))) return null;
   if (!live) return null;
   return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
 }
@@ -474,7 +475,7 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
     let alive = true;
     setPlayingUri(null);
     setVideoReady(false);
-    if (entry?.liveStatus === 'not-live') {
+    if (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios')) {
       setInfo({ live: false });
       return () => { alive = false; };
     }
@@ -548,6 +549,67 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
               if (s.didJustFinish) { setPlayingUri(null); setVideoReady(false); }
             }}
           />
+        </View>
+      )}
+    </View>
+  );
+}
+
+// 全屏查看器里的视频页：滑到当前页才按需把 iOS 相册视频导出到沙盒 tmp/ 并挂载播放器，
+// 划走立即卸载；加载前底下垫封面帧，避免黑屏闪烁
+function VideoPlayerPage({ entry, active }) {
+  const styles = useThemedStyles(makeStyles);
+  const [playableUri, setPlayableUri] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!active) {
+      setPlayableUri(null);
+      setFailed(false);
+      return undefined;
+    }
+    let alive = true;
+    setFailed(false);
+    resolvePlayableVideoUri(entry)
+      .then((u) => {
+        if (!alive) return;
+        if (u && !u.startsWith('ph://')) setPlayableUri(u);
+        else setFailed(true);
+      })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [active, entry]);
+
+  if (!active) {
+    return (
+      <View style={{ width: '100%', height: '80%', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
+        <VideoThumb entry={entry} style={{ width: '100%', height: '100%' }} contentFit="contain" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: '100%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
+      <VideoThumb entry={entry} style={StyleSheet.absoluteFill} contentFit="contain" />
+      {playableUri ? (
+        <Video
+          source={{ uri: playableUri }}
+          style={{ width: '100%', height: '100%' }}
+          useNativeControls
+          resizeMode={ResizeMode.CONTAIN}
+          shouldPlay
+          onError={(e) => {
+            console.warn('[video] 播放失败', playableUri, e);
+            setFailed(true);
+          }}
+        />
+      ) : failed ? (
+        <View style={styles.playOverlay}>
+          <Text style={styles.videoErrorText}>视频无法播放（可能未从 iCloud 下载或已移除）</Text>
+        </View>
+      ) : (
+        <View style={styles.playOverlay}>
+          <ActivityIndicator size="large" color="#FFF" />
         </View>
       )}
     </View>
@@ -754,18 +816,8 @@ export default function DetailScreen({ route, navigation }) {
 
       {/* 退出按钮固定在屏幕最上层，不跟着 ScrollView 滚走 */}
       <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
-        <View style={[
-          styles.fixedBack,
-          Platform.OS !== 'ios' && { backgroundColor: isDark ? 'rgba(30,30,32,0.92)' : 'rgba(255,255,255,0.92)' },
-        ]}>
-          {Platform.OS === 'ios' && (
-            <BlurView
-              tint={isDark ? 'dark' : 'light'}
-              intensity={isDark ? 50 : 60}
-              style={StyleSheet.absoluteFill}
-            />
-          )}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.42)' : 'rgba(255,255,255,0.42)' }]} />
+        <View style={styles.fixedBack}>
+          <LiquidGlassSurface cornerRadius={20} isDark={isDark} interactive />
           <TouchableOpacity style={styles.fixedBackBtn} onPress={() => navigation.goBack()} activeOpacity={0.82}>
             <ChevronLeft size={24} color={colors.text} />
           </TouchableOpacity>
@@ -861,29 +913,21 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
-      {/* 底部操作条：与底部导航同宽同高，同样用高斯模糊底 */}
-      <View pointerEvents="box-none" style={[styles.actionWrap, { bottom: Math.max(18, insets.bottom - 10) }]}>
-        <View style={[
-          styles.actionBar,
-          Platform.OS !== 'ios' && { backgroundColor: isDark ? 'rgba(30,30,32,0.92)' : 'rgba(255,255,255,0.92)' },
-        ]}>
-          {Platform.OS === 'ios' && (
-            <BlurView
-              tint={isDark ? 'dark' : 'light'}
-              intensity={isDark ? 50 : 60}
-              style={StyleSheet.absoluteFill}
-            />
-          )}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: isDark ? 'rgba(28,28,30,0.52)' : 'rgba(255,255,255,0.52)' }]} />
-          <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75}>
-            <Edit3 size={17} color={colors.accent} />
-            <Text style={[styles.actionText, { color: colors.accent }]}>修改</Text>
-          </TouchableOpacity>
-          <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
-          <TouchableOpacity style={styles.actionBtn} onPress={confirmDelete} activeOpacity={0.75}>
-            <Trash2 size={17} color={colors.danger} />
-            <Text style={[styles.actionText, { color: colors.danger }]}>删除</Text>
-          </TouchableOpacity>
+      {/* 底部操作条：与底部液态玻璃导航栏统一外观 */}
+      <View pointerEvents="box-none" style={[styles.actionWrap, { bottom: Math.max(18, insets.bottom - 6) }]}>
+        <View style={styles.actionShadow}>
+          <View style={styles.actionBar}>
+            <LiquidGlassSurface cornerRadius={30} isDark={isDark} interactive />
+            <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75}>
+              <Edit3 size={17} color={colors.accent} />
+              <Text style={[styles.actionText, { color: colors.accent }]}>修改</Text>
+            </TouchableOpacity>
+            <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
+            <TouchableOpacity style={styles.actionBtn} onPress={confirmDelete} activeOpacity={0.75}>
+              <Trash2 size={17} color={colors.danger} />
+              <Text style={[styles.actionText, { color: colors.danger }]}>删除</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -917,31 +961,7 @@ export default function DetailScreen({ route, navigation }) {
             renderItem={({ item: entry, index }) => (
               <View style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, justifyContent: 'center' }}>
                 {isVideoEntry(entry) ? (
-                  index === currentViewIndex ? (
-                    // 只有滑到当前页才真正挂载播放器，划走立即卸载，避免多个视频同时解码；
-                    // 播放器底下垫一层封面帧，首帧解码完成前不会黑屏闪烁
-                    <View style={{ width: '100%', height: '80%' }}>
-                      <VideoThumb entry={entry} style={StyleSheet.absoluteFill} contentFit="contain" />
-                      {entry.uri && !entry.uri.startsWith('ph://') ? (
-                        <Video
-                          source={{ uri: entry.uri }}
-                          style={{ width: '100%', height: '100%' }}
-                          useNativeControls
-                          resizeMode={ResizeMode.CONTAIN}
-                          shouldPlay
-                          onError={(e) => console.warn('[video] 播放失败', entry.uri, e)}
-                        />
-                      ) : (
-                        <View style={styles.playOverlay}>
-                          <ActivityIndicator size="large" color="#FFF" />
-                        </View>
-                      )}
-                    </View>
-                  ) : (
-                    <View style={{ width: '100%', height: '80%', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
-                      <VideoThumb entry={entry} style={{ width: '100%', height: '100%' }} contentFit="contain" />
-                    </View>
-                  )
+                  <VideoPlayerPage entry={entry} active={index === currentViewIndex} />
                 ) : (
                   <LivePhotoPage entry={entry} active={index === currentViewIndex} onZoomChange={setViewerZoomed} />
                 )}
@@ -1012,10 +1032,17 @@ const makeStyles = (c) => ({
   infoLabel: { fontSize: 9.5, color: c.textMuted },
   infoValue: { fontSize: 12, fontWeight: '600', color: c.text },
   actionWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 35 },
+  actionShadow: {
+    width: 232, height: 60, borderRadius: 30,
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.18, shadowRadius: 22, elevation: 9,
+  },
   actionBar: {
-    width: 220, height: 56, borderRadius: 22, overflow: 'hidden', flexDirection: 'row', alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-    shadowColor: c.shadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.16, shadowRadius: 20, elevation: 9,
+    width: 232, height: 60, borderRadius: 30, overflow: 'hidden', flexDirection: 'row', alignItems: 'center',
+    borderWidth: Platform.OS === 'ios' ? 0 : StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  videoErrorText: {
+    color: '#FFF', fontSize: 13, backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, overflow: 'hidden',
   },
   actionBtn: { flex: 1, height: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   actionText: { fontSize: 12, fontWeight: '600' },

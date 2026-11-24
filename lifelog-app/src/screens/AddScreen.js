@@ -844,7 +844,7 @@ export default function AddScreen({ navigation, route }) {
           ref={formScrollRef}
           style={styles.formScroll}
           showsVerticalScrollIndicator={false}
-          bounces={false}
+          bounces={Platform.OS === 'ios'}
           overScrollMode="never"
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}

@@ -311,7 +311,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           onScroll={onListScroll}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
-          bounces={false}
+          bounces={Platform.OS === 'ios'}
           overScrollMode="never"
           // 同首页列表：收窄虚拟化窗口、Android 裁掉屏外行，切换日历/滑动更稳
           initialNumToRender={6}

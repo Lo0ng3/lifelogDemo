@@ -136,6 +136,9 @@ export const resolveMediaUri = async (entry) => {
   const { uri: rawUri, assetId } = normalizeMediaEntry(entry) || {};
   const uri = rebaseAppFileUri(rawUri);
   if (!assetId) return uri;
+  // iOS 上 expo-image 原生直读 ph://（走 PhotoKit 按视口尺寸硬件解码，零拷贝），
+  // 绝不能对每张图调用 getAssetInfoAsync（会整图解码 HEIC 并导出实况 .mov，极度卡顿）
+  if (isIOS()) return `ph://${assetId}`;
   if (resolvedCache.has(assetId)) return resolvedCache.get(assetId);
 
   // 用户拒绝过权限就不反复弹窗，直接用备用 URI
@@ -158,6 +161,42 @@ export const resolveMediaUri = async (entry) => {
 };
 
 // assetId -> 封面帧 的内存缓存（视频九宫格缩略图用，避免挂载真实播放器）
+// 视频实际播放地址（按需在用户点开视频时调用）：
+// iOS 上 expo-av 的 AVURLAsset 受沙盒限制无法直接播放 /var/mobile/Media/DCIM/，
+// 必须通过原生 PhotoKit 将视频写入应用 tmp/playableVideos/ 后再交给播放器。
+const playableVideoCache = new Map();
+export const resolvePlayableVideoUri = async (entry) => {
+  const { uri: rawUri, assetId } = normalizeMediaEntry(entry) || {};
+  const uri = rebaseAppFileUri(rawUri);
+  if (!isIOS()) return resolveMediaUri(entry);
+  if (!assetId) return uri;
+
+  const cached = playableVideoCache.get(assetId);
+  if (cached) {
+    try {
+      if ((await FileSystem.getInfoAsync(cached)).exists) return cached;
+    } catch {}
+    playableVideoCache.delete(assetId);
+  }
+  if (thumbsNative?.getPlayableVideoUriAsync) {
+    try {
+      const playable = await thumbsNative.getPlayableVideoUriAsync(String(assetId));
+      if (playable) {
+        playableVideoCache.set(assetId, playable);
+        return playable;
+      }
+    } catch (e) {
+      console.warn('[video] 原生导出可播放视频失败', assetId, e?.message || e);
+    }
+  }
+  try {
+    if (await ensureGalleryAccess()) {
+      const info = await queryAssetInfo(assetId);
+      if (info?.localUri) return info.localUri;
+    }
+  } catch {}
+  return uri;
+};
 const thumbCache = new Map();
 
 // 简易字符串哈希：给磁盘缓存的封面帧文件命名用

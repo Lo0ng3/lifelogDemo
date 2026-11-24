@@ -2,16 +2,41 @@ import React, { useEffect, useState } from 'react';
 import {
   Keyboard, Platform, Pressable, StyleSheet, Text, View,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import Reanimated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
+import LiquidGlassSurface from './LiquidGlassSurface';
 import { useTheme } from '../theme/ThemeProvider';
 
-// 自绘底部导航：外层负责居中，内层固定 220×56。
-// 不使用 React Navigation 的 tabBarStyle 做 absolute + left 百分比，
-// 因为部分 Android 版本会把百分比按 0 处理，导航会卡在左边。
+let Haptics = null;
+try { Haptics = require('expo-haptics'); } catch {}
+
+const BAR_WIDTH = 232;
+const BAR_HEIGHT = 60;
+const BAR_PAD = 5;
+
+// 底部悬浮液态玻璃导航栏：
+// - iOS 26+：调用苹果原生 UIGlassEffect（真·液态玻璃折射与交互透镜）+ 滑动选中玻璃胶囊；
+// - iOS 15~18：系统原生 systemChromeMaterial 材质 + 高光描边 + 滑动胶囊；
+// - Android：轻量半透明底色（避开 WebView 地图上实时模糊掉帧）。
 export default function AppTabBar({ state, descriptors, navigation, insets }) {
   const { colors, isDark } = useTheme();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+  const count = Math.max(1, state.routes.length);
+  const pillWidth = (BAR_WIDTH - BAR_PAD * 2) / count;
+  const pillX = useSharedValue(state.index * pillWidth);
+
+  useEffect(() => {
+    pillX.value = withSpring(state.index * pillWidth, {
+      damping: 22,
+      stiffness: 280,
+      mass: 0.72,
+    });
+  }, [state.index, pillWidth, pillX]);
+
+  const pillAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: pillX.value }],
+  }));
 
   useEffect(() => {
     const show = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -26,52 +51,79 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
   const flattenedStyle = StyleSheet.flatten(options.tabBarStyle);
   if (keyboardOpen || flattenedStyle?.display === 'none') return null;
 
+  const isIOS = Platform.OS === 'ios';
+
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrap, { bottom: Math.max(18, (insets?.bottom || 0) - 10) }]}
+      style={[styles.wrap, { bottom: Math.max(18, (insets?.bottom || 0) - 6) }]}
     >
-      <View style={[styles.bar, { borderColor: colors.border, shadowColor: colors.shadow }]}>
-        {Platform.OS === 'ios' ? (
-          <BlurView
-            tint={isDark ? 'dark' : 'light'}
-            intensity={isDark ? 50 : 60}
-            style={StyleSheet.absoluteFill}
-          />
-        ) : (
-          // Android 的 WebView 地图上持续做实时模糊非常耗合成，底栏改成轻量半透明底色。
-          <View
+      {/* 外层负责阴影（不设 overflow:hidden，否则 iOS 会裁掉阴影） */}
+      <View
+        style={[
+          styles.shadowWrap,
+          {
+            shadowColor: colors.shadow,
+            shadowOpacity: isDark ? 0.42 : 0.16,
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.bar,
+            !isIOS && { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+          ]}
+        >
+          <LiquidGlassSurface cornerRadius={BAR_HEIGHT / 2} isDark={isDark} interactive />
+
+          {/* 选中项滑动液态玻璃胶囊 */}
+          <Reanimated.View
+            pointerEvents="none"
             style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: isDark ? 'rgba(30,30,32,0.92)' : 'rgba(255,255,255,0.92)' },
+              styles.activePill,
+              {
+                width: pillWidth,
+                backgroundColor: isDark
+                  ? 'rgba(255,255,255,0.14)'
+                  : (isIOS ? 'rgba(255,255,255,0.62)' : 'rgba(0,122,255,0.10)'),
+                borderColor: isDark
+                  ? 'rgba(255,255,255,0.18)'
+                  : (isIOS ? 'rgba(255,255,255,0.85)' : 'transparent'),
+              },
+              pillAnimStyle,
             ]}
           />
-        )}
-        {state.routes.map((item, index) => {
-          const focused = state.index === index;
-          const itemOptions = descriptors[item.key]?.options || {};
-          const color = focused ? (itemOptions.tabBarActiveTintColor || colors.accent)
-            : (itemOptions.tabBarInactiveTintColor || colors.textMuted);
-          const label = typeof itemOptions.tabBarLabel === 'string'
-            ? itemOptions.tabBarLabel
-            : item.name === 'Home' ? '印记' : '添加';
-          return (
-            <Pressable
-              key={item.key}
-              accessibilityRole="button"
-              accessibilityState={focused ? { selected: true } : {}}
-              accessibilityLabel={itemOptions.tabBarAccessibilityLabel}
-              onPress={() => {
-                const event = navigation.emit({ type: 'tabPress', target: item.key, canPreventDefault: true });
-                if (!focused && !event.defaultPrevented) navigation.navigate(item.name);
-              }}
-              style={styles.item}
-            >
-              {itemOptions.tabBarIcon?.({ focused, color, size: 22 })}
-              <Text style={[styles.label, { color }]}>{label}</Text>
-            </Pressable>
-          );
-        })}
+
+          {state.routes.map((item, index) => {
+            const focused = state.index === index;
+            const itemOptions = descriptors[item.key]?.options || {};
+            const color = focused
+              ? (itemOptions.tabBarActiveTintColor || colors.accent)
+              : (itemOptions.tabBarInactiveTintColor || colors.textSecondary);
+            const label = typeof itemOptions.tabBarLabel === 'string'
+              ? itemOptions.tabBarLabel
+              : item.name === 'Home' ? '印记' : '添加';
+            return (
+              <Pressable
+                key={item.key}
+                accessibilityRole="button"
+                accessibilityState={focused ? { selected: true } : {}}
+                accessibilityLabel={itemOptions.tabBarAccessibilityLabel}
+                onPress={() => {
+                  if (isIOS && !focused) {
+                    try { Haptics?.selectionAsync?.(); } catch {}
+                  }
+                  const event = navigation.emit({ type: 'tabPress', target: item.key, canPreventDefault: true });
+                  if (!focused && !event.defaultPrevented) navigation.navigate(item.name);
+                }}
+                style={styles.item}
+              >
+                {itemOptions.tabBarIcon?.({ focused, color, size: 21 })}
+                <Text style={[styles.label, { color, fontWeight: focused ? '700' : '500' }]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
     </View>
   );
@@ -85,28 +137,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 50,
   },
+  shadowWrap: {
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
+    borderRadius: BAR_HEIGHT / 2,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 22,
+    elevation: 9,
+  },
   bar: {
-    width: 220,
-    height: 56,
-    borderRadius: 22,
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
+    borderRadius: BAR_HEIGHT / 2,
+    padding: BAR_PAD,
     overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  activePill: {
+    position: 'absolute',
+    left: BAR_PAD,
+    top: BAR_PAD,
+    bottom: BAR_PAD,
+    borderRadius: (BAR_HEIGHT - BAR_PAD * 2) / 2,
     borderWidth: StyleSheet.hairlineWidth,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    elevation: 9,
   },
   item: {
     flex: 1,
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 1,
+    gap: 2,
+    zIndex: 1,
   },
   label: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 10.5,
   },
 });

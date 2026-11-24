@@ -9,12 +9,15 @@
 // 落盘目录 motionVideos 由上层在「进后台 / 下次启动」时整体清空（见 media.clearMotionVideos），
 // 所以它只是"这次会话的临时文件"，不占长期存储，也不再需要体积上限。
 import { Platform } from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as FileSystemNew from 'expo-file-system';
 import { readFileRangeAsync } from './storagePaths';
 import { setLivePhotoError } from './diag';
+
+const thumbsNative = requireOptionalNativeModule('Thumbs');
 
 const HEADER_BYTES = 512 * 1024; // 头部扫描范围（GCamera XMP 元数据）
 const TAIL_BYTES = 256 * 1024;   // 尾部扫描范围（三星 SEFT / 追加 mp4 的 ftyp）
@@ -224,37 +227,43 @@ export const getLivePhotoInfo = async (entry, { full = false } = {}) => {
   const baseKey = assetId || uri || '';
   if (!baseKey) return { live: false };
 
-  // ① iOS：相册元数据直接标记，并给出配对视频（系统判定即最终结论）
+  // ① iOS：优先走原生 PhotoKit 微秒级判定（PHAsset.mediaSubtypes.contains(.photoLive)），
+  // 绝不调用 getAssetInfoAsync（会整图解码 + 导出配对视频，且有 opportunistic 二次回调 Bug）
   if (Platform.OS === 'ios' && assetId) {
     const normalized = normalizeEntry(entry) || {};
     const memPaired = iosPairedVideoCache.get(baseKey) || null;
     if (infoCache.has(baseKey)) {
       const cached = infoCache.get(baseKey);
-      // 兼容老版本持久化过 pairedVideoUri 的缓存：不盲信旧 tmp 路径，只附带本次会话有效的路径
-      return {
-        live: !!cached?.live,
-        source: cached?.source || 'ios',
-        scanned: true,
-        ...(cached?.live && memPaired ? { pairedVideoUri: memPaired } : {}),
-      };
+      if (cached?.source === 'ios') {
+        return {
+          live: !!cached.live,
+          source: 'ios',
+          scanned: true,
+          ...(cached.live && memPaired ? { pairedVideoUri: memPaired } : {}),
+        };
+      }
     }
-    // 选图时已经带了 mediaSubtypes 且非详情页全量查：直接判断，省一次原生调用
-    if (!full && Array.isArray(normalized.mediaSubtypes)) {
+    // 选图 / 重链时已经带了 mediaSubtypes：直接判定，零原生调用
+    if (Array.isArray(normalized.mediaSubtypes) && normalized.mediaSubtypes.length > 0) {
       const live = isIosLiveSubtype(normalized.mediaSubtypes);
       const out = { live, source: 'ios', scanned: true };
       infoCache.set(baseKey, out);
       schedulePersist();
-      return out;
+      return memPaired && live ? { ...out, pairedVideoUri: memPaired } : out;
     }
     let out = { live: false, source: 'ios', scanned: true };
     let pairedVideoUri = null;
     try {
-      // 网格徽标不触发 iCloud 下载；详情页允许联网拉取配对视频
-      const info = await MediaLibrary.getAssetInfoAsync(assetId, { shouldDownloadFromNetwork: !!full });
-      if (isIosLiveSubtype(info?.mediaSubtypes)) {
-        pairedVideoUri = info.pairedVideoAsset?.localUri || info.pairedVideoAsset?.uri || null;
-        if (pairedVideoUri) iosPairedVideoCache.set(baseKey, pairedVideoUri);
-        out = { live: true, source: 'ios', scanned: true };
+      if (thumbsNative?.getLivePhotoStatusAsync) {
+        const live = !!(await thumbsNative.getLivePhotoStatusAsync(String(assetId)));
+        out = { live, source: 'ios', scanned: true };
+      } else {
+        const info = await MediaLibrary.getAssetInfoAsync(assetId, { shouldDownloadFromNetwork: !!full });
+        if (isIosLiveSubtype(info?.mediaSubtypes)) {
+          pairedVideoUri = info.pairedVideoAsset?.localUri || info.pairedVideoAsset?.uri || null;
+          if (pairedVideoUri) iosPairedVideoCache.set(baseKey, pairedVideoUri);
+          out = { live: true, source: 'ios', scanned: true };
+        }
       }
     } catch (e) {
       console.warn('[livePhoto] iOS 检测失败', e?.message || e);
@@ -354,6 +363,21 @@ export const extractMotionVideo = async (entry, info) => {
       iosPairedVideoCache.delete(key);
     }
     if (normalized.assetId) {
+      // 优先走原生 PhotoKit（PHAssetResourceManager 直接导出 .fullSizePairedVideo / .pairedVideo 到 tmp/），
+      // 避开 expo-media-library 的 requestLivePhoto 二次回调丢视频 Bug
+      if (thumbsNative?.getLivePhotoVideoUriAsync) {
+        try {
+          const nativeUri = await thumbsNative.getLivePhotoVideoUriAsync(String(normalized.assetId));
+          if (nativeUri) {
+            iosPairedVideoCache.set(key, nativeUri);
+            setLivePhotoError(null);
+            return nativeUri;
+          }
+        } catch (e) {
+          console.warn('[livePhoto] 原生获取配对视频失败', e?.message || e);
+          setLivePhotoError(`iOS 获取配对视频失败：${e?.message || e}`);
+        }
+      }
       try {
         const freshInfo = await MediaLibrary.getAssetInfoAsync(normalized.assetId, { shouldDownloadFromNetwork: true });
         const freshUri = freshInfo?.pairedVideoAsset?.localUri || freshInfo?.pairedVideoAsset?.uri || null;

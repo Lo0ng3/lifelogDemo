@@ -897,7 +897,7 @@ export default function HomeScreen({ navigation }) {
 
           <ScrollView
             showsVerticalScrollIndicator={false}
-            bounces={false}
+            bounces={Platform.OS === 'ios'}
             overScrollMode="never"
             contentContainerStyle={[styles.profileScrollContent, { paddingBottom: Math.max(24, insets.bottom + 16) }]}
           >
@@ -1095,7 +1095,7 @@ export default function HomeScreen({ navigation }) {
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(78, insets.bottom + 68) }]}
-              bounces={false}
+              bounces={Platform.OS === 'ios'}
               overScrollMode="never"
               // 行高固定 → 直接给出布局，省掉逐行测量
               getItemLayout={rowItemLayout}

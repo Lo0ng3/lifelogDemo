@@ -132,7 +132,8 @@ function loadThumb(asset) {
 // 预取代次：换相册/重新加载时旧任务自动作废，避免后台白发请求
 let prefetchToken = 0;
 function prefetchThumbs(list, from, count = 30) {
-  if (!Thumbs || !list.length) return;
+  // iOS 上 expo-image 原生直读 ph://（PhotoLibraryAssetLoader 按视口尺寸硬件解码 + 自动取消），无需落盘缩略图
+  if (Platform.OS === 'ios' || !Thumbs || !list.length) return;
   const token = ++prefetchToken;
   const start = Math.max(0, from);
   const end = Math.min(list.length, start + count);
@@ -152,8 +153,13 @@ function useThumbUri(asset) {
   assetRef.current = asset;
   const id = asset?.id;
   const isVideo = asset?.mediaType === 'video';
-  const [uri, setUri] = useState(() => (id ? thumbCache.get(id) : null) || null);
+  const iosUri = Platform.OS === 'ios' ? (asset?.uri || null) : null;
+  const [uri, setUri] = useState(() => iosUri || (id ? thumbCache.get(id) : null) || null);
   useEffect(() => {
+    if (Platform.OS === 'ios') {
+      setUri(iosUri);
+      return undefined;
+    }
     if (!id) return undefined;
     const cached = thumbCache.get(id);
     if (cached) {
@@ -164,8 +170,8 @@ function useThumbUri(asset) {
     setUri(null);  // 复用格子换了资产：先清空，避免串图
     loadThumb(assetRef.current).then(u => { if (alive) setUri(u); }).catch(() => {});
     return () => { alive = false; };
-  }, [id, isVideo]);
-  return uri;
+  }, [id, isVideo, iosUri]);
+  return Platform.OS === 'ios' ? iosUri : uri;
 }
 
 /* ------------------------------------------------------------------ *
@@ -174,7 +180,7 @@ function useThumbUri(asset) {
  * memo + 精确比较：选中某一张时只重绘那一格，其余格子（含正在播的角标、
  * 缩略图）完全不动；这是原来「点一下整屏都重绘」的主要修复点。
  * ------------------------------------------------------------------ */
-const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, onOpen, onToggle }) {
+const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, isLive, onOpen, onToggle }) {
   const styles = useThemedStyles(makeStyles);
   const uri = useThumbUri(asset);
   const showThumb = uri ? (
@@ -202,7 +208,12 @@ const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, o
           <View style={styles.playOverlay}><PlayCircle size={26} color="#FFF" /></View>
           {!!asset.duration && <Text style={styles.duration}>{formatDuration(asset.duration)}</Text>}
         </View>
-      ) : showThumb}
+      ) : (
+        <View style={styles.thumbWrap}>
+          {showThumb}
+          {isLive && <View style={styles.liveTag}><Text style={styles.liveTagText}>实况</Text></View>}
+        </View>
+      )}
       {used ? (
         <View style={styles.usedOverlay}><Text style={styles.usedText}>已添加</Text></View>
       ) : (
@@ -221,7 +232,8 @@ const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, o
   a.index === b.index &&
   a.selected === b.selected &&
   a.used === b.used &&
-  a.isVideo === b.isVideo
+  a.isVideo === b.isVideo &&
+  a.isLive === b.isLive
 ));
 
 /* ------------------------------------------------------------------ *
@@ -664,6 +676,12 @@ export default function MediaPickerScreen({ route, navigation }) {
       selected={selected.has(item.id)}
       used={isUsedElsewhere(item)}
       isVideo={item.mediaType === 'video'}
+      isLive={
+        Platform.OS === 'ios'
+        && item.mediaType !== 'video'
+        && Array.isArray(item.mediaSubtypes)
+        && (item.mediaSubtypes.includes('livePhoto') || item.mediaSubtypes.includes('photoLive'))
+      }
       onOpen={openPreview}
       onToggle={toggle}
     />
@@ -873,6 +891,9 @@ const makeStyles = (c) => ({
   gridWrap: { flex: 1, backgroundColor: c.bgElevated },
   cell: { width: CELL, height: CELL, padding: 1.5 },
   thumb: { flex: 1, borderRadius: 4, backgroundColor: c.mediaPlaceholder },
+  thumbWrap: { flex: 1 },
+  liveTag: { position: 'absolute', left: 5, bottom: 5, backgroundColor: 'rgba(0,0,0,0.58)', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1.5 },
+  liveTagText: { color: '#FFF', fontSize: 9.5, fontWeight: '600' },
   thumbLoading: { backgroundColor: c.mediaPlaceholder },
   videoThumb: { flex: 1, backgroundColor: c.mediaPlaceholder },
   videoBox: { flex: 1, borderRadius: 4, backgroundColor: c.fill, overflow: 'hidden' },

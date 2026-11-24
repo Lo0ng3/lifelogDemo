@@ -17,4 +17,22 @@ export default {
     }
     return native.getAssetFileSizeAsync(String(assetId));
   },
+  getLivePhotoStatusAsync(assetId) {
+    if (Platform.OS !== 'ios' || typeof native?.getLivePhotoStatusAsync !== 'function') {
+      return Promise.resolve(false);
+    }
+    return native.getLivePhotoStatusAsync(String(assetId));
+  },
+  getLivePhotoVideoUriAsync(assetId) {
+    if (Platform.OS !== 'ios' || typeof native?.getLivePhotoVideoUriAsync !== 'function') {
+      return Promise.resolve(null);
+    }
+    return native.getLivePhotoVideoUriAsync(String(assetId));
+  },
+  getPlayableVideoUriAsync(assetId) {
+    if (Platform.OS !== 'ios' || typeof native?.getPlayableVideoUriAsync !== 'function') {
+      return Promise.resolve(null);
+    }
+    return native.getPlayableVideoUriAsync(String(assetId));
+  },
 };

@@ -112,6 +112,18 @@ public class PathsModule: Module {
         promise.resolve(true)
       }
     }.runOnQueue(.main)
+
+    View(LiquidGlassView.self) {
+      Prop("cornerRadius") { (view: LiquidGlassView, value: Double) in
+        view.setCornerRadius(value)
+      }
+      Prop("isDark") { (view: LiquidGlassView, value: Bool) in
+        view.setIsDark(value)
+      }
+      Prop("interactive") { (view: LiquidGlassView, value: Bool) in
+        view.setInteractive(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {
