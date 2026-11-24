@@ -896,9 +896,11 @@ export default function DetailScreen({ route, navigation }) {
   const iconConfig = getIconConfig(item, colors);
   const displayTitle = item.baseType === 'ticket' ? shortTicketTitle(item.title) : item.title;
   const essay = isEssay(item);
+  const ticketNo = item.baseType === 'ticket' ? (item.subtitle || '') : '';
   const noteText = item.baseType === 'ticket'
-    ? (item.comment || item.subtitle || '')
+    ? (item.comment || '')
     : (item.subtitle || item.comment || '');
+  const isPortraitPoster = item.baseType === 'media' && item.coverIndex == null && !!item.coverUrl && (!item.coverRatio || item.coverRatio < 0.85);
   const heroDate = (() => {
     const [datePart, timePart] = String(item.date || '').split(' ');
     const [year, month, day] = datePart.split('-').map(Number);
@@ -946,10 +948,10 @@ export default function DetailScreen({ route, navigation }) {
     <View style={styles.container}>
       <StatusBar style={viewerIndex >= 0 ? 'light' : (isDark ? 'light' : 'dark')} />
 
-      {/* 退出按钮固定在屏幕最上层，不跟着 ScrollView 滚走 */}
-      <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
+      {/* 顶部简洁导航栏：左侧液态玻璃返回键 + 居中轻量类型徽标 */}
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <View style={styles.fixedBack}>
-          <LiquidGlassSurface cornerRadius={20} isDark={isDark} interactive />
+          <LiquidGlassSurface cornerRadius={19} isDark={isDark} interactive />
           <TouchableOpacity
             style={styles.fixedBackBtn}
             onPress={() => navigation.goBack()}
@@ -957,69 +959,88 @@ export default function DetailScreen({ route, navigation }) {
             delayPressIn={0}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <NativeIcon name="chevron.left" fallback={ChevronLeft} size={22} color={colors.text} weight="semibold" />
+            <NativeIcon name="chevron.left" fallback={ChevronLeft} size={20} color={colors.text} weight="semibold" />
           </TouchableOpacity>
         </View>
+        <View style={[styles.topTypePill, { backgroundColor: iconConfig.iconBgColor }]}>
+          <Text style={[styles.topTypeText, { color: iconConfig.iconColor }]}>{labelOf(item)}</Text>
+        </View>
+        <View style={{ width: 38 }} />
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
+        bounces={Platform.OS === 'ios'}
         scrollEnabled={!gridDragging}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(118, insets.bottom + 98) }]}
       >
-        <View style={styles.hero}>
+        {/* 头部信息卡：克制小封面 + 标题 / 日期 / 评分或心情（告别占满半屏的大横幅） */}
+        <View style={styles.headerCard}>
           {coverSource ? (
-            <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={160} cachePolicy="memory-disk" />
+            <TouchableOpacity
+              activeOpacity={item.coverIndex != null ? 0.85 : 1}
+              disabled={item.coverIndex == null}
+              onPress={() => {
+                if (item.coverIndex != null) {
+                  setViewerIndex(item.coverIndex);
+                  setCurrentViewIndex(item.coverIndex);
+                }
+              }}
+              style={[styles.coverThumbWrap, isPortraitPoster && styles.coverThumbPoster]}
+            >
+              <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={160} cachePolicy="memory-disk" />
+            </TouchableOpacity>
           ) : (
-            <View style={[StyleSheet.absoluteFill, styles.heroFallback, { backgroundColor: iconConfig.iconBgColor }]}>
-              <iconConfig.IconComponent color={iconConfig.iconColor} size={64} />
+            <View style={[styles.iconThumb, { backgroundColor: iconConfig.iconBgColor }]}>
+              <iconConfig.IconComponent color={iconConfig.iconColor} size={28} />
             </View>
           )}
-          <View style={styles.heroScrim} />
-          <View style={styles.heroMeta}>
-            <View style={[styles.heroTypePill, { backgroundColor: iconConfig.iconBgColor }]}>
-              <Text style={[styles.heroTypeText, { color: iconConfig.iconColor }]}>{labelOf(item)}</Text>
+
+          <View style={styles.headerInfo}>
+            <Text style={styles.detailTitle} numberOfLines={3}>{displayTitle}</Text>
+            {!!ticketNo && (
+              <View style={styles.ticketNoRow}>
+                <Text style={styles.ticketNoText}>{ticketNo}</Text>
+              </View>
+            )}
+            <Text style={styles.detailDate}>{heroDate}</Text>
+            <View style={styles.reviewRow}>
+              {essay ? (
+                <>
+                  <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
+                  {!!item.weather && <Text style={styles.moodWeather}>· {item.weather}</Text>}
+                </>
+              ) : item.rating ? (
+                <>
+                  {[1, 2, 3, 4, 5].map((i) => {
+                    const isFull = i <= item.rating;
+                    const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
+                    if (isHalf) return <StarHalf key={i} size={16} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
+                    return <Star key={i} size={16} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
+                  })}
+                  <Text style={styles.reviewScore}>{item.rating} 分</Text>
+                </>
+              ) : (
+                <Text style={styles.mutedScore}>未评分</Text>
+              )}
             </View>
-            <Text style={styles.heroDate}>{heroDate}</Text>
           </View>
         </View>
 
-        <View style={styles.sheet}>
-          <View style={styles.grabber} />
-          <Text style={styles.detailTitle}>{displayTitle}</Text>
-          <View style={styles.detailMetaRow}>
-            <Text style={styles.detailDate}>{heroDate}</Text>
+        {/* 正文 / 评论卡 */}
+        {!!noteText && (
+          <View style={styles.noteCard}>
+            <Text style={styles.reviewText}>{noteText}</Text>
           </View>
+        )}
 
-          <View style={styles.reviewRow}>
-            {essay ? (
-              <>
-                <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
-                {!!item.weather && <Text style={styles.moodWeather}>天气 {item.weather}</Text>}
-              </>
-            ) : item.rating ? (
-              <>
-                {[1, 2, 3, 4, 5].map((i) => {
-                  const isFull = i <= item.rating;
-                  const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                  if (isHalf) return <StarHalf key={i} size={18} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
-                  return <Star key={i} size={18} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
-                })}
-                <Text style={styles.reviewScore}>{item.rating} 分</Text>
-              </>
-            ) : (
-              <Text style={styles.mutedScore}>未评分</Text>
-            )}
-          </View>
-
-          {!!noteText && <Text style={styles.reviewText}>{noteText}</Text>}
-
-          {resolvedMedia.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>照片</Text>
-                <Text style={styles.sectionCount}>{resolvedMedia.length} 张</Text>
-              </View>
+        {/* 照片九宫格（首屏即见，长按可拖动排序或设为封面） */}
+        {resolvedMedia.length > 0 && (
+          <View style={styles.mediaCard}>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>照片</Text>
+              <Text style={styles.sectionCount}>{resolvedMedia.length} 张</Text>
+            </View>
             <MediaGrid
               entries={resolvedMedia}
               coverIndex={item.coverIndex}
@@ -1030,25 +1051,8 @@ export default function DetailScreen({ route, navigation }) {
               onReorder={handleMediaReorder}
               onDragChange={setGridDragging}
             />
-            </View>
-          )}
-
-          <View style={styles.infoCard}>
-            <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>类型</Text>
-              <Text style={styles.infoValue}>{labelOf(item)}</Text>
-            </View>
-            <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>{essay ? '心情' : '评分'}</Text>
-              <Text style={styles.infoValue}>{essay ? (item.mood || '—') : (item.rating ? `${item.rating} 分` : '未评分')}</Text>
-            </View>
-            <View style={[styles.infoItem, styles.infoItemLast]}>
-              <Text style={styles.infoLabel}>照片</Text>
-              <Text style={styles.infoValue}>{resolvedMedia.length} 张</Text>
-            </View>
           </View>
-          <View style={{ height: 28 }} />
-        </View>
+        )}
       </ScrollView>
 
       {/* 底部操作条：与底部液态玻璃导航栏统一外观 */}
@@ -1120,59 +1124,55 @@ export default function DetailScreen({ route, navigation }) {
 const makeStyles = (c) => ({
   container: { flex: 1, backgroundColor: c.bg },
   emptyText: { textAlign: 'center', color: c.textMuted, fontSize: 15 },
-  scrollContent: { paddingBottom: 126 },
-  fixedTop: { position: 'absolute', zIndex: 30, top: 0, left: 16, right: 16 },
-  fixedBack: {
-    width: 40, height: 40, borderRadius: 20, overflow: 'hidden',
-    shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18, shadowRadius: 10, elevation: 5,
-  },
-  fixedBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  hero: { height: 320, overflow: 'hidden', backgroundColor: c.bgElevated },
-  heroFallback: { alignItems: 'center', justifyContent: 'center' },
-  heroScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
-  heroMeta: {
-    position: 'absolute', left: 18, right: 18, bottom: 42,
+  topBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 10, backgroundColor: c.bg,
   },
-  heroTypePill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  heroTypeText: { fontSize: 10.5, fontWeight: '600' },
-  heroDate: {
-    color: 'rgba(255,255,255,0.94)', fontSize: 11, fontWeight: '600',
-    textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 4,
+  fixedBack: {
+    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1, shadowRadius: 8, elevation: 3,
   },
-  sheet: {
-    marginTop: -28, backgroundColor: c.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    paddingHorizontal: 20, paddingTop: 10, minHeight: 520,
+  fixedBackBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+  topTypePill: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
+  topTypeText: { fontSize: 12.5, fontWeight: '600' },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 4, gap: 14 },
+  headerCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: c.bgElevated, borderRadius: 20, padding: 16,
   },
-  grabber: {
-    width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 14,
-    backgroundColor: c.sheetHandle, opacity: 0.6,
+  coverThumbWrap: {
+    width: 84, height: 84, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: c.mediaPlaceholder, flexShrink: 0,
   },
-  detailTitle: { fontSize: 28, lineHeight: 34, fontWeight: '800', letterSpacing: -1, color: c.textStrong },
-  detailMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 10 },
-  detailDate: { fontSize: 11.5, color: c.textMuted },
-  reviewRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 12, minHeight: 24 },
-  reviewScore: { marginLeft: 8, fontSize: 12, fontWeight: '700', color: c.textSecondary },
-  mutedScore: { fontSize: 12, color: c.textMuted },
-  moodEmoji: { fontSize: 24, lineHeight: 30, marginRight: 6 },
+  coverThumbPoster: { width: 74, height: 104, borderRadius: 12 },
+  iconThumb: {
+    width: 64, height: 64, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  headerInfo: { flex: 1, minWidth: 0 },
+  detailTitle: { fontSize: 21, lineHeight: 27, fontWeight: '700', letterSpacing: -0.4, color: c.textStrong },
+  ticketNoRow: { flexDirection: 'row', marginTop: 4 },
+  ticketNoText: {
+    fontSize: 12, fontWeight: '600', color: c.textSecondary,
+    backgroundColor: c.bgSunken, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, overflow: 'hidden',
+  },
+  detailDate: { fontSize: 13, color: c.textMuted, marginTop: 5 },
+  reviewRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 8, minHeight: 22 },
+  reviewScore: { marginLeft: 6, fontSize: 13, fontWeight: '700', color: c.textSecondary },
+  mutedScore: { fontSize: 12.5, color: c.textMuted },
+  moodEmoji: { fontSize: 20, lineHeight: 24, marginRight: 4 },
   moodWeather: { fontSize: 13, color: c.textSecondary },
-  reviewText: { fontSize: 15.5, color: c.text, lineHeight: 23, marginBottom: 18 },
-  section: { marginTop: 4 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  sectionTitle: { fontSize: 14, fontWeight: '700', color: c.text },
-  sectionCount: { fontSize: 10, color: c.textMuted },
-  infoCard: {
-    flexDirection: 'row', backgroundColor: c.bgElevated, borderRadius: 16,
-    paddingVertical: 12, marginTop: 16,
+  noteCard: {
+    backgroundColor: c.bgElevated, borderRadius: 18, paddingHorizontal: 18, paddingVertical: 16,
   },
-  infoItem: {
-    flex: 1, alignItems: 'center', gap: 3,
-    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.divider,
+  reviewText: { fontSize: 15.5, color: c.text, lineHeight: 25 },
+  mediaCard: {
+    backgroundColor: c.bgElevated, borderRadius: 18, padding: 14,
   },
-  infoItemLast: { borderRightWidth: 0 },
-  infoLabel: { fontSize: 9.5, color: c.textMuted },
-  infoValue: { fontSize: 12, fontWeight: '600', color: c.text },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 2 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: c.text },
+  sectionCount: { fontSize: 13, color: c.textMuted },
   actionWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 35 },
   actionShadow: {
     width: 232, height: 60, borderRadius: 30,

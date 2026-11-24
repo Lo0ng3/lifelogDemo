@@ -30,6 +30,7 @@ import { LogContext } from '../context/LogContext';
 import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
+import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
@@ -65,6 +66,12 @@ const VIEWS = [
   { id: 'map', label: '地图' },
 ];
 const VIEW_LABELS = VIEWS.map((v) => v.label);
+const APPEARANCE_MODES = [
+  { id: 'light', label: '浅色' },
+  { id: 'dark', label: '深色' },
+  { id: 'auto', label: '自动' },
+];
+const APPEARANCE_LABELS = APPEARANCE_MODES.map((m) => m.label);
 
 // 「清理缓存」二级选项：每一项都能单独勾，都是可再生内容
 const CACHE_TARGETS = [
@@ -947,15 +954,18 @@ export default function HomeScreen({ navigation }) {
       >
         <View style={[styles.sidebarContent, { paddingTop: insets.top + 8 }]}>
           <View style={styles.profileTopbar}>
-            <TouchableOpacity
-              style={styles.profileBack}
-              onPress={() => toggleSidebar(false)}
-              delayPressIn={0}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <NativeIcon name="chevron.left" fallback={ChevronLeft} size={20} color={colors.text} weight="semibold" />
-            </TouchableOpacity>
-            <View style={{ flex: 1 }} />
+            <View style={styles.profileBackWrap}>
+              <LiquidGlassSurface cornerRadius={19} isDark={isDark} interactive />
+              <TouchableOpacity
+                style={styles.profileBack}
+                onPress={() => toggleSidebar(false)}
+                delayPressIn={0}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <NativeIcon name="chevron.left" fallback={ChevronLeft} size={20} color={colors.text} weight="semibold" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.profileTopTitle}>我的</Text>
             <View style={{ width: 38 }} />
           </View>
 
@@ -964,15 +974,15 @@ export default function HomeScreen({ navigation }) {
             bounces={Platform.OS === 'ios'}
             overScrollMode="never"
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={[styles.profileScrollContent, { paddingBottom: Math.max(24, insets.bottom + 16) }]}
+            contentContainerStyle={[styles.profileScrollContent, { paddingBottom: Math.max(32, insets.bottom + 24) }]}
           >
             <View style={styles.profileCard}>
               <View style={styles.profileIdentity}>
-                <TouchableOpacity style={styles.profileAvatar} onPress={pickProfileAvatar} activeOpacity={0.82}>
+                <TouchableOpacity style={styles.profileAvatar} onPress={pickProfileAvatar} activeOpacity={0.82} delayPressIn={0}>
                   {profileAvatarUri ? (
                     <Image source={{ uri: profileAvatarUri }} style={styles.profileAvatarImage} contentFit="cover" />
                   ) : (
-                    <NativeIcon name="person.fill" fallback={User} size={24} color={colors.textOnAccent} />
+                    <NativeIcon name="person.fill" fallback={User} size={28} color={colors.textOnAccent} />
                   )}
                   <View style={styles.avatarEditBadge}>
                     <NativeIcon name="pencil" fallback={Pencil} size={10} color="#FFF" weight="bold" />
@@ -980,9 +990,10 @@ export default function HomeScreen({ navigation }) {
                 </TouchableOpacity>
                 <View style={styles.profileCopy}>
                   <TouchableOpacity style={styles.profileNameRow} onPress={openNameEditor} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}>
-                    <Text style={styles.profileName}>{profileName}</Text>
+                    <Text style={styles.profileName} numberOfLines={1}>{profileName}</Text>
                     <NativeIcon name="pencil" fallback={Pencil} size={14} color={colors.textMuted} />
                   </TouchableOpacity>
+                  <Text style={styles.profileSub}>点头像更换照片，点名字修改昵称</Text>
                 </View>
               </View>
               <View style={styles.profileStats}>
@@ -1001,117 +1012,130 @@ export default function HomeScreen({ navigation }) {
               </View>
             </View>
 
+            <Text style={styles.groupLabel}>外观</Text>
+            <View style={styles.appearanceCard}>
+              {hasNativeSegmentedControl ? (
+                <View style={styles.appearanceNativeRow}>
+                  <Text style={styles.appearanceNativeLabel}>显示模式</Text>
+                  <NativeSegmentedControl
+                    segments={APPEARANCE_LABELS}
+                    selectedIndex={Math.max(0, APPEARANCE_MODES.findIndex((o) => o.id === mode))}
+                    isDark={isDark}
+                    onChange={(idx) => {
+                      const next = APPEARANCE_MODES[idx];
+                      if (next) {
+                        hapticSelection();
+                        setMode(next.id);
+                      }
+                    }}
+                    style={styles.appearanceNativeSeg}
+                  />
+                </View>
+              ) : (
+                <View style={styles.appearanceOptions}>
+                  {APPEARANCE_MODES.map((option) => {
+                    const on = mode === option.id;
+                    return (
+                      <TouchableOpacity
+                        key={option.id}
+                        style={[styles.appearanceOption, on && styles.appearanceOptionOn]}
+                        onPress={() => { hapticSelection(); setMode(option.id); }}
+                        activeOpacity={0.75}
+                        delayPressIn={0}
+                        accessibilityRole="button"
+                      >
+                        <Text style={[styles.appearanceOptionText, on && styles.appearanceOptionTextOn]}>{option.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
             <Text style={styles.groupLabel}>记录与同步</Text>
             <View style={styles.menuCard}>
-              <TouchableOpacity style={styles.menuItem} onPress={openSettings} delayPressIn={0}>
+              <TouchableOpacity style={styles.menuItem} onPress={openSettings} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
                   <NativeIcon name="gearshape.fill" fallback={Settings} size={17} color={colors.accent} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>地图服务</Text>
-                  <Text style={styles.menuItemSub}>
+                  <Text style={styles.menuItemSub} numberOfLines={1}>
                     {mapProvider === 'amap'
-                      ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 地名检索已配置' : ' · 未配置检索 Key'}`
+                      ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 已配检索' : ''}`
                       : (tdtKey ? '天地图已配置' : '天地图未配置')}
                   </Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing} delayPressIn={0}>
+              <View style={styles.menuInsetDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.groupNoteSoft }]}>
                   <NativeIcon name="arrow.triangle.2.circlepath" fallback={RefreshCw} size={16} color={colors.groupNote} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>{syncing ? '正在同步…' : '同步相册照片'}</Text>
-                  <Text style={styles.menuItemSub}>重新关联原片</Text>
+                  <Text style={styles.menuItemSub}>重新关联相册原片并清理孤儿副本</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup} delayPressIn={0}>
+              <View style={styles.menuInsetDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={handleExportBackup} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.iconTrip }]}>
                   <NativeIcon name="square.and.arrow.up" fallback={Upload} size={17} color={colors.orange} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>导出备份</Text>
-                  <Text style={styles.menuItemSub}>全部记录与封面</Text>
+                  <Text style={styles.menuItemSub}>全部记录、封面与地图配置</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.menuItem, styles.menuItemLast]} onPress={handleImportBackup} delayPressIn={0}>
+              <View style={styles.menuInsetDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={handleImportBackup} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
                   <NativeIcon name="square.and.arrow.down" fallback={Download} size={17} color={colors.accent} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>导入备份</Text>
-                  <Text style={styles.menuItemSub}>覆盖或合并本地记录</Text>
+                  <Text style={styles.menuItemSub}>合并去重或覆盖恢复本地记录</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.groupLabel}>外观</Text>
-            <View style={styles.appearanceCard}>
-              <View style={styles.appearanceOptions}>
-                {[
-                  { id: 'light', label: '浅色' },
-                  { id: 'dark', label: '深色' },
-                  { id: 'auto', label: '自动' },
-                ].map((option) => {
-                  const on = mode === option.id;
-                  return (
-                    <TouchableOpacity
-                      key={option.id}
-                      style={[styles.appearanceOption, on && styles.appearanceOptionOn]}
-                      onPress={() => { hapticSelection(); setMode(option.id); }}
-                      activeOpacity={0.75}
-                      delayPressIn={0}
-                      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-                      accessibilityRole="button"
-                    >
-                      <View style={[
-                        styles.appearanceSwatch,
-                        option.id === 'light' && styles.appearanceSwatchLight,
-                        option.id === 'dark' && styles.appearanceSwatchDark,
-                        option.id === 'auto' && styles.appearanceSwatchAuto,
-                      ]} />
-                      <Text style={[styles.appearanceOptionText, on && styles.appearanceOptionTextOn]}>{option.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
-            <Text style={styles.groupLabel}>数据</Text>
+            <Text style={styles.groupLabel}>存储与帮助</Text>
             <View style={styles.menuCard}>
-              <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache} delayPressIn={0}>
+              <TouchableOpacity style={styles.menuItem} onPress={handleCleanCache} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
                   <NativeIcon name="trash" fallback={Eraser} size={16} color={colors.textSecondary} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>清理缓存</Text>
-                  <Text style={styles.menuItemSub}>封面、图片与地图缓存</Text>
+                  <Text style={styles.menuItemSub}>封面帧、图片与地图缓存</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.menuItem} onPress={handleShowStorage} delayPressIn={0}>
+              <View style={styles.menuInsetDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={handleShowStorage} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
                   <NativeIcon name="folder" fallback={FolderOpen} size={16} color={colors.textSecondary} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>数据目录</Text>
-                  <Text style={styles.menuItemSub}>查看副本与封面位置</Text>
+                  <Text style={styles.menuItemSub}>查看存储位置与空间明细</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.menuItem, styles.menuItemLast]} onPress={() => { toggleSidebar(false); setHelpOpen(true); }} delayPressIn={0}>
+              <View style={styles.menuInsetDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={() => { toggleSidebar(false); setHelpOpen(true); }} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
                   <NativeIcon name="questionmark.circle" fallback={HelpCircle} size={17} color={colors.textSecondary} />
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>使用说明</Text>
-                  <Text style={styles.menuItemSub}>视图、相册与备份</Text>
+                  <Text style={styles.menuItemSub}>视图、相册直读与备份指南</Text>
                 </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textFaint} weight="semibold" />
+                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
             </View>
 
@@ -1505,50 +1529,46 @@ const makeStyles = (c) => ({
   sidebarOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.scrim, zIndex: 99 },
   sidebar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: SIDEBAR_WIDTH, backgroundColor: c.bg, zIndex: 100 },
   sidebarContent: { flex: 1 },
-  profileTopbar: { height: 44, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  profileBack: {
-    width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.fill,
+  profileTopbar: { height: 48, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  profileTopTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
+  profileBackWrap: {
+    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6, elevation: 2,
   },
-  profileScrollContent: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 24 },
-  profileCard: { backgroundColor: c.bgElevated, borderRadius: 24, padding: 18, paddingBottom: 15 },
-  profileIdentity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  profileBack: {
+    width: 38, height: 38, alignItems: 'center', justifyContent: 'center',
+  },
+  profileScrollContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 32 },
+  profileCard: { backgroundColor: c.bgElevated, borderRadius: 20, padding: 18, paddingBottom: 16 },
+  profileIdentity: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   profileAvatar: {
-    width: 55, height: 55, borderRadius: 28, backgroundColor: c.accent,
+    width: 64, height: 64, borderRadius: 32, backgroundColor: c.accent,
     alignItems: 'center', justifyContent: 'center',
   },
-  profileAvatarImage: { width: 55, height: 55, borderRadius: 28 },
+  profileAvatarImage: { width: 64, height: 64, borderRadius: 32 },
   avatarEditBadge: {
-    position: 'absolute', right: -2, bottom: -2, width: 19, height: 19, borderRadius: 10,
+    position: 'absolute', right: -1, bottom: -1, width: 22, height: 22, borderRadius: 11,
     backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center',
     borderWidth: 2, borderColor: c.bgElevated,
   },
-  profileCopy: { flex: 1, gap: 3 },
+  profileCopy: { flex: 1, gap: 4 },
   profileNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   profileName: { fontSize: 21, fontWeight: '700', color: c.textStrong, letterSpacing: -0.3 },
-  profileCopyTitle: { fontSize: 13, fontWeight: '700', color: c.textStrong, letterSpacing: -0.2 },
-  profileCopyMeta: { fontSize: 9.5, color: c.textMuted },
+  profileSub: { fontSize: 12.5, color: c.textMuted },
   profileStats: {
-    flexDirection: 'row', marginTop: 14, paddingTop: 14,
+    flexDirection: 'row', marginTop: 16, paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider,
   },
   profileStat: {
-    flex: 1, alignItems: 'center', gap: 2,
+    flex: 1, alignItems: 'center', gap: 3,
     borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.divider,
   },
   profileStatLast: { borderRightWidth: 0 },
-  profileStatNum: { fontSize: 18, lineHeight: 21, fontWeight: '800', color: c.textStrong },
-  profileStatLabel: { fontSize: 8.5, color: c.textMuted },
-  groupLabel: { marginTop: 18, marginBottom: 7, paddingHorizontal: 3, fontSize: 10, fontWeight: '600', color: c.textMuted },
-  menuCard: { backgroundColor: c.bgElevated, borderRadius: 19, overflow: 'hidden' },
-  sidebarHeader: { alignItems: 'center', marginBottom: 30 },
-  largeAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
-  userName: { fontSize: 18, fontWeight: 'bold', color: c.text },
-  statsRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 30 },
-  statItem: { alignItems: 'center' },
-  statNum: { fontSize: 20, fontWeight: 'bold', color: c.text },
-  statLabel: { fontSize: 12, color: c.textMuted, marginTop: 4 },
-  sidebarMenu: { borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  profileStatNum: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: c.textStrong, fontVariant: ['tabular-nums'] },
+  profileStatLabel: { fontSize: 12, color: c.textMuted },
+  groupLabel: { marginTop: 22, marginBottom: 8, paddingHorizontal: 12, fontSize: 13, fontWeight: '500', color: c.textMuted },
+  menuCard: { backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden' },
   syncPill: {
     position: 'absolute', left: 40, right: 40, bottom: 28,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -1556,27 +1576,27 @@ const makeStyles = (c) => ({
   },
   syncPillText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
   menuItem: {
-    minHeight: 55, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider,
+    minHeight: 58, paddingHorizontal: 16, paddingVertical: 11, flexDirection: 'row', alignItems: 'center',
   },
-  menuItemLast: { borderBottomWidth: 0 },
-  menuIconBox: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  menuInsetDivider: {
+    height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 60,
+  },
+  menuIconBox: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   menuCopy: { flex: 1, gap: 2 },
-  menuItemText: { fontSize: 12, fontWeight: '600', color: c.text },
-  menuItemSub: { fontSize: 8.5, color: c.textMuted, marginTop: 1 },
-  appearanceCard: { backgroundColor: c.bgElevated, borderRadius: 19, padding: 11 },
-  appearanceOptions: { flexDirection: 'row', gap: 5 },
+  menuItemText: { fontSize: 15.5, fontWeight: '500', color: c.text },
+  menuItemSub: { fontSize: 12.5, color: c.textMuted, marginTop: 1 },
+  appearanceCard: { backgroundColor: c.bgElevated, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12 },
+  appearanceNativeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  appearanceNativeLabel: { fontSize: 15.5, fontWeight: '500', color: c.text },
+  appearanceNativeSeg: { width: 174, height: 32 },
+  appearanceOptions: { flexDirection: 'row', gap: 8 },
   appearanceOption: {
-    flex: 1, height: 66, borderRadius: 12, borderWidth: 1, borderColor: c.border,
-    backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center', gap: 5,
+    flex: 1, height: 38, borderRadius: 10, borderWidth: 1, borderColor: c.border,
+    backgroundColor: c.bgSunken, alignItems: 'center', justifyContent: 'center',
   },
   appearanceOptionOn: { borderColor: c.accent, backgroundColor: c.accentSoft },
-  appearanceOptionText: { fontSize: 9, color: c.textSecondary },
+  appearanceOptionText: { fontSize: 13.5, color: c.textSecondary, fontWeight: '500' },
   appearanceOptionTextOn: { color: c.accent, fontWeight: '600' },
-  appearanceSwatch: { width: 34, height: 28, borderRadius: 7, backgroundColor: c.fillStrong },
-  appearanceSwatchLight: { backgroundColor: '#F2F5FA' },
-  appearanceSwatchDark: { backgroundColor: '#141922' },
-  appearanceSwatchAuto: { backgroundColor: '#7C8797' },
   nameOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'center', alignItems: 'center', padding: 32 },
   nameCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 16, padding: 18 },
   nameTitle: { fontSize: 17, fontWeight: '600', color: c.text, marginBottom: 14 },
@@ -1590,7 +1610,7 @@ const makeStyles = (c) => ({
   nameBtnCancelText: { fontSize: 14, color: c.textSecondary },
   nameBtnSave: { backgroundColor: c.accent },
   nameBtnSaveText: { fontSize: 14, fontWeight: '600', color: c.textOnAccent },
-  version: { textAlign: 'center', color: c.textMuted, fontSize: 8.5, marginTop: 19, marginBottom: 4 },
+  version: { textAlign: 'center', color: c.textMuted, fontSize: 12, marginTop: 24, marginBottom: 4 },
   themeRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, marginBottom: 2, gap: 6 },
   themeChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border },
   themeChipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
