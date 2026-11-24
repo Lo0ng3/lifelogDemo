@@ -914,7 +914,7 @@ export default function AddScreen({ navigation, route }) {
         </View>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
-          style={[styles.headerSavePill, saving && styles.headerSavePillDisabled]}
+          style={[styles.headerSavePill, Platform.OS === 'ios' && styles.headerSavePillGlass, saving && styles.headerSavePillDisabled]}
           delayPressIn={0}
           onPress={() => { Keyboard.dismiss(); handleSave(); }}
           disabled={saving}
@@ -922,10 +922,11 @@ export default function AddScreen({ navigation, route }) {
           accessibilityRole="button"
           accessibilityLabel="保存"
         >
+          {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
           {saving ? (
-            <ActivityIndicator size="small" color={colors.textOnAccent} />
+            <ActivityIndicator size="small" color={Platform.OS === 'ios' ? colors.accent : colors.textOnAccent} />
           ) : (
-            <Text style={styles.headerSaveText}>保存</Text>
+            <Text style={[styles.headerSaveText, Platform.OS === 'ios' && { color: colors.accent }]}>保存</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -1546,15 +1547,19 @@ const makeStyles = (c) => ({
     paddingHorizontal: 16, paddingVertical: 10,
   },
   headerBackWrap: {
-    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    width: 38, height: 38, borderRadius: 19,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
     shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08, shadowRadius: 6, elevation: 2,
+    shadowOpacity: Platform.OS === 'ios' ? 0.06 : 0.08, shadowRadius: 6, elevation: 2,
   },
   headerBackBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
   headerSavePill: {
     height: 36, minWidth: 64, paddingHorizontal: 16, borderRadius: 18,
     backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center',
+  },
+  headerSavePillGlass: {
+    backgroundColor: 'transparent',
   },
   headerSavePillDisabled: { opacity: 0.65 },
   headerSaveText: { fontSize: 14.5, fontWeight: '600', color: c.textOnAccent },

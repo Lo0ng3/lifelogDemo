@@ -875,7 +875,6 @@ export default function HomeScreen({ navigation }) {
   }, [viewMode, mapFade]);
   const mapLayerStyle = useAnimatedStyle(() => ({
     opacity: mapFade.value,
-    transform: [{ translateY: (1 - mapFade.value) * 8 }],
   }));
 
   /* 全屏时地图「横过来」的几何：
@@ -1147,12 +1146,18 @@ export default function HomeScreen({ navigation }) {
       <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
           <TouchableOpacity
-            style={styles.profileBtn}
+            style={[styles.profileBtn, Platform.OS === 'ios' && styles.profileBtnGlass]}
             onPress={() => { hapticSelection(); toggleSidebar(true); }}
             delayPressIn={0}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <NativeIcon name="person.fill" fallback={User} color={colors.textOnAccent} size={18} />
+            {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
+            <NativeIcon
+              name="person.fill"
+              fallback={User}
+              color={Platform.OS === 'ios' ? colors.accent : colors.textOnAccent}
+              size={18}
+            />
           </TouchableOpacity>
           <ViewSwitcher value={pillMode} onChange={changeView} />
           <View style={{ width: 36 }} /> 
@@ -1180,11 +1185,16 @@ export default function HomeScreen({ navigation }) {
               )}
             </View>
             <TouchableOpacity
-              style={[styles.filterBtn, activeFilters.length > 0 && styles.filterBtnActive]}
+              style={[
+                styles.filterBtn,
+                Platform.OS === 'ios' && styles.filterBtnGlass,
+                Platform.OS !== 'ios' && activeFilters.length > 0 && styles.filterBtnActive,
+              ]}
               onPress={() => { hapticSelection(); Keyboard.dismiss(); filterSheetRef.current?.present(); }}
               delayPressIn={0}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
+              {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
               <NativeIcon
                 name="line.3.horizontal.decrease"
                 fallback={ListFilter}
@@ -1205,7 +1215,14 @@ export default function HomeScreen({ navigation }) {
           collapsable={false}
           onLayout={() => setTimeout(measureMapRect, 0)}
         >
-        <Reanimated.View style={[styles.listWrapper, viewMode !== 'list' && styles.hiddenView, viewFadeStyle]}>
+        <Reanimated.View
+          style={[
+            styles.listWrapper,
+            { marginBottom: Math.max(88, insets.bottom + 66) },
+            viewMode !== 'list' && styles.hiddenView,
+            viewFadeStyle,
+          ]}
+        >
           {/* 首页列表整体淡入，避免进入页面时的生硬闪现 */}
           <Reanimated.View entering={FadeIn.duration(250)} style={{ flex: 1 }}>
             <FlatList
@@ -1213,7 +1230,7 @@ export default function HomeScreen({ navigation }) {
               keyExtractor={rowKeyExtractor}
               renderItem={renderItem}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(78, insets.bottom + 68) }]}
+              contentContainerStyle={styles.listContent}
               bounces={Platform.OS === 'ios'}
               overScrollMode="never"
               keyboardShouldPersistTaps="handled"
@@ -1234,8 +1251,15 @@ export default function HomeScreen({ navigation }) {
           </Reanimated.View>
         </Reanimated.View>
 
-        {/* 月示图：日历 + 当月 / 当日时间线（行与列表同一套，右滑同样能改 / 删） */}
-        <Reanimated.View style={[styles.monthWrapper, viewMode !== 'month' && styles.hiddenView, viewFadeStyle]}>
+        {/* 月示图：日历 + 当月 / 当日时间线 */}
+        <Reanimated.View
+          style={[
+            styles.monthWrapper,
+            { marginBottom: Math.max(88, insets.bottom + 66) },
+            viewMode !== 'month' && styles.hiddenView,
+            viewFadeStyle,
+          ]}
+        >
           <MonthView
             records={sortedData}
             onPressItem={openDetail}
@@ -1264,7 +1288,7 @@ export default function HomeScreen({ navigation }) {
                 ref={mapRef}
                 originWhitelist={['*']}
                 source={mapSource}
-                style={styles.map}
+                style={[styles.map, { backgroundColor: mapPalette.map.bg }]}
                 scrollEnabled={false}
                 bounces={false}
                 allowsInlineMediaPlayback
@@ -1491,9 +1515,10 @@ const makeStyles = (c) => ({
   // 全屏时让页面主体压过侧边栏（地图铺满整屏后，侧边栏/遮罩还在同一层里）
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, height: 44 },
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
+  profileBtnGlass: { backgroundColor: 'transparent' },
   largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
   segmentedControl: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: 9, padding: 2, width: 204 },
-  nativeSegmented: { width: 210, height: 32 },
+  nativeSegmented: { width: 210, height: 34 },
   // 药丸不要挂 elevation/阴影：Android 上移动的阴影每帧都要重画，高亮滑动会一顿一顿的
   segmentPill: { position: 'absolute', left: 2, top: 2, bottom: 2, borderRadius: 7, backgroundColor: c.bgElevated,
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
@@ -1504,14 +1529,15 @@ const makeStyles = (c) => ({
   searchContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: c.fill, borderRadius: 10, paddingHorizontal: 10, height: 36, marginRight: 10 },
   searchInput: { flex: 1, fontSize: 14, color: c.text, paddingVertical: 0 },
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
+  filterBtnGlass: { backgroundColor: 'transparent' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
   listWrapper: {
-    flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 0,
+    flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4,
     borderRadius: 16, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  listContent: { paddingBottom: 78 },
-  monthWrapper: { flex: 1, marginTop: 2, marginBottom: 0 },
+  listContent: { paddingBottom: 12 },
+  monthWrapper: { flex: 1, marginTop: 2 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
   // 全屏时把承载地图的容器抬到最上层：地图层靠负的四周补偿撑满整屏，
@@ -1535,9 +1561,10 @@ const makeStyles = (c) => ({
   profileTopbar: { height: 48, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   profileTopTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
   profileBackWrap: {
-    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    width: 38, height: 38, borderRadius: 19,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
     shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08, shadowRadius: 6, elevation: 2,
+    shadowOpacity: Platform.OS === 'ios' ? 0.06 : 0.08, shadowRadius: 6, elevation: 2,
   },
   profileBack: {
     width: 38, height: 38, alignItems: 'center', justifyContent: 'center',

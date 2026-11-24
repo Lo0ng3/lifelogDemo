@@ -1,6 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Platform, StyleSheet } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
@@ -69,8 +68,7 @@ const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, 
  * 月示图：上半是日历（圆点按一级类型着色），下半是当月 / 当日时间线。
  * 左右滑动日历换月；点日期只看当天，再点一次回到整月。
  * ------------------------------------------------------------------ */
-export default function MonthView({ records, onPressItem, onEditItem, onDeleteItem }) {
-  const insets = useSafeAreaInsets();
+export default function MonthView({ records, onPressItem }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
@@ -250,11 +248,9 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
         item={row.item}
         isLast={isLast}
         onPress={onPressItem}
-        onEdit={onEditItem}
-        onDelete={onDeleteItem}
       />
     );
-  }, [onPressItem, onEditItem, onDeleteItem, timeline, styles]);
+  }, [onPressItem, timeline, styles]);
 
   return (
     <View style={styles.container}>
@@ -325,7 +321,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           updateCellsBatchingPeriod={24}
           removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
-          contentContainerStyle={[styles.tlContent, { paddingBottom: Math.max(78, insets.bottom + 68) }]}
+          contentContainerStyle={styles.tlContent}
           ListHeaderComponent={(
             <GestureDetector gesture={swipeMonth}>
               <Reanimated.View
@@ -452,7 +448,7 @@ const makeStyles = (c) => ({
     flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  tlContent: { paddingBottom: 78 },
+  tlContent: { paddingBottom: 16 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },
 });

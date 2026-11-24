@@ -22,10 +22,9 @@ import Animated, {
 import { LogContext } from '../context/LogContext';
 import { getIconConfig } from '../utils/icons';
 import { isEssay, labelOf } from '../utils/recordMeta';
-import { normalizeMediaEntry, resolveMediaUri, resolvePlayableVideoUri, getVideoPoster, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, downloadRemoteCoverVariants, mediaSignature } from '../utils/media';
+import { normalizeMediaEntry, resolveMediaUri, resolvePlayableVideoUri, getVideoPoster, getVideoThumbnail, isVideoEntry, remoteImageSource, downscaleCover, mediaSignature } from '../utils/media';
 import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
-import { fetchSuggestions, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { hapticLight, hapticSelection, hapticWarning } from '../utils/haptics';
 
@@ -768,17 +767,21 @@ export default function DetailScreen({ route, navigation }) {
     return () => clearInterval(timer);
   }, [resolvedMedia.length, item?.id]);
 
-  // 封面：手动设置（coverIndex）的相册图优先，其次豆瓣海报
+  // 封面：优先直接用已生成的 360px 缩略图（coverThumbUrl），其次相册自选图 / 封面地址
   const coverEntry = item?.coverIndex != null ? resolvedMedia[item.coverIndex] : null;
   const [coverUri, setCoverUri] = useState(null);
   useEffect(() => {
     let alive = true;
-    if (coverEntry) resolveMediaUri(coverEntry).then(u => { if (alive) setCoverUri(u); });
+    if (coverEntry && !item?.coverThumbUrl) {
+      resolveMediaUri(coverEntry).then(u => { if (alive) setCoverUri(u); });
+    } else {
+      setCoverUri(null);
+    }
     return () => { alive = false; };
-  }, [coverEntry]);
-  const coverSource = coverUri
-    ? { uri: coverUri }
-    : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null);
+  }, [coverEntry, item?.coverThumbUrl]);
+  const coverSource = item?.coverThumbUrl
+    ? remoteImageSource(item.coverThumbUrl)
+    : (coverUri ? { uri: coverUri } : (item?.coverUrl ? remoteImageSource(item.coverUrl) : null));
 
   const itemIdRef = useRef(item?.id);
   itemIdRef.current = item?.id;
@@ -790,28 +793,6 @@ export default function DetailScreen({ route, navigation }) {
       saveVideoPosterRef.current?.(itemIdRef.current, entry, poster);
     }
   }, []);
-
-  // 1.9.5 及更早的爬取封面只存了 360px 小图。新记录会同时存高清封面 + 列表缩略图；
-  // 老记录在第一次打开详情时后台补一次高清封面，不挡当前页面渲染。
-  const coverUpgradeRef = useRef(new Set());
-  useEffect(() => {
-    if (!item || item.baseType !== 'media' || !item.coverUrl || item.coverThumbUrl || item.localImages?.length) return undefined;
-    if (coverUpgradeRef.current.has(item.id)) return undefined;
-    coverUpgradeRef.current.add(item.id);
-    let alive = true;
-    const timer = setTimeout(async () => {
-      try {
-        const results = await withTimeout(fetchSuggestions(item.title, item.subType));
-        const artwork = results[0]?.artwork;
-        if (!artwork) return;
-        const cover = await withTimeout(downloadRemoteCoverVariants(artwork), 12000);
-        if (alive && cover.coverUrl && cover.coverUrl !== item.coverUrl) {
-          updateLog({ ...item, coverUrl: cover.coverUrl, coverThumbUrl: cover.coverThumbUrl });
-        }
-      } catch {}
-    }, 900);
-    return () => { alive = false; clearTimeout(timer); };
-  }, [item, updateLog]);
 
   // 封面：长按九宫格里任意一张设为/取消封面，记录在 coverIndex 上。
   // 设为封面时同步生成小图文件（covers/ 目录），列表/详情直接显示，重启无需重新解析相册
@@ -962,7 +943,8 @@ export default function DetailScreen({ route, navigation }) {
             <NativeIcon name="chevron.left" fallback={ChevronLeft} size={20} color={colors.text} weight="semibold" />
           </TouchableOpacity>
         </View>
-        <View style={[styles.topTypePill, { backgroundColor: iconConfig.iconBgColor }]}>
+        <View style={[styles.topTypePill, Platform.OS !== 'ios' && { backgroundColor: iconConfig.iconBgColor }]}>
+          {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={14} isDark={isDark} interactive={false} />}
           <Text style={[styles.topTypeText, { color: iconConfig.iconColor }]}>{labelOf(item)}</Text>
         </View>
         <View style={{ width: 38 }} />
@@ -1129,12 +1111,16 @@ const makeStyles = (c) => ({
     paddingHorizontal: 16, paddingBottom: 10, backgroundColor: c.bg,
   },
   fixedBack: {
-    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    width: 38, height: 38, borderRadius: 19,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
     shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 3,
+    shadowOpacity: Platform.OS === 'ios' ? 0.06 : 0.1, shadowRadius: 8, elevation: 3,
   },
   fixedBackBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  topTypePill: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
+  topTypePill: {
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14,
+    justifyContent: 'center', alignItems: 'center',
+  },
   topTypeText: { fontSize: 12.5, fontWeight: '600' },
   scrollContent: { paddingHorizontal: 16, paddingTop: 4, gap: 14 },
   headerCard: {
@@ -1180,10 +1166,13 @@ const makeStyles = (c) => ({
   actionWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 35 },
   actionShadow: {
     width: 232, height: 60, borderRadius: 30,
-    shadowColor: c.shadow, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.18, shadowRadius: 22, elevation: 9,
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: Platform.OS === 'ios' ? 0.09 : 0.18, shadowRadius: 22, elevation: 9,
   },
   actionBar: {
-    width: 232, height: 60, borderRadius: 30, overflow: 'hidden', flexDirection: 'row', alignItems: 'center',
+    width: 232, height: 60, borderRadius: 30,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
+    flexDirection: 'row', alignItems: 'center',
     borderWidth: Platform.OS === 'ios' ? 0 : StyleSheet.hairlineWidth, borderColor: c.border,
   },
   videoErrorText: {

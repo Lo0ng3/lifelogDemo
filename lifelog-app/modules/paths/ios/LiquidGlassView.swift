@@ -1,11 +1,12 @@
 import ExpoModulesCore
 import UIKit
 
-// 苹果原生液态玻璃背景视图：
-// - iOS 26+：运行时动态创建苹果原生 UIGlassEffect（真·液态玻璃折射/高光/交互透镜），
-//   即使在 Xcode 16（iOS 18 SDK）云端构建机上也能零报错编译，装到 iOS 26 真机自动生效；
-// - iOS 15~18：原生 UIBlurEffect(.systemChromeMaterialLight / Dark) + 连续圆角高光描边，
-//   走系统 GPU 合成（摒弃 expo-blur 的 UIViewPropertyAnimator 动画卡顿问题）。
+// 苹果真·原生液态玻璃背景视图：
+// - iOS 26+（Xcode 26 SDK 编译）：直接使用苹果官方 UIGlassEffect(style: .regular) + UICornerConfiguration，
+//   完全遵循系统「设置 → 显示与亮度 → 液态玻璃（透明 / 色调）」与「降低透明度」设置，
+//   不做 clipsToBounds 裁切、不叠不透明底色，完整保留原生通透折射与高光边缘；
+// - 旧版 Xcode 编译在 iOS 26 运行时：通过运行时动态加载 UIGlassEffect 兜底；
+// - iOS 15~18 降级：系统原生 systemUltraThinMaterial 通透毛玻璃。
 public final class LiquidGlassView: ExpoView {
   private let effectView = UIVisualEffectView(effect: nil)
   private var cornerRadiusValue: CGFloat = 28
@@ -16,12 +17,12 @@ public final class LiquidGlassView: ExpoView {
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     backgroundColor = .clear
+    clipsToBounds = false
     isUserInteractionEnabled = false
 
     effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     effectView.isUserInteractionEnabled = false
-    effectView.clipsToBounds = true
-    effectView.layer.cornerCurve = .continuous
+    effectView.backgroundColor = .clear
     addSubview(effectView)
 
     applyAppearance()
@@ -30,8 +31,7 @@ public final class LiquidGlassView: ExpoView {
   public override func layoutSubviews() {
     super.layoutSubviews()
     effectView.frame = bounds
-    let maxRadius = min(bounds.width, bounds.height) / 2
-    effectView.layer.cornerRadius = maxRadius > 0 ? min(cornerRadiusValue, maxRadius) : cornerRadiusValue
+    applyCorners()
   }
 
   public func setCornerRadius(_ value: Double) {
@@ -51,10 +51,45 @@ public final class LiquidGlassView: ExpoView {
     applyAppearance()
   }
 
+  private func applyCorners() {
+    let halfMin = min(bounds.width, bounds.height) / 2
+    #if compiler(>=6.2)
+    if #available(iOS 26.0, *), usingNativeGlass {
+      if halfMin > 0 && cornerRadiusValue >= halfMin - 1 {
+        effectView.cornerConfiguration = .capsule()
+      } else {
+        effectView.cornerConfiguration = .corners(radius: .fixed(cornerRadiusValue))
+      }
+      return
+    }
+    #endif
+
+    effectView.clipsToBounds = true
+    effectView.layer.cornerCurve = .continuous
+    effectView.layer.cornerRadius = halfMin > 0 ? min(cornerRadiusValue, halfMin) : cornerRadiusValue
+  }
+
   private func applyAppearance() {
     effectView.overrideUserInterfaceStyle = darkMode ? .dark : .light
 
-    // iOS 26+ 原生 UIGlassEffect（运行时动态加载，兼容旧版 Xcode SDK 编译）
+    #if compiler(>=6.2)
+    if #available(iOS 26.0, *) {
+      // .regular 是苹果官方标准液态玻璃样式：系统选择「透明」时通透清亮，选择「色调」或「降低透明度」时自动加深
+      let glass = UIGlassEffect(style: .regular)
+      glass.isInteractive = interactiveMode
+      glass.tintColor = nil
+      usingNativeGlass = true
+      effectView.effect = glass
+      effectView.clipsToBounds = false
+      effectView.contentView.backgroundColor = .clear
+      effectView.layer.borderWidth = 0
+      effectView.layer.borderColor = nil
+      applyCorners()
+      return
+    }
+    #endif
+
+    // 旧版 SDK 编译时的运行时动态兜底（iOS 26 真机）
     if let glassClass = NSClassFromString("UIGlassEffect") as? NSObject.Type {
       let glassObj = glassClass.init()
       let setInteractiveSel = NSSelectorFromString("setInteractive:")
@@ -70,20 +105,20 @@ public final class LiquidGlassView: ExpoView {
         effectView.contentView.backgroundColor = .clear
         effectView.layer.borderWidth = 0
         effectView.layer.borderColor = nil
+        applyCorners()
         return
       }
     }
 
-    // iOS 15~18 降级：系统原生材质模糊 + 液态玻璃高光边缘
+    // iOS 15~18 降级：系统超薄通透毛玻璃
     usingNativeGlass = false
-    let blurStyle: UIBlurEffect.Style = darkMode ? .systemChromeMaterialDark : .systemChromeMaterialLight
+    let blurStyle: UIBlurEffect.Style = darkMode ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight
     effectView.effect = UIBlurEffect(style: blurStyle)
-    effectView.contentView.backgroundColor = darkMode
-      ? UIColor(white: 1.0, alpha: 0.05)
-      : UIColor(white: 1.0, alpha: 0.22)
-    effectView.layer.borderWidth = 0.75
+    effectView.contentView.backgroundColor = .clear
+    effectView.layer.borderWidth = 0.5
     effectView.layer.borderColor = darkMode
-      ? UIColor(white: 1.0, alpha: 0.22).cgColor
-      : UIColor(white: 1.0, alpha: 0.65).cgColor
+      ? UIColor(white: 1.0, alpha: 0.18).cgColor
+      : UIColor(white: 1.0, alpha: 0.55).cgColor
+    applyCorners()
   }
 }

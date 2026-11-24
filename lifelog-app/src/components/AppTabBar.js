@@ -64,19 +64,19 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
           styles.shadowWrap,
           {
             shadowColor: colors.shadow,
-            shadowOpacity: isDark ? 0.42 : 0.16,
+            shadowOpacity: isIOS ? (isDark ? 0.22 : 0.08) : (isDark ? 0.42 : 0.16),
           },
         ]}
       >
         <View
           style={[
             styles.bar,
-            !isIOS && { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+            !isIOS && { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
           ]}
         >
           <LiquidGlassSurface cornerRadius={BAR_HEIGHT / 2} isDark={isDark} interactive />
 
-          {/* 选中项滑动液态玻璃胶囊 */}
+          {/* 选中项轻透玻璃胶囊：iOS 不盖乳白底，保持苹果原生液态玻璃的清透质感 */}
           <Reanimated.View
             pointerEvents="none"
             style={[
@@ -85,10 +85,8 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
                 width: pillWidth,
                 backgroundColor: isDark
                   ? 'rgba(255,255,255,0.14)'
-                  : (isIOS ? 'rgba(255,255,255,0.68)' : 'rgba(29,99,237,0.10)'),
-                borderColor: isDark
-                  ? 'rgba(255,255,255,0.18)'
-                  : (isIOS ? 'rgba(255,255,255,0.85)' : 'transparent'),
+                  : (isIOS ? 'rgba(11,13,18,0.065)' : 'rgba(29,99,237,0.10)'),
+                borderColor: 'transparent',
               },
               pillAnimStyle,
             ]}
@@ -152,7 +150,6 @@ const styles = StyleSheet.create({
     height: BAR_HEIGHT,
     borderRadius: BAR_HEIGHT / 2,
     padding: BAR_PAD,
-    overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
   },

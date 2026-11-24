@@ -376,8 +376,8 @@ export const DOUBAN_POSTER_RATIO = 2 / 3;
 // 封面落盘的长边上限：显示端只有 46~64pt（3 倍屏 ≈ 192px），360px 有充足冗余，
 // 单张从 ~200KB 降到 ~25KB，备份体积同步受益
 const COVER_MAX_EDGE = 360;
-// 详情页 Hero 用的清晰封面：1600px 足够手机全宽显示，又不会把 4K 海报原样塞进备份
-const COVER_DISPLAY_MAX_EDGE = 1600;
+// 详情页已改为紧凑小封面，统一复用 360px 缩略图，不再另存高清大图
+
 
 const ensureCoversDir = async () => {
   await ensureDirAsync(COVERS_DIR);
@@ -489,8 +489,8 @@ export const downloadRemoteCoverVariants = async (url) => {
   try {
     const tmp = `${FileSystem.cacheDirectory}cover_dl_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const { uri: downloaded } = await FileSystem.downloadAsync(url, tmp, { headers: DOWNLOAD_HEADERS });
-    const large = await downscaleCover(downloaded, COVER_DISPLAY_MAX_EDGE, `${url}#display`);
-    const thumb = await downscaleCover(downloaded, COVER_MAX_EDGE, `${url}#thumb`);
+    const thumb = await downscaleCover(downloaded, COVER_MAX_EDGE, url);
+    const large = thumb;
     try { await FileSystem.deleteAsync(downloaded, { idempotent: true }); } catch {}
     return {
       coverUrl: large || url,

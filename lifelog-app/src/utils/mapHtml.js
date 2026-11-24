@@ -151,8 +151,12 @@ export function buildMapHtml({
           #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: ${c.bg}; }
           .leaflet-control-attribution { display: none; }
           .leaflet-container { background: ${c.bg}; outline: none; }
+          .leaflet-tile { -webkit-backface-visibility: hidden; backface-visibility: hidden; }
+          /* 深色滤镜直接作用在单张瓦片 img 上（不要挂在 .leaflet-tile-pane 容器上）：
+             iOS WKWebView 给带 3D transform 子层的父容器加 CSS filter 会触发 GPU 合成 Bug，
+             导致深色模式下整张底图消失或放大缩小时剧烈闪烁 */
           ${hasLeaflet && c.tileFilter && c.tileFilter !== 'none'
-            ? `.leaflet-tile-pane { filter: ${c.tileFilter}; }`
+            ? `.leaflet-tile-pane img.leaflet-tile { filter: ${c.tileFilter}; -webkit-filter: ${c.tileFilter}; }`
             : ''}
           /* 高德 JS API 自带版权/Logo，按规范原样保留，不做隐藏 */
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
@@ -802,7 +806,13 @@ export function buildMapHtml({
           function createLeafletEngine() {
               // closePopupOnClick: false —— 评论什么时候关由我们自己决定（默认行为会把
               // 标点刚弹出的评论立刻关掉，表现就是"单击标点没反应"）
-              var map = L.map('map', { zoomControl: false, attributionControl: true, closePopupOnClick: false }).setView([34.0, 108.0], 4);
+              // fadeAnimation: false —— 关闭新瓦片淡入（淡入期间透明帧会露出底色，在 iOS 缩放时表现为反复闪烁）
+              var map = L.map('map', {
+                  zoomControl: false,
+                  attributionControl: true,
+                  closePopupOnClick: false,
+                  fadeAnimation: false,
+              }).setView([34.0, 108.0], 4);
               map.attributionControl.setPrefix('');
               // 双击放大保持开启（Leaflet 默认）：双击空白处放大一级；双击标点仍是"飞到该标点"——
               // 标点的手势把 DOM 事件拦在自己这一层了，地图容器收不到第二下，两者不会打架。
