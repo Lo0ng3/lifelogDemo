@@ -9,19 +9,18 @@ import NativeIcon from './NativeIcon';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { formatStorageSize } from '../utils/storagePaths';
 
-const BUCKET_COLORS = (c) => ({
-  records: c.accent,
-  covers: c.purple,
-  media: c.orange,
-  imageCache: c.groupNote,
-  mapCache: '#0EA5E9',
-  temp: c.danger,
-  system: c.textMuted,
-});
+// 精简为 4 项清晰分类，合计严格等于系统「文稿与数据」总占用
+const buildDisplayGroups = (summary, colors) => {
+  const byKey = new Map((summary?.items || []).map((it) => [it.key, it]));
+  const sum = (...keys) => keys.reduce((acc, k) => acc + (byKey.get(k)?.bytes || 0), 0);
+  return [
+    { key: 'app', label: '应用数据', bytes: sum('records', 'covers', 'media'), color: colors.accent },
+    { key: 'imageCache', label: '图片缓存', bytes: sum('imageCache'), color: colors.groupNote },
+    { key: 'mapCache', label: '地图缓存', bytes: sum('mapCache'), color: '#0EA5E9' },
+    { key: 'other', label: '临时与系统', bytes: sum('temp', 'system'), color: colors.textMuted },
+  ];
+};
 
-// 仿苹果「iPhone 储存空间」样式的数据占用详情页：
-// 顶部汇总总大小（与系统「文稿与数据」同口径）+ 彩色占比条，下方按类别清晰展示，
-// 不再把大段原始路径/调试文本硬塞进 Alert 弹窗。
 export default function StorageModal({
   visible,
   loading,
@@ -34,15 +33,14 @@ export default function StorageModal({
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const dotColors = BUCKET_COLORS(colors);
 
-  const items = summary?.items || [];
+  const groups = buildDisplayGroups(summary, colors);
   const totalBytes = summary?.totalBytes || 0;
   const barSegments = totalBytes > 0
-    ? items.filter((it) => it.bytes > 0).map((it) => ({
-        key: it.key,
-        flex: Math.max(0.02, it.bytes / totalBytes),
-        color: dotColors[it.key] || colors.textMuted,
+    ? groups.filter((g) => g.bytes > 0).map((g) => ({
+        key: g.key,
+        flex: Math.max(0.025, g.bytes / totalBytes),
+        color: g.color,
       }))
     : [];
 
@@ -69,25 +67,16 @@ export default function StorageModal({
         {loading ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator size="large" color={colors.accent} />
-            <Text style={styles.loadingText}>正在统计沙盒占用…</Text>
           </View>
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
             bounces={Platform.OS === 'ios'}
-            contentContainerStyle={[styles.content, { paddingBottom: Math.max(36, insets.bottom + 24) }]}
+            contentContainerStyle={[styles.content, { paddingBottom: Math.max(32, insets.bottom + 20) }]}
           >
-            {/* 总占用汇总卡 */}
             <View style={styles.card}>
-              <Text style={styles.summaryLabel}>
-                {summary?.exact ? '文稿与数据总占用' : '应用数据总占用'}
-              </Text>
+              <Text style={styles.summaryLabel}>文稿与数据</Text>
               <Text style={styles.summaryTotal}>{formatStorageSize(totalBytes)}</Text>
-              <Text style={styles.summarySub}>
-                共 {summary?.totalFiles || 0} 个文件 · {summary?.locationNote || ''}
-              </Text>
-
-              {/* 彩色占比条 */}
               <View style={styles.barTrack}>
                 {barSegments.map((seg) => (
                   <View
@@ -98,49 +87,33 @@ export default function StorageModal({
               </View>
             </View>
 
-            {/* 分类明细卡 */}
-            <Text style={styles.groupTitle}>占用明细</Text>
             <View style={styles.listCard}>
-              {items.map((item, idx) => (
+              {groups.map((item, idx) => (
                 <View key={item.key}>
                   <View style={styles.row}>
-                    <View style={[styles.dot, { backgroundColor: dotColors[item.key] || colors.textMuted }]} />
-                    <View style={styles.rowCopy}>
-                      <Text style={styles.rowTitle}>{item.label}</Text>
-                      <Text style={styles.rowNote}>{item.note}</Text>
-                    </View>
-                    <View style={styles.rowRight}>
-                      <Text style={styles.rowSize}>{formatStorageSize(item.bytes)}</Text>
-                      <Text style={styles.rowFiles}>{item.files} 项</Text>
-                    </View>
+                    <View style={[styles.dot, { backgroundColor: item.color }]} />
+                    <Text style={styles.rowTitle}>{item.label}</Text>
+                    <Text style={styles.rowSize}>{formatStorageSize(item.bytes)}</Text>
                   </View>
-                  {idx < items.length - 1 && <View style={styles.divider} />}
+                  {idx < groups.length - 1 && <View style={styles.divider} />}
                 </View>
               ))}
             </View>
 
-            {/* 草稿提醒（仅当添加页有未保存的分享副本时显示） */}
             {!!copiesInfo?.draft && (
               <View style={styles.draftCard}>
                 <Text style={styles.draftText}>
-                  「添加」页草稿里还有 {copiesInfo.draft} 个未保存的本地副本，清空后可释放空间。
+                  添加页草稿含 {copiesInfo.draft} 个未保存副本
                 </Text>
                 <TouchableOpacity style={styles.draftBtn} onPress={onClearDraft} activeOpacity={0.8}>
-                  <Text style={styles.draftBtnText}>清空添加页草稿</Text>
+                  <Text style={styles.draftBtnText}>清空草稿</Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {/* 快捷清理入口 */}
             <TouchableOpacity style={styles.cleanBtn} onPress={onOpenCleanCache} activeOpacity={0.85}>
-              <Text style={styles.cleanBtnText}>前往清理缓存</Text>
+              <Text style={styles.cleanBtnText}>清理缓存</Text>
             </TouchableOpacity>
-
-            <Text style={styles.footnote}>
-              {summary?.exact
-                ? '采用与 iOS 系统「设置 → iPhone 储存空间」一致的磁盘实际占用与十进制换算（1 MB = 1000 KB）。'
-                : '不含系统相册里的原始照片与视频（应用仅保存引用，不复制原片）。'}
-            </Text>
           </ScrollView>
         )}
       </View>
@@ -157,8 +130,7 @@ const makeStyles = (c) => ({
   },
   headerSide: { width: 32, alignItems: 'flex-end' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
-  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  loadingText: { fontSize: 14, color: c.textMuted },
+  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: 16, gap: 14 },
 
   card: {
@@ -170,47 +142,38 @@ const makeStyles = (c) => ({
     fontSize: 32, fontWeight: '800', color: c.textStrong, marginTop: 4,
     letterSpacing: -0.6, fontVariant: ['tabular-nums'],
   },
-  summarySub: { fontSize: 12.5, color: c.textSecondary, marginTop: 4, lineHeight: 18 },
   barTrack: {
-    flexDirection: 'row', height: 10, borderRadius: 5, overflow: 'hidden',
+    flexDirection: 'row', height: 9, borderRadius: 5, overflow: 'hidden',
     backgroundColor: c.fill, marginTop: 14, gap: 1.5,
   },
   barSeg: { height: '100%' },
 
-  groupTitle: {
-    fontSize: 13, fontWeight: '500', color: c.textMuted, paddingHorizontal: 8, marginTop: 4, marginBottom: -6,
-  },
   listCard: {
     backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
   row: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, gap: 12,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, minHeight: 52, gap: 12,
   },
-  dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  rowCopy: { flex: 1, minWidth: 0 },
-  rowTitle: { fontSize: 15, fontWeight: '500', color: c.text },
-  rowNote: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-  rowRight: { alignItems: 'flex-end', flexShrink: 0 },
-  rowSize: { fontSize: 15, fontWeight: '600', color: c.textStrong, fontVariant: ['tabular-nums'] },
-  rowFiles: { fontSize: 11.5, color: c.textMuted, marginTop: 1, fontVariant: ['tabular-nums'] },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 38 },
+  dot: { width: 9, height: 9, borderRadius: 5, flexShrink: 0 },
+  rowTitle: { flex: 1, fontSize: 15.5, fontWeight: '500', color: c.text },
+  rowSize: { fontSize: 15, fontWeight: '600', color: c.textSecondary, fontVariant: ['tabular-nums'] },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 37 },
 
   draftCard: {
-    backgroundColor: c.warnSoft, borderRadius: 14, padding: 14, gap: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: c.warnSoft, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12,
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.warnText,
   },
-  draftText: { fontSize: 13, color: c.warnText, lineHeight: 19 },
+  draftText: { fontSize: 13.5, color: c.warnText, flex: 1, marginRight: 10 },
   draftBtn: {
-    alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
-    backgroundColor: c.bgElevated,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: c.bgElevated,
   },
   draftBtnText: { fontSize: 13, fontWeight: '600', color: c.warnText },
 
   cleanBtn: {
     height: 48, borderRadius: 14, backgroundColor: c.accent,
-    alignItems: 'center', justifyContent: 'center', marginTop: 2,
+    alignItems: 'center', justifyContent: 'center',
   },
   cleanBtnText: { fontSize: 15.5, fontWeight: '600', color: c.textOnAccent },
-  footnote: { fontSize: 12, color: c.textMuted, lineHeight: 18, textAlign: 'center', paddingHorizontal: 8 },
 });

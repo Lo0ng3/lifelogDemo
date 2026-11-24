@@ -448,7 +448,7 @@ const makeStyles = (c) => ({
     flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  tlContent: { paddingBottom: 78 },
+  tlContent: { paddingBottom: 0 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },
 });

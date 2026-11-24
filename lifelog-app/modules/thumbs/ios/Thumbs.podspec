@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.4'
   s.source           = { :git => 'https://github.com/Lo0ng3/lifelogDemo.git', :tag => s.version.to_s }
   s.static_framework = true
-  s.frameworks       = 'Photos', 'PhotosUI', 'UIKit', 'AVFoundation', 'AVKit'
+  s.frameworks       = 'Photos', 'PhotosUI', 'UIKit', 'AVFoundation', 'AVKit', 'UniformTypeIdentifiers', 'ImageIO', 'CoreLocation'
 
   s.dependency 'ExpoModulesCore'
 

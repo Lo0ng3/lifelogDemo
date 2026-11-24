@@ -14,6 +14,7 @@ import UIKit
 public class ThumbsModule: Module {
   private let workQueue = DispatchQueue(label: "com.jiyin.thumbs.work", qos: .userInitiated, attributes: .concurrent)
   private let encodeSemaphore = DispatchSemaphore(value: 4)
+  private var activePickerCoordinator: NativePhotoPickerCoordinator?
 
   public func definition() -> ModuleDefinition {
     Name("Thumbs")
@@ -206,6 +207,22 @@ public class ThumbsModule: Module {
         }
 
         self.exportVideoFallback(asset: asset, dest: dir.appendingPathComponent("vid_\(safeId).mp4"), promise: promise)
+      }
+    }
+
+    // 原生 PHPickerViewController 选图器：优先返回零复制 ph:// 引用，未授权时自动兜底落地
+    AsyncFunction("presentPhotoPickerAsync") { (selectionLimit: Int, promise: Promise) in
+      DispatchQueue.main.async {
+        if self.activePickerCoordinator != nil {
+          promise.resolve(["canceled": true, "assets": []])
+          return
+        }
+        let coordinator = NativePhotoPickerCoordinator()
+        self.activePickerCoordinator = coordinator
+        coordinator.present(selectionLimit: selectionLimit) { payload in
+          self.activePickerCoordinator = nil
+          promise.resolve(payload)
+        }
       }
     }
 

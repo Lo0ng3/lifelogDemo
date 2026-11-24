@@ -177,9 +177,12 @@ const makeStyles = (c) => ({
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
   },
   headerSide: { width: 32, alignItems: 'flex-end' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
   content: { padding: 16, paddingBottom: 40 },
-  card: { backgroundColor: c.bgElevated, borderRadius: 14, padding: 16, marginBottom: 12 },
+  card: {
+    backgroundColor: c.bgElevated, borderRadius: 16, padding: 16, marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 10 },
   item: { fontSize: 13.5, lineHeight: 21, color: c.textSecondary, marginBottom: 8 },
 });

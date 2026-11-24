@@ -25,6 +25,11 @@ import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocation
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
+let Thumbs = null;
+try {
+  Thumbs = require('../../modules/thumbs').default;
+} catch {}
+
 // 二级类型选择：顶部原生分段控键选大类 + 下方轻量胶囊选子类；地点无子类
 const TYPE_MENU = [
   { id: 'ticket', label: '旅票' },
@@ -579,36 +584,67 @@ export default function AddScreen({ navigation, route }) {
     skipDestSearch.current = !item.isPrompt;
   };
 
-  // 选择影像：应用内相册直读选图器（MediaPicker），只记录相册资产引用（assetId），全程零复制。
-  // 用回调收结果 + goBack 返回，避免跨导航器跳转把本页草稿状态冲掉
-  const openMediaPicker = () => {
+  // 合并选图结果并去重（跳过已在表单里或已挂在其他记录中的照片）
+  const applyPickedMedia = (picked, pickedLocation = null) => {
+    const usedElsewhere = new Set();
+    logData.forEach(log => {
+      if (editId && log.id === editId) return;
+      (log.localImages || []).forEach(e => { if (typeof e !== 'string' && e?.assetId) usedElsewhere.add(e.assetId); });
+    });
+    const list = Array.isArray(picked) ? picked : [];
+    const existing = new Set(selectedImages.map(mediaKey).filter(Boolean));
+    const seen = new Set();
+    const fresh = list.filter((p) => {
+      const k = mediaKey(p);
+      if (!k || existing.has(k) || seen.has(k)) return false;   // 已经在表单里 / 这一批里重复
+      if (p?.assetId && usedElsewhere.has(p.assetId)) return false;
+      seen.add(k);
+      return true;
+    });
+    const skipped = list.length - fresh.length;
+    if (skipped > 0) {
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(`已跳过 ${skipped} 张重复的照片`, ToastAndroid.SHORT);
+      } else {
+        Alert.alert('提示', `已自动跳过 ${skipped} 张重复或已在其他记录中的照片`);
+      }
+    }
+    if (fresh.length > 0) {
+      setSelectedImages(prev => [...prev, ...fresh]);
+      if (
+        skipped === 0 &&
+        pickedLocation &&
+        Number.isFinite(Number(pickedLocation.latitude)) &&
+        Number.isFinite(Number(pickedLocation.longitude))
+      ) {
+        setPhotoCoord({
+          latitude: Number(pickedLocation.latitude),
+          longitude: Number(pickedLocation.longitude),
+        });
+      } else {
+        capturePhotoCoord(fresh);
+      }
+    }
+  };
+
+  // 选择影像：
+  // - iOS：系统原生 PHPickerViewController，直接拿 PHAsset.localIdentifier 零复制；
+  // - Android：应用内相册直读选图器（MediaPicker），只记录 assetId 零复制。
+  const openMediaPicker = async () => {
+    if (Platform.OS === 'ios' && typeof Thumbs?.presentPhotoPickerAsync === 'function') {
+      try {
+        const res = await Thumbs.presentPhotoPickerAsync(0);
+        if (res) {
+          if (!res.canceled && Array.isArray(res.assets) && res.assets.length > 0) {
+            applyPickedMedia(res.assets, res.location || null);
+          }
+          return;
+        }
+      } catch {}
+    }
     navigation.navigate('MediaPicker', {
       selected: selectedImages,
-      onDone: (picked) => {
-        const usedElsewhere = new Set();
-        logData.forEach(log => {
-          if (editId && log.id === editId) return;
-          (log.localImages || []).forEach(e => { if (typeof e !== 'string' && e?.assetId) usedElsewhere.add(e.assetId); });
-        });
-        const list = Array.isArray(picked) ? picked : [];
-        const existing = new Set(selectedImages.map(mediaKey).filter(Boolean));
-        const seen = new Set();
-        const fresh = list.filter((p) => {
-          const k = mediaKey(p);
-          if (!k || existing.has(k) || seen.has(k)) return false;   // 已经在表单里 / 这一批里重复
-          if (p?.assetId && usedElsewhere.has(p.assetId)) return false;
-          seen.add(k);
-          return true;
-        });
-        const skipped = list.length - fresh.length;
-        if (skipped > 0 && Platform.OS === 'android') {
-          ToastAndroid.show(`已跳过 ${skipped} 张重复的照片`, ToastAndroid.SHORT);
-        }
-        if (fresh.length > 0) {
-          setSelectedImages(prev => [...prev, ...fresh]);
-          capturePhotoCoord(fresh);
-        }
-      },
+      onDone: (picked) => applyPickedMedia(picked),
     });
   };
 

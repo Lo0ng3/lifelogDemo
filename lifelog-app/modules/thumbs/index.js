@@ -35,4 +35,10 @@ export default {
     }
     return native.getPlayableVideoUriAsync(String(assetId));
   },
+  presentPhotoPickerAsync(selectionLimit = 0) {
+    if (Platform.OS !== 'ios' || typeof native?.presentPhotoPickerAsync !== 'function') {
+      return Promise.resolve(null);
+    }
+    return native.presentPhotoPickerAsync(Number(selectionLimit) || 0);
+  },
 };

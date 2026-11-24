@@ -74,14 +74,19 @@ const APPEARANCE_MODES = [
 ];
 const APPEARANCE_LABELS = APPEARANCE_MODES.map((m) => m.label);
 
-// 「清理缓存」二级选项：每一项都能单独勾，都是可再生内容
+// 「清理缓存」选项：精简明了，均为可再生缓存
 const CACHE_TARGETS = [
-  { key: 'thumbs', label: '封面帧（视频缩略图）', note: '列表里的视频封面，删了会按需重建' },
-  { key: 'images', label: '图片浏览缓存', note: '看过的图片磁盘缓存，删了会重新加载' },
-  { key: 'motion', label: '实况动效临时文件', note: '实况照片提取出来的视频，进后台本来就会清' },
-  { key: 'covers', label: '没人引用的封面小图', note: '换封面 / 删记录留下的孤儿文件' },
-  { key: 'map', label: '地图缓存（瓦片 + 高德 SDK）', note: '清完下次进地图要重新下载，不想重下就取消勾选' },
+  { key: 'thumbs', label: '视频封面帧', note: '按需自动重建' },
+  { key: 'images', label: '图片缓存', note: '看图磁盘缓存' },
+  { key: 'motion', label: '临时文件', note: '实况与导出临时文件' },
+  { key: 'covers', label: '无引用封面', note: '已删除记录残留的封面小图' },
+  { key: 'map', label: '地图缓存', note: '地图瓦片与 SDK 缓存' },
 ];
+const MAP_PROVIDERS = [
+  { id: 'tianditu', label: '天地图' },
+  { id: 'amap', label: '高德' },
+];
+const MAP_PROVIDER_LABELS = MAP_PROVIDERS.map((p) => p.label);
 
 // 视图切换：
 // - iOS：原生 UISegmentedControl（iOS 26+ 自动液态玻璃，原生 UIKit 零延迟触控与滑块拖拽）；
@@ -1379,68 +1384,112 @@ export default function HomeScreen({ navigation }) {
         </BottomSheetScrollView>
       </BottomSheetModal>
 
-      <Modal visible={settingsOpen} transparent animationType="fade" onRequestClose={() => setSettingsOpen(false)}>
-        <TouchableOpacity style={styles.settingsOverlay} activeOpacity={1} onPress={() => setSettingsOpen(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.settingsCard} onPress={() => {}}>
-            <Text style={styles.settingsTitle}>设置</Text>
-            <Text style={styles.settingsLabel}>地图服务</Text>
-            <View style={styles.providerRow}>
-              {[{ id: 'tianditu', label: '天地图' }, { id: 'amap', label: '高德' }].map((p) => (
-                <TouchableOpacity
-                  key={p.id}
-                  style={[styles.providerChip, providerDraft === p.id && styles.providerChipOn]}
-                  onPress={() => switchProviderDraft(p.id)}
-                >
-                  <Text style={[styles.providerChipText, providerDraft === p.id && styles.providerChipTextOn]}>{p.label}</Text>
-                </TouchableOpacity>
-              ))}
+      <Modal
+        visible={settingsOpen}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
+        onRequestClose={() => setSettingsOpen(false)}
+      >
+        <View style={[styles.sheetPage, { paddingTop: Platform.OS === 'ios' ? 0 : insets.top }]}>
+          <View style={styles.sheetPageHeader}>
+            <TouchableOpacity onPress={() => setSettingsOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.sheetBtnTextGray}>取消</Text>
+            </TouchableOpacity>
+            <Text style={styles.sheetPageTitle}>地图服务</Text>
+            <TouchableOpacity onPress={saveKey} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.sheetBtnTextBlue}>保存</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            bounces={Platform.OS === 'ios'}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.sheetPageBody}
+          >
+            <View style={styles.sheetGroupCard}>
+              <View style={styles.sheetGroupRow}>
+                <Text style={styles.sheetGroupLabel}>服务商</Text>
+                {hasNativeSegmentedControl ? (
+                  <NativeSegmentedControl
+                    segments={MAP_PROVIDER_LABELS}
+                    selectedIndex={providerDraft === 'amap' ? 1 : 0}
+                    isDark={isDark}
+                    onChange={(idx) => {
+                      const next = MAP_PROVIDERS[idx];
+                      if (next) {
+                        hapticSelection();
+                        switchProviderDraft(next.id);
+                      }
+                    }}
+                    style={{ width: 156, height: 32 }}
+                  />
+                ) : (
+                  <View style={styles.providerRowCompact}>
+                    {MAP_PROVIDERS.map((p) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.providerChipCompact, providerDraft === p.id && styles.providerChipOn]}
+                        onPress={() => switchProviderDraft(p.id)}
+                      >
+                        <Text style={[styles.providerChipText, providerDraft === p.id && styles.providerChipTextOn]}>{p.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
             </View>
-            <Text style={[styles.settingsLabel, { marginTop: 14 }]}>
-              {providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 Key'}
-            </Text>
-            <TextInput
-              style={styles.settingsInput}
-              value={keyDraft}
-              onChangeText={setKeyDraft}
-              placeholder={providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 tk'}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {providerDraft === 'amap' && (
-              <>
-                <Text style={[styles.settingsLabel, { marginTop: 14 }]}>高德 Web 端(JS API) Key</Text>
+
+            <Text style={styles.sheetSectionLabel}>密钥配置</Text>
+            <View style={styles.sheetGroupCard}>
+              <View style={styles.sheetInputBlock}>
+                <Text style={styles.sheetInputLabel}>
+                  {providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 Key'}
+                </Text>
                 <TextInput
-                  style={styles.settingsInput}
-                  value={jsKeyDraft}
-                  onChangeText={setJsKeyDraft}
-                  placeholder="选填"
-                  placeholderTextColor={colors.textMuted}
+                  style={styles.sheetInput}
+                  value={keyDraft}
+                  onChangeText={setKeyDraft}
+                  placeholder={providerDraft === 'amap' ? '填入 Web 服务 Key' : '填入天地图 tk'}
+                  placeholderTextColor={colors.textFaint}
                   autoCapitalize="none"
                   autoCorrect={false}
+                  clearButtonMode="while-editing"
                 />
-                <Text style={[styles.settingsLabel, { marginTop: 10 }]}>安全密钥 securityJsCode</Text>
-                <TextInput
-                  style={styles.settingsInput}
-                  value={jsCodeDraft}
-                  onChangeText={setJsCodeDraft}
-                  placeholder="选填"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </>
-            )}
-            <View style={styles.settingsBtnRow}>
-              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setSettingsOpen(false)}>
-                <Text style={styles.settingsBtnCancelText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnSave]} onPress={saveKey}>
-                <Text style={styles.settingsBtnSaveText}>保存</Text>
-              </TouchableOpacity>
+              </View>
+              {providerDraft === 'amap' && (
+                <>
+                  <View style={styles.sheetDivider} />
+                  <View style={styles.sheetInputBlock}>
+                    <Text style={styles.sheetInputLabel}>Web 端 (JS API) Key</Text>
+                    <TextInput
+                      style={styles.sheetInput}
+                      value={jsKeyDraft}
+                      onChangeText={setJsKeyDraft}
+                      placeholder="选填"
+                      placeholderTextColor={colors.textFaint}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      clearButtonMode="while-editing"
+                    />
+                  </View>
+                  <View style={styles.sheetDivider} />
+                  <View style={styles.sheetInputBlock}>
+                    <Text style={styles.sheetInputLabel}>安全密钥 securityJsCode</Text>
+                    <TextInput
+                      style={styles.sheetInput}
+                      value={jsCodeDraft}
+                      onChangeText={setJsCodeDraft}
+                      placeholder="选填"
+                      placeholderTextColor={colors.textFaint}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      clearButtonMode="while-editing"
+                    />
+                  </View>
+                </>
+              )}
             </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </ScrollView>
+        </View>
       </Modal>
 
       <Modal transparent visible={nameEditorOpen} animationType="fade" onRequestClose={() => setNameEditorOpen(false)}>
@@ -1484,50 +1533,58 @@ export default function HomeScreen({ navigation }) {
         onClearDraft={handleClearDraftFromStorage}
       />
 
-      {/* 清理缓存：二级选项，挑清哪些（都是可再生内容，不影响记录和照片引用） */}
-      <Modal transparent visible={cachePickerOpen} animationType="fade" onRequestClose={() => setCachePickerOpen(false)}>
-        <TouchableOpacity style={styles.settingsOverlay} activeOpacity={1} onPress={() => setCachePickerOpen(false)}>
-          <TouchableOpacity style={styles.settingsCard} activeOpacity={1} onPress={() => {}}>
-            <Text style={styles.settingsTitle}>清理缓存</Text>
-            <Text style={styles.settingsLabel}>勾选要清理的项（都是可再生内容）</Text>
-            {CACHE_TARGETS.map(({ key, label, note }) => (
-              <TouchableOpacity
-                key={key}
-                style={styles.cacheRow}
-                activeOpacity={0.75}
-                onPress={() => {
-                  hapticSelection();
-                  setCacheTargets((prev) => ({ ...prev, [key]: !prev[key] }));
-                }}
-              >
-                {Platform.OS !== 'ios' && (
-                  <View style={[styles.cacheBox, cacheTargets[key] && styles.cacheBoxOn]}>
-                    {cacheTargets[key] && <Check size={14} color={colors.textOnAccent} />}
-                  </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cacheRowLabel}>{label}</Text>
-                  {!!note && <Text style={styles.cacheRowNote}>{note}</Text>}
+      {/* 清理缓存：统一冰川极简 pageSheet 风格 */}
+      <Modal
+        visible={cachePickerOpen}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
+        onRequestClose={() => setCachePickerOpen(false)}
+      >
+        <View style={[styles.sheetPage, { paddingTop: Platform.OS === 'ios' ? 0 : insets.top }]}>
+          <View style={styles.sheetPageHeader}>
+            <TouchableOpacity onPress={() => setCachePickerOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.sheetBtnTextGray}>取消</Text>
+            </TouchableOpacity>
+            <Text style={styles.sheetPageTitle}>清理缓存</Text>
+            <TouchableOpacity onPress={runCleanCache} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.sheetBtnTextBlue}>清理</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView bounces={Platform.OS === 'ios'} contentContainerStyle={styles.sheetPageBody}>
+            <View style={styles.sheetGroupCard}>
+              {CACHE_TARGETS.map(({ key, label, note }, idx) => (
+                <View key={key}>
+                  <TouchableOpacity
+                    style={styles.cacheSheetRow}
+                    activeOpacity={0.75}
+                    onPress={() => {
+                      hapticSelection();
+                      setCacheTargets((prev) => ({ ...prev, [key]: !prev[key] }));
+                    }}
+                  >
+                    {Platform.OS !== 'ios' && (
+                      <View style={[styles.cacheBox, cacheTargets[key] && styles.cacheBoxOn]}>
+                        {cacheTargets[key] && <Check size={14} color={colors.textOnAccent} />}
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cacheSheetLabel}>{label}</Text>
+                      {!!note && <Text style={styles.cacheSheetNote}>{note}</Text>}
+                    </View>
+                    {Platform.OS === 'ios' && (
+                      <Switch
+                        value={!!cacheTargets[key]}
+                        onValueChange={(val) => setCacheTargets((prev) => ({ ...prev, [key]: val }))}
+                        trackColor={{ false: colors.fillStrong, true: colors.accent }}
+                      />
+                    )}
+                  </TouchableOpacity>
+                  {idx < CACHE_TARGETS.length - 1 && <View style={styles.sheetDivider} />}
                 </View>
-                {Platform.OS === 'ios' && (
-                  <Switch
-                    value={!!cacheTargets[key]}
-                    onValueChange={(val) => setCacheTargets((prev) => ({ ...prev, [key]: val }))}
-                    trackColor={{ false: colors.fillStrong, true: colors.accent }}
-                  />
-                )}
-              </TouchableOpacity>
-            ))}
-            <View style={styles.settingsBtnRow}>
-              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnCancel]} onPress={() => setCachePickerOpen(false)}>
-                <Text style={styles.settingsBtnCancelText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.settingsBtn, styles.settingsBtnSave]} onPress={runCleanCache}>
-                <Text style={styles.settingsBtnSaveText}>开始清理</Text>
-              </TouchableOpacity>
+              ))}
             </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </ScrollView>
+        </View>
       </Modal>
     </View>
   );
@@ -1561,7 +1618,7 @@ const makeStyles = (c) => ({
     flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4,
     borderRadius: 16, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  listContent: { paddingBottom: 78 },
+  listContent: { paddingBottom: 0 },
   monthWrapper: { flex: 1, marginTop: 2 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
@@ -1680,23 +1737,9 @@ const makeStyles = (c) => ({
   themeChipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   themeChipText: { fontSize: 11, color: c.textSecondary },
   themeChipTextActive: { color: c.accent, fontWeight: '600' },
-  settingsOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'center', alignItems: 'center', padding: 32 },
-  settingsCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 14, padding: 18 },
-  settingsTitle: { fontSize: 17, fontWeight: '600', color: c.text, marginBottom: 14 },
-  settingsLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
-  providerRow: { flexDirection: 'row', gap: 8 },
-  providerChip: { flex: 1, paddingVertical: 9, borderRadius: 10, backgroundColor: c.bgSunken,
-    borderWidth: 1, borderColor: c.border, alignItems: 'center' },
   providerChipOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   providerChipText: { fontSize: 14, color: c.textSecondary },
   providerChipTextOn: { color: c.accent, fontWeight: '600' },
-  settingsInput: { borderWidth: 1, borderColor: c.border, borderRadius: 10, backgroundColor: c.bgSunken, paddingHorizontal: 12, height: 44, fontSize: 14, color: c.text },
-  settingsBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
-  settingsBtn: { paddingVertical: 9, paddingHorizontal: 18, borderRadius: 8, marginLeft: 10 },
-  settingsBtnCancel: { backgroundColor: c.bgSunken },
-  settingsBtnCancelText: { fontSize: 14, color: c.textSecondary },
-  settingsBtnSave: { backgroundColor: c.accent },
-  settingsBtnSaveText: { fontSize: 14, fontWeight: '600', color: c.textOnAccent },
   sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft, backgroundColor: c.bgElevated, zIndex: 10 },
   headerHitSlop: { padding: 10, margin: -10 },
   sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
@@ -1720,11 +1763,42 @@ const makeStyles = (c) => ({
   chipTextActivePurple: { color: c.purple, fontWeight: '500' },
   chipActiveGreen: { backgroundColor: c.groupNoteSoft, borderColor: c.groupNoteSoft },
   chipTextActiveGreen: { color: c.groupNote, fontWeight: '500' },
-  // 清理缓存的二级选项（多选行）
-  cacheRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 9, gap: 10 },
-  cacheBox: { width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: c.border,
-    alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  // 统一冰川极简 pageSheet 弹层样式（地图服务 / 清理缓存 / 与数据与存储一致）
+  sheetPage: { flex: 1, backgroundColor: c.bg },
+  sheetPageHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 18, paddingVertical: 14, backgroundColor: c.bgElevated,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
+  },
+  sheetPageTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
+  sheetPageBody: { padding: 16, gap: 12 },
+  sheetSectionLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, paddingHorizontal: 10, marginTop: 6, marginBottom: -4 },
+  sheetGroupCard: {
+    backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  sheetGroupRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, minHeight: 54, gap: 12,
+  },
+  sheetGroupLabel: { fontSize: 15.5, fontWeight: '500', color: c.text },
+  sheetInputBlock: { paddingHorizontal: 16, paddingVertical: 12 },
+  sheetInputLabel: { fontSize: 12.5, fontWeight: '500', color: c.textMuted, marginBottom: 6 },
+  sheetInput: { fontSize: 15, color: c.text, paddingVertical: 4 },
+  sheetDivider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 16 },
+  providerRowCompact: { flexDirection: 'row', gap: 6 },
+  providerChipCompact: {
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 10, backgroundColor: c.bgSunken,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  cacheSheetRow: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, gap: 12,
+  },
+  cacheSheetLabel: { fontSize: 15.5, fontWeight: '500', color: c.text },
+  cacheSheetNote: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+  cacheBox: {
+    width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: c.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
   cacheBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
-  cacheRowLabel: { fontSize: 14, color: c.text },
-  cacheRowNote: { fontSize: 11.5, color: c.textMuted, marginTop: 2, lineHeight: 16 },
 });
