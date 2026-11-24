@@ -145,7 +145,7 @@ function ViewSwitcher({ value, onChange }) {
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const {
-    logData, syncMedia, importLogs, deleteLog,
+    logData, syncMedia, purgeReferencedCopies, importLogs, deleteLog,
     tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
     amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode, requestBackupSync,
   } = useContext(LogContext);
@@ -290,6 +290,44 @@ export default function HomeScreen({ navigation }) {
     return true;
   };
 
+  // 二次确认清除「仍被记录引用但相册里找不到原片」的本地副本
+  const confirmPurgeReferencedCopies = (count, bytes, refLogs = []) => {
+    const sizeText = bytes < 1024 * 1024
+      ? `${Math.round(bytes / 1024)} KB`
+      : `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
+    const names = refLogs.length
+      ? `\n\n涉及记录：\n${refLogs.slice(0, 5).map((r) => `· ${r.title}`).join('\n')}${refLogs.length > 5 ? `\n等共 ${refLogs.length} 条记录` : ''}`
+      : '';
+    Alert.alert(
+      '确认清除本地副本？',
+      `将删除这 ${count} 个相册里找不到原片的本地副本（约 ${sizeText}），并从对应记录中移除这些图片（文字、日期与地点会保留）。${names}\n\n此操作无法恢复，确定清除吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '确认清除',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await purgeReferencedCopies();
+              const freedText = res.freed < 1024 * 1024
+                ? `${Math.round(res.freed / 1024)} KB`
+                : `${Math.round((res.freed / 1024 / 1024) * 10) / 10} MB`;
+              Alert.alert(
+                '清除完成',
+                res.removed > 0
+                  ? `已清除 ${res.removed} 个本地副本（释放约 ${freedText}），已更新 ${res.affectedLogs} 条记录。`
+                    + (res.failed ? `\n另有 ${res.failed} 个文件删除失败。` : '')
+                  : (res.failed ? `有 ${res.failed} 个副本未能删除，请稍后再试。` : '没有需要清除的本地副本。')
+              );
+            } catch (e) {
+              Alert.alert('清除失败', e?.message || '清除本地副本时出现问题，请稍后再试。');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   // 相册同步：把断链的影像重新关联到相册原片（升级/换机/重装后的修复入口）
   const handleSync = async () => {
     if (syncing) return;
@@ -344,12 +382,18 @@ export default function HomeScreen({ navigation }) {
       const leftTotal = (left.referenced || 0) + (left.draft || 0) + (left.fresh || 0) + (left.unreadable || 0);
       if (leftTotal > 0) {
         const why = [];
-        if (left.referenced) why.push(`· ${left.referenced} 个（${sizeMB(leftBytes.referenced || 0)}）仍被记录引用：记录存的就是副本、相册里找不到原片，删了记录就没图看；能找到原片的同步时会自动换掉`);
+        if (left.referenced) {
+          const refTitles = (report.referencedLogs || []).slice(0, 3).map((r) => r.title).join('、');
+          const refHint = refTitles
+            ? `（涉及：${refTitles}${report.referencedLogs.length > 3 ? ` 等 ${report.referencedLogs.length} 条记录` : ''}）`
+            : '';
+          why.push(`· ${left.referenced} 个（${sizeMB(leftBytes.referenced || 0)}）仍被记录引用且相册里找不到原片${refHint}`);
+        }
         if (left.draft) why.push(`· ${left.draft} 个（${sizeMB(leftBytes.draft || 0)}）还挂在「添加」页表单里没保存：去那一页删掉或保存后，再同步一次就会清`);
         if (left.fresh) why.push(`· ${left.fresh} 个（${sizeMB(leftBytes.fresh || 0)}）是刚导入不到 5 分钟的，下次同步会再清`);
         if (left.unreadable) why.push(`· ${left.unreadable} 个读不到文件信息（系统限制，不敢删）`);
         message += `\n\n副本目录还剩 ${leftTotal} 个文件：\n${why.join('\n')}`;
-        message += '\n数量与大小在「数据目录」里也能看到。';
+        message += '\n数量与大小在「数据与存储」里也能看到。';
       } else if (report.removedCopies === 0 && report.removedCovers === 0) {
         message += '\n\n副本目录里没有多余的文件。';
       }
@@ -368,7 +412,22 @@ export default function HomeScreen({ navigation }) {
       if (report.failedCovers > 0) {
         message += `\n⚠️ 另有 ${report.failedCovers} 张没有引用的封面小图没能删掉。`;
       }
-      Alert.alert('同步完成', message);
+      if (left.referenced > 0) {
+        Alert.alert('同步完成', message, [
+          { text: '保持原样', style: 'cancel' },
+          {
+            text: '清除这些副本',
+            style: 'destructive',
+            onPress: () => confirmPurgeReferencedCopies(
+              left.referenced,
+              leftBytes.referenced || 0,
+              report.referencedLogs || []
+            ),
+          },
+        ]);
+      } else {
+        Alert.alert('同步完成', message);
+      }
     } catch (e) {
       console.error('同步相册失败', e);
       Alert.alert('同步失败', `扫描相册时出现问题：${e?.message || e}`);

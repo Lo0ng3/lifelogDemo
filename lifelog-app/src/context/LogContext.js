@@ -11,6 +11,7 @@ import {
   clearMotionVideos,
   isVideoEntry,
   mediaSignature,
+  purgeReferencedMediaCopies,
 } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
@@ -365,6 +366,14 @@ export const LogProvider = ({ children }) => {
   };
 
   // 备份导入：replace 覆盖现有数据，merge 按 id 合并（备份里的同 id 记录覆盖本地）
+  // 手动清除「仍被记录引用但相册里找不到原片」的本地副本，并同步从对应记录中摘除已删照片
+  const purgeReferencedCopies = async () => {
+    const res = await purgeReferencedMediaCopies(logDataRef.current);
+    if (res.changed) {
+      await commitLogs(res.logs);
+    }
+    return res;
+  };
   const importLogs = async (incoming, mode = 'merge') => {
     let next;
     let added = 0;
@@ -416,7 +425,7 @@ export const LogProvider = ({ children }) => {
   return (
     // 记得把新方法暴露出去
     <LogContext.Provider value={{
-      logData, addLog, deleteLog, updateLog, syncMedia, importLogs,
+      logData, addLog, deleteLog, updateLog, syncMedia, purgeReferencedCopies, importLogs,
       saveVideoPoster,
       tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
       amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,

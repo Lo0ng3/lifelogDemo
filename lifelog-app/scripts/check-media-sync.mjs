@@ -216,7 +216,7 @@ const legacyNames = () => (files.get(LEGACY_MEDIA.slice(0, -1))?.names || []).sl
 
 /* ----------------------------------- 跑一遍 ----------------------------------- */
 const { syncMediaFromGallery } = await import(pathToFileURL(mediaSyncPath).href);
-const { setDraftMediaEntries, describeMediaCopiesAsync } = await import(pathToFileURL(managePath).href);
+const { setDraftMediaEntries, describeMediaCopiesAsync, purgeReferencedMediaCopies } = await import(pathToFileURL(managePath).href);
 // 「添加」页表单里还挂着一张（草稿也算"在用"，同步不能删）
 setDraftMediaEntries([{ uri: MEDIA + 'share_e.jpg' }]);
 const report = await syncMediaFromGallery(logs);
@@ -283,6 +283,19 @@ const report2 = await syncMediaFromGallery(next);
 if (report2.copiesLeft?.draft !== 0) fail.push('清空草稿后不该再报"草稿里还有副本"');
 if (mediaNames().includes('share_e.jpg')) fail.push('草稿清空后，share_e.jpg 这次同步应当被清掉');
 if (report2.removedCopies !== 1) fail.push(`第二次同步应清掉 1 个（share_e），实际 ${report2.removedCopies}`);
+
+// ⑨ 用户确认清除「仍被记录引用且相册里找不到原片」的副本：删文件并从记录中移除对应照片
+if (!report.referencedLogs?.some((r) => r.id === 3)) {
+  fail.push(`report.referencedLogs 应包含记录 3，实际 ${JSON.stringify(report.referencedLogs)}`);
+}
+const purged = await purgeReferencedMediaCopies(next);
+if (!purged.changed || purged.removed !== 1 || purged.freed !== 999 || purged.affectedLogs !== 1) {
+  fail.push(`purgeReferencedMediaCopies 结果不对：${JSON.stringify({ changed: purged.changed, removed: purged.removed, freed: purged.freed, affectedLogs: purged.affectedLogs })}`);
+}
+if (mediaNames().includes('share_d.jpg')) fail.push('确认清除后 share_d.jpg 应当已从磁盘删除');
+if ((purged.logs.find((l) => l.id === 3)?.localImages || []).length !== 0) {
+  fail.push('确认清除后记录 3 里的副本照片条目应当被移除');
+}
 
 console.log(`重链 ${report.matched} 条；删副本 ${report.freedCopies + report.removedCopies} 个（重链接管 ${report.freedCopies} + 孤儿 ${report.removedCopies}），释放 ${report.freedBytes} 字节`);
 console.log(`media/ 目录还剩：${left.join(', ') || '（空）'}（记录引用 ${copiesLeft.referenced} / 草稿 ${copiesLeft.draft} / 刚导入 ${copiesLeft.fresh} / 读不到 ${copiesLeft.unreadable}）`);

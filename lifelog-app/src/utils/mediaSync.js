@@ -503,6 +503,7 @@ export const syncMediaFromGallery = async (logs, onProgress) => {
     // 还剩哪些副本、为什么留着（界面据此如实报出来，不再只说一句"没有多余的"）
     copiesLeft: pruned2.kept || {},
     copiesLeftBytes: pruned2.keptBytes || {},
+    referencedLogs: pruned2.referencedLogs || [],
     failedToDelete: pruned2.failedToDelete || null,
     removedCovers: covers.removed,
     freedCoverBytes: covers.freed,

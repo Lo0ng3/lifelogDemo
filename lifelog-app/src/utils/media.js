@@ -762,11 +762,24 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
     }
   }
   const failedBytes = c.orphans.reduce((sum, f) => sum + (f.size || 0), 0) - freed;
+  const refFileNames = new Set(c.referenced.map((f) => f.name));
+  const referencedLogs = [];
+  if (refFileNames.size > 0) {
+    for (const log of logs || []) {
+      const entries = Array.isArray(log?.localImages) ? log.localImages : [];
+      const names = new Set();
+      for (const raw of entries) collectMediaNames(raw, names);
+      if ([...names].some((n) => refFileNames.has(n))) {
+        referencedLogs.push({ id: log.id, title: log.title || '未命名记录' });
+      }
+    }
+  }
   return {
     removed,
     freed,
     scanned: c.total,
     errors: c.errors,
+    referencedLogs,
     // 剩下来的都是"有人用"或"暂时不敢动"的，如实报给界面，别让用户以为删漏了
     kept: {
       referenced: c.referenced.length,
@@ -787,6 +800,61 @@ export const pruneOrphanMediaCopies = async (logs = []) => {
       reasons: [...new Set(deleteReasons)],
     },
   };
+};
+
+// 强制清除「仍被记录引用但相册里找不到原片」的本地副本：
+// 1) 删除 media/ 中对应的副本文件；
+// 2) 从对应记录的 localImages 里移除已删副本条目（保留文字/日期/地点，并安全校正 coverIndex）。
+export const purgeReferencedMediaCopies = async (logs = []) => {
+  const c = await classifyMediaCopies(logs);
+  if (!c.referenced.length) {
+    return { logs, changed: false, removed: 0, freed: 0, failed: 0, affectedLogs: 0 };
+  }
+  const deletedNames = new Set();
+  let removed = 0;
+  let freed = 0;
+  let failed = 0;
+  for (const f of c.referenced) {
+    const res = await deletePathAsync(f.path);
+    if (res.ok) {
+      removed++;
+      freed += f.size || 0;
+      deletedNames.add(f.name);
+    } else {
+      failed++;
+    }
+  }
+  if (deletedNames.size === 0) {
+    return { logs, changed: false, removed: 0, freed: 0, failed, affectedLogs: 0 };
+  }
+  let changed = false;
+  let affectedLogs = 0;
+  const nextLogs = (logs || []).map((log) => {
+    if (!Array.isArray(log?.localImages) || log.localImages.length === 0) return log;
+    const nextImages = [];
+    let nextCoverIndex = log.coverIndex;
+    const oldCover = typeof log.coverIndex === 'number' ? log.coverIndex : null;
+    log.localImages.forEach((entry, idx) => {
+      const names = new Set();
+      collectMediaNames(entry, names);
+      const hitDeleted = [...names].some((n) => deletedNames.has(n));
+      if (hitDeleted) {
+        if (oldCover === idx) nextCoverIndex = null;
+        return;
+      }
+      if (oldCover === idx) nextCoverIndex = nextImages.length;
+      nextImages.push(entry);
+    });
+    if (nextImages.length === log.localImages.length) return log;
+    changed = true;
+    affectedLogs++;
+    return {
+      ...log,
+      localImages: nextImages,
+      ...(oldCover != null ? { coverIndex: nextCoverIndex } : {}),
+    };
+  });
+  return { logs: nextLogs, changed, removed, freed, failed, affectedLogs };
 };
 
 /* covers/ 里没有记录引用的封面小图：换封面、删记录、同一张图重复下载留下的孤儿。
