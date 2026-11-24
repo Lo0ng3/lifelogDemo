@@ -1,0 +1,43 @@
+# 一键清理本仓库所有历史 Actions Artifacts，立即释放 GitHub 500MB 免费存储额度
+# （不会影响 Releases 里的 apk-latest / ipa-latest）
+#
+# 用法：仓库 → Actions → 「清理历史 Artifacts」→ Run workflow（耗时约 5 秒）
+name: 清理历史 Artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    name: deleteAllArtifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 删除全部历史 Actions Artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          LIST=$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | "\(.id)\t\(.size_in_bytes)\t\(.name)"' || true)
+
+          if [ -z "$LIST" ]; then
+            echo "当前没有任何 Actions Artifacts，无需清理。"
+            exit 0
+          fi
+
+          COUNT=0
+          TOTAL_BYTES=0
+          while IFS=$'\t' read -r ID SIZE NAME; do
+            [ -z "$ID" ] && continue
+            echo "删除 Artifact #$ID ($NAME, $((SIZE / 1024 / 1024)) MB)..."
+            gh api -X DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ID"
+            COUNT=$((COUNT + 1))
+            TOTAL_BYTES=$((TOTAL_BYTES + SIZE))
+          done <<< "$LIST"
+
+          echo "✅ 共删除 $COUNT 个 Artifacts，释放约 $((TOTAL_BYTES / 1024 / 1024)) MB 存储空间。"
