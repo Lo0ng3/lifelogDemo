@@ -203,8 +203,8 @@ const makeStyles = (c) => ({
   itemTitle: { fontSize: 16, fontWeight: '600', color: c.text, flex: 1, marginRight: 8 },
   // 年份一行、月-日一行，右对齐；两行加起来 ≈ 30pt，行高固定 96 也装得下
   itemDateCol: { alignItems: 'flex-end', flexShrink: 0 },
-  itemDateYear: { fontSize: 11, color: c.textMuted, lineHeight: 14 },
-  itemDate: { fontSize: 13, color: c.textSecondary, lineHeight: 16, fontWeight: '600' },
+  itemDateYear: { fontSize: 11, color: c.textMuted, lineHeight: 14, fontVariant: ['tabular-nums'] },
+  itemDate: { fontSize: 13, color: c.textSecondary, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   tag: { fontSize: 10.5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
   moodText: { fontSize: 12, color: c.textMuted },

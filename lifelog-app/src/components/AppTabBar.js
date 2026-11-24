@@ -85,7 +85,7 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
                 width: pillWidth,
                 backgroundColor: isDark
                   ? 'rgba(255,255,255,0.14)'
-                  : (isIOS ? 'rgba(255,255,255,0.62)' : 'rgba(0,122,255,0.10)'),
+                  : (isIOS ? 'rgba(255,255,255,0.68)' : 'rgba(29,99,237,0.10)'),
                 borderColor: isDark
                   ? 'rgba(255,255,255,0.18)'
                   : (isIOS ? 'rgba(255,255,255,0.85)' : 'transparent'),

@@ -61,6 +61,6 @@ export default function CoverIcon({ item, height = 64, style }) {
 }
 
 const styles = StyleSheet.create({
-  slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 8 },
-  iconBox: { width: '100%', height: '100%', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 11, overflow: 'hidden' },
+  iconBox: { width: '100%', height: '100%', borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
 });

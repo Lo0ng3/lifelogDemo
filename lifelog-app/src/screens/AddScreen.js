@@ -1434,7 +1434,8 @@ const makeStyles = (c) => ({
   saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
   formCard: {
     flex: 1, marginHorizontal: 16, marginTop: 10, marginBottom: 0,
-    backgroundColor: c.bgElevated, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
   formScroll: { flex: 1 },
   formContent: { padding: 16 },

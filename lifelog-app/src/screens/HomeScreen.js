@@ -1506,7 +1506,10 @@ const makeStyles = (c) => ({
   filterBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.fill, justifyContent: 'center', alignItems: 'center' },
   filterBtnActive: { backgroundColor: c.accentSoft },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 6, height: 6, borderRadius: 3, backgroundColor: c.danger },
-  listWrapper: { flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 0, borderRadius: 14, overflow: 'hidden' },
+  listWrapper: {
+    flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4, marginBottom: 0,
+    borderRadius: 16, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   listContent: { paddingBottom: 78 },
   monthWrapper: { flex: 1, marginTop: 2, marginBottom: 0 },
   hiddenView: { display: 'none' },
@@ -1540,7 +1543,10 @@ const makeStyles = (c) => ({
     width: 38, height: 38, alignItems: 'center', justifyContent: 'center',
   },
   profileScrollContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 32 },
-  profileCard: { backgroundColor: c.bgElevated, borderRadius: 20, padding: 18, paddingBottom: 16 },
+  profileCard: {
+    backgroundColor: c.bgElevated, borderRadius: 18, padding: 18, paddingBottom: 16,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   profileIdentity: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   profileAvatar: {
     width: 64, height: 64, borderRadius: 32, backgroundColor: c.accent,
@@ -1568,7 +1574,10 @@ const makeStyles = (c) => ({
   profileStatNum: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: c.textStrong, fontVariant: ['tabular-nums'] },
   profileStatLabel: { fontSize: 12, color: c.textMuted },
   groupLabel: { marginTop: 22, marginBottom: 8, paddingHorizontal: 12, fontSize: 13, fontWeight: '500', color: c.textMuted },
-  menuCard: { backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden' },
+  menuCard: {
+    backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   syncPill: {
     position: 'absolute', left: 40, right: 40, bottom: 28,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -1585,7 +1594,10 @@ const makeStyles = (c) => ({
   menuCopy: { flex: 1, gap: 2 },
   menuItemText: { fontSize: 15.5, fontWeight: '500', color: c.text },
   menuItemSub: { fontSize: 12.5, color: c.textMuted, marginTop: 1 },
-  appearanceCard: { backgroundColor: c.bgElevated, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12 },
+  appearanceCard: {
+    backgroundColor: c.bgElevated, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   appearanceNativeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   appearanceNativeLabel: { fontSize: 15.5, fontWeight: '500', color: c.text },
   appearanceNativeSeg: { width: 174, height: 32 },
