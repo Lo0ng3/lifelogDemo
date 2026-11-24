@@ -9,11 +9,13 @@ import * as MediaLibrary from 'expo-media-library';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Check, Star, StarHalf, ChevronRight, ChevronDown, PlayCircle, Maximize2
+  MapPin, Search, ImagePlus, X, Star, StarHalf, PlayCircle, Maximize2, ArrowLeftRight
 } from 'lucide-react-native';
+import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
+import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
-import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
+import { mediaUri, normalizeMediaEntry, resolveMediaUri, remoteImageSource, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { deletePathAsync } from '../utils/storagePaths';
 import { onAddDraftReset } from '../utils/draftReset';
@@ -23,14 +25,14 @@ import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocation
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
-// 二级类型选择：第一级大类 → 第二级子类；地点无子类
-const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐', note: '随笔' };
+// 二级类型选择：顶部原生分段控键选大类 + 下方轻量胶囊选子类；地点无子类
 const TYPE_MENU = [
-  { id: 'ticket', label: '旅票', Icon: Plane, sfName: 'airplane' },
-  { id: 'location', label: '地点', Icon: MapPin, sfName: 'mappin.and.ellipse' },
-  { id: 'media', label: '娱乐', Icon: Film, sfName: 'film' },
-  { id: 'note', label: '随笔', Icon: NotebookPen, sfName: 'square.and.pencil' },
+  { id: 'ticket', label: '旅票' },
+  { id: 'location', label: '地点' },
+  { id: 'media', label: '娱乐' },
+  { id: 'note', label: '随笔' },
 ];
+const TYPE_LABELS = TYPE_MENU.map((t) => t.label);
 const todayParts = () => {
   const d = new Date();
   return {
@@ -44,12 +46,7 @@ const SUB_OPTIONS = {
   media: MEDIA_SUB_OPTIONS,
   note: NOTE_SUB_OPTIONS,
 };
-const SUB_LABEL = {
-  flight: '机票', train: '火车票', bus: '汽车票', ship: '轮船',
-  movie: '电影', tv: '剧集', anime: '动漫', game: '游戏', book: '书籍',
-  diary: '日记', memo: '事迹',
-};
-const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '班次' };
+const TICKET_NO_LABEL = { flight: '航班号', train: '车次', bus: '班次', ship: '船次' };
 
 // 比对「相关记录」用的归一化：忽略空格、全半角标点与大小写
 const normKey = (s) => String(s || '')
@@ -185,10 +182,6 @@ export default function AddScreen({ navigation, route }) {
   const [destFocused, setDestFocused] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
-  // 类型选择改成表单顶部的内联面板：大类 → 子类都在上方展开，不再从底部弹
-  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
-  const [sheetBase, setSheetBase] = useState('ticket');
-
   const clearForm = () => {
     const def = Platform.OS === 'ios' ? todayParts() : { y: '', m: '', d: '' };
     setEditId(null);
@@ -210,14 +203,26 @@ export default function AddScreen({ navigation, route }) {
   };
 
   const chooseCategory = (id) => {
-    setSheetBase(id);
     if (id === 'location') {
       applyType('location', 'location');
-      setTypeMenuOpen(false);
       return;
     }
     const defaultSub = id === 'ticket' ? 'flight' : id === 'media' ? 'movie' : 'diary';
-    if (id !== baseType || subType !== defaultSub) applyType(id, defaultSub);
+    if (id !== baseType) applyType(id, defaultSub);
+  };
+
+  const swapTicketRoute = () => {
+    hapticSelection();
+    skipOriginSearch.current = true;
+    skipDestSearch.current = true;
+    const prevOrigin = ticketOrigin;
+    const prevOriginCoord = originCoord;
+    setTicketOrigin(ticketDest);
+    setTicketDest(prevOrigin);
+    setOriginCoord(destCoord);
+    setDestCoord(prevOriginCoord);
+    setShowOriginAuto(false);
+    setShowDestAuto(false);
   };
 
   const openRelatedRecord = (item) => {
@@ -280,10 +285,14 @@ export default function AddScreen({ navigation, route }) {
     ensureFieldVisible(key);
   }, [ensureFieldVisible]);
 
-  // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来）
+  // 键盘弹起时给内容底部留出余量（表单最下面那几个字段才滚得上来），未弹起时避让底部悬浮液态玻璃导航栏
   const scrollContentStyle = useMemo(
-    () => ({ paddingBottom: keyboardOpen ? 280 : (route.name !== 'Edit' ? 78 : 16) }),
-    [keyboardOpen, route.name]
+    () => ({
+      paddingBottom: keyboardOpen
+        ? 280
+        : (route.name !== 'Edit' ? Math.max(106, insets.bottom + 88) : Math.max(32, insets.bottom + 20)),
+    }),
+    [keyboardOpen, route.name, insets.bottom]
   );
 
   useEffect(() => {
@@ -843,343 +852,457 @@ export default function AddScreen({ navigation, route }) {
     }
   };
 
-  const renderRating = () => {
-    return (
-      <View style={styles.ratingSection}>
-        <Text style={styles.inputLabel}>评分</Text>
+  const catIndex = Math.max(0, TYPE_MENU.findIndex((t) => t.id === baseType));
+  const subList = SUB_OPTIONS[baseType] || [];
+
+  const renderRatingRow = () => (
+    <View style={styles.metaRow}>
+      <Text style={styles.rowLabel}>评分</Text>
+      <View style={styles.starRowRight}>
         <View style={styles.starRow}>
           {[1, 2, 3, 4, 5].map((s) => {
             const isFull = s <= rating;
             const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
             return (
-              <TouchableOpacity key={s} onPress={() => handleStarPress(s)} delayPressIn={0} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
-                {isHalf ? <StarHalf size={32} color={colors.star} fill={colors.star} style={{ marginRight: 8 }} /> : <Star size={32} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : "transparent"} style={{ marginRight: 8 }} />}
+              <TouchableOpacity
+                key={s}
+                onPress={() => handleStarPress(s)}
+                delayPressIn={0}
+                hitSlop={{ top: 10, bottom: 10, left: 3, right: 3 }}
+              >
+                {isHalf ? (
+                  <StarHalf size={25} color={colors.star} fill={colors.star} style={{ marginHorizontal: 2 }} />
+                ) : (
+                  <Star
+                    size={25}
+                    color={isFull ? colors.star : colors.starEmpty}
+                    fill={isFull ? colors.star : 'transparent'}
+                    style={{ marginHorizontal: 2 }}
+                  />
+                )}
               </TouchableOpacity>
             );
           })}
-          {rating > 0 && <Text style={styles.ratingScore}>{rating} 分</Text>}
         </View>
+        <Text style={[styles.ratingScore, !rating && styles.ratingScoreEmpty]}>
+          {rating > 0 ? `${rating} 分` : '未评'}
+        </Text>
       </View>
-    );
-  };
+    </View>
+  );
 
   return (
     <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      {/* 顶部栏：左侧液态玻璃取消圆钮 + 居中标题 + 右侧冰川蓝保存胶囊 */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.headerCircle}
-          delayPressIn={0}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}
-          accessibilityRole="button"
-          accessibilityLabel="取消"
-        >
-          <NativeIcon name="xmark" fallback={X} size={17} color={colors.textSecondary} weight="semibold" />
-        </TouchableOpacity>
+        <View style={styles.headerBackWrap}>
+          <LiquidGlassSurface cornerRadius={19} isDark={isDark} interactive />
+          <TouchableOpacity
+            style={styles.headerBackBtn}
+            delayPressIn={0}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={() => {
+              clearForm();
+              if (route.name === 'Edit') navigation.popToTop();
+              else navigation.navigate('Main', { screen: 'Home' });
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="取消"
+          >
+            <NativeIcon name="xmark" fallback={X} size={17} color={colors.textSecondary} weight="semibold" />
+          </TouchableOpacity>
+        </View>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
-          style={[styles.headerCircle, styles.headerSaveCircle]}
+          style={[styles.headerSavePill, saving && styles.headerSavePillDisabled]}
           delayPressIn={0}
           onPress={() => { Keyboard.dismiss(); handleSave(); }}
           disabled={saving}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
           accessibilityRole="button"
           accessibilityLabel="保存"
         >
-          {saving
-            ? <ActivityIndicator size="small" color={colors.textOnAccent} />
-            : <NativeIcon name="checkmark" fallback={Check} size={17} color={colors.textOnAccent} weight="bold" />}
+          {saving ? (
+            <ActivityIndicator size="small" color={colors.textOnAccent} />
+          ) : (
+            <Text style={styles.headerSaveText}>保存</Text>
+          )}
         </TouchableOpacity>
       </View>
 
-      <View style={styles.formCard}>
-        <ScrollView
-          ref={formScrollRef}
-          style={styles.formScroll}
-          showsVerticalScrollIndicator={false}
-          bounces={Platform.OS === 'ios'}
-          overScrollMode="never"
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
-          scrollEventThrottle={16}
-          onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
-          contentContainerStyle={[styles.formContent, scrollContentStyle]}
-        >
-          {/* 类型字段：在表单顶部就地展开大类 / 子类，避免从底部弹层再选一次 */}
-          <TouchableOpacity
-            style={styles.typeRow}
-            onPress={() => { hapticSelection(); setSheetBase(baseType); setTypeMenuOpen(v => !v); }}
-            activeOpacity={0.75}
-            delayPressIn={0}
-          >
-            <Text style={styles.typeLabel}>类型</Text>
-            <Text style={styles.typeValue}>
-              {baseType === 'location' ? '地点' : `${BASE_LABEL[baseType] || ''} · ${SUB_LABEL[subType] || ''}`}
-            </Text>
-            {typeMenuOpen
-              ? <NativeIcon name="chevron.down" fallback={ChevronDown} size={14} color={colors.textFaint} weight="semibold" />
-              : <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />}
-          </TouchableOpacity>
+      {/* 一级大类原生分段控键 + 二级子类轻量胶囊：一步直达，无需展开折叠面板 */}
+      <View style={styles.typeSelectorWrap}>
+        {hasNativeSegmentedControl ? (
+          <NativeSegmentedControl
+            segments={TYPE_LABELS}
+            selectedIndex={catIndex}
+            isDark={isDark}
+            onChange={(idx) => {
+              const target = TYPE_MENU[idx];
+              if (target) {
+                hapticSelection();
+                chooseCategory(target.id);
+              }
+            }}
+            style={styles.nativeCatSeg}
+          />
+        ) : (
+          <View style={styles.catSegBar}>
+            {TYPE_MENU.map((cat) => {
+              const on = baseType === cat.id;
+              return (
+                <TouchableOpacity
+                  key={cat.id}
+                  style={[styles.catSegBtn, on && styles.catSegBtnOn]}
+                  delayPressIn={0}
+                  onPress={() => { hapticSelection(); chooseCategory(cat.id); }}
+                >
+                  <Text style={[styles.catSegText, on && styles.catSegTextOn]}>{cat.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
 
-          {typeMenuOpen && (
-            <View style={styles.typeMenu}>
-              <View style={styles.typeMenuCats}>
-                {TYPE_MENU.map((cat) => {
-                  const on = sheetBase === cat.id;
-                  return (
-                    <TouchableOpacity
-                      key={cat.id}
-                      style={[styles.typeMenuCat, on && styles.typeMenuCatOn]}
-                      delayPressIn={0}
-                      onPress={() => { hapticSelection(); chooseCategory(cat.id); }}
-                    >
-                      <NativeIcon name={cat.sfName} fallback={cat.Icon} size={15} color={on ? colors.accent : colors.textSecondary} />
-                      <Text style={[styles.typeMenuCatText, on && styles.typeMenuCatTextOn]}>{cat.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              {sheetBase !== 'location' && (
-                <View style={styles.typeMenuSubs}>
-                  {SUB_OPTIONS[sheetBase].map((opt) => {
-                    const active = sheetBase === baseType && subType === opt.id;
-                    return (
-                      <TouchableOpacity
-                        key={opt.id}
-                        style={[styles.typeMenuSub, active && styles.typeMenuSubOn]}
-                        delayPressIn={0}
-                        onPress={() => { hapticSelection(); applyType(sheetBase, opt.id); setTypeMenuOpen(false); }}
-                      >
-                        <Text style={[styles.typeMenuSubText, active && styles.typeMenuSubTextOn]}>{opt.label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          )}
-          {baseType === 'ticket' && (
-            <View style={{ zIndex: 10 }}>
-              <Text style={styles.inputLabel}>出发地</Text>
-              <View style={styles.inputWrapper}>
+        {subList.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.subPillRow}
+          >
+            {subList.map((opt) => {
+              const active = subType === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[styles.subPill, active && styles.subPillOn]}
+                  delayPressIn={0}
+                  onPress={() => { hapticSelection(); applyType(baseType, opt.id); }}
+                >
+                  <Text style={[styles.subPillText, active && styles.subPillTextOn]}>{opt.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </View>
+
+      <ScrollView
+        ref={formScrollRef}
+        style={styles.formScroll}
+        showsVerticalScrollIndicator={false}
+        bounces={Platform.OS === 'ios'}
+        overScrollMode="never"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+        scrollEventThrottle={16}
+        onScroll={(e) => { formScrollY.current = e.nativeEvent.contentOffset.y; }}
+        contentContainerStyle={[styles.formContent, scrollContentStyle]}
+      >
+        {/* 卡片 1：核心信息卡（按 4 种类型定制排布） */}
+        {baseType === 'ticket' && (
+          <View style={styles.groupCard}>
+            <View style={styles.routeRow}>
+              <View style={styles.routeCol}>
+                <Text style={styles.routeLabel}>出发地</Text>
                 <TextInput
-                  style={styles.input}
+                  style={styles.routeInput}
                   {...nextFieldProps('origin')}
                   value={ticketOrigin}
                   onChangeText={setTicketOrigin}
+                  placeholder="出发城市"
+                  placeholderTextColor={colors.textFaint}
                   onFocus={() => { setOriginFocused(true); if (ticketOrigin.trim()) setShowOriginAuto(true); handleFieldFocus('origin'); }}
                   onBlur={() => { setOriginFocused(false); setTimeout(() => setShowOriginAuto(false), 200); }}
                   onSubmitEditing={() => { setShowOriginAuto(false); focusNext('origin'); }}
                 />
               </View>
-              {showOriginAuto && originResults.length > 0 && (
-                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
-                  {originResults.map((result, idx) => (
-                    <TouchableOpacity key={idx} style={styles.autoCompleteItem} onPress={() => pickOrigin(result)}>
-                      <SuggestionRow
-                        title={result.name}
-                        meta={result.district}
-                        textStyle={styles.autoCompleteText}
-                        metaStyle={styles.autoCompleteMeta}
-                        onPress={() => pickOrigin(result)}
-                      />
-                    </TouchableOpacity>
-                  ))}
-                </Reanimated.View>
-              )}
-              <Text style={[styles.inputLabel, { marginTop: 16 }]}>目的地</Text>
-              <View style={styles.inputWrapper}>
+              <TouchableOpacity
+                style={styles.swapBtn}
+                onPress={swapTicketRoute}
+                delayPressIn={0}
+                hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel="互换出发地与目的地"
+              >
+                <NativeIcon name="arrow.left.arrow.right" fallback={ArrowLeftRight} size={14} color={colors.accent} weight="semibold" />
+              </TouchableOpacity>
+              <View style={[styles.routeCol, styles.routeColRight]}>
+                <Text style={[styles.routeLabel, styles.textRight]}>目的地</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.routeInput, styles.textRight]}
                   {...nextFieldProps('dest')}
                   value={ticketDest}
                   onChangeText={setTicketDest}
+                  placeholder="到达城市"
+                  placeholderTextColor={colors.textFaint}
                   onFocus={() => { setDestFocused(true); if (ticketDest.trim()) setShowDestAuto(true); handleFieldFocus('dest'); }}
                   onBlur={() => { setDestFocused(false); setTimeout(() => setShowDestAuto(false), 200); }}
                   onSubmitEditing={() => { setShowDestAuto(false); focusNext('dest'); }}
                 />
               </View>
-              {showDestAuto && destResults.length > 0 && (
-                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 160 }]}>
-                  {destResults.map((result, idx) => (
-                    <TouchableOpacity key={idx} style={styles.autoCompleteItem} onPress={() => pickDest(result)}>
+            </View>
+
+            {showOriginAuto && originResults.length > 0 && (
+              <Reanimated.View entering={FadeIn.duration(140)} style={styles.inlineSuggestBox}>
+                {originResults.map((result, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[styles.autoCompleteItem, idx === originResults.length - 1 && styles.autoCompleteItemLast]}
+                    onPress={() => pickOrigin(result)}
+                  >
+                    <SuggestionRow
+                      title={result.name}
+                      meta={result.district}
+                      textStyle={styles.autoCompleteText}
+                      metaStyle={styles.autoCompleteMeta}
+                      onPress={() => pickOrigin(result)}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </Reanimated.View>
+            )}
+
+            {showDestAuto && destResults.length > 0 && (
+              <Reanimated.View entering={FadeIn.duration(140)} style={styles.inlineSuggestBox}>
+                {destResults.map((result, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[styles.autoCompleteItem, idx === destResults.length - 1 && styles.autoCompleteItemLast]}
+                    onPress={() => pickDest(result)}
+                  >
+                    <SuggestionRow
+                      title={result.name}
+                      meta={result.district}
+                      textStyle={styles.autoCompleteText}
+                      metaStyle={styles.autoCompleteMeta}
+                      onPress={() => pickDest(result)}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </Reanimated.View>
+            )}
+
+            <View style={styles.cardDivider} />
+            <View style={styles.inlineFieldRow}>
+              <Text style={styles.rowLabel}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
+              <TextInput
+                style={styles.inlineRightInput}
+                {...nextFieldProps('no')}
+                value={ticketNo}
+                onChangeText={setTicketNo}
+                placeholder="选填"
+                placeholderTextColor={colors.textFaint}
+              />
+            </View>
+          </View>
+        )}
+
+        {baseType === 'location' && (
+          <View style={styles.groupCard}>
+            <View style={styles.searchCardRow}>
+              <View style={[styles.fieldIconBox, { backgroundColor: colors.iconPlace }]}>
+                <NativeIcon name="mappin.and.ellipse" fallback={MapPin} size={16} color={colors.groupPlace} />
+              </View>
+              <TextInput
+                style={styles.primaryInput}
+                {...nextFieldProps('search')}
+                value={searchQuery}
+                placeholder="地点名称"
+                placeholderTextColor={colors.textFaint}
+                onChangeText={(t) => {
+                  setSearchQuery(t);
+                  if (t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
+                }}
+                onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
+                onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
+                onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
+              />
+            </View>
+
+            {hasLocationSearch(loc) && showSearchAuto && (isSearching || searchResults.length > 0) && (
+              <Reanimated.View entering={FadeIn.duration(140)} style={styles.inlineSuggestBox}>
+                {isSearching ? (
+                  <View style={styles.suggestLoading}>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  </View>
+                ) : (
+                  searchResults.map((result, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[styles.autoCompleteItem, idx === searchResults.length - 1 && styles.autoCompleteItemLast]}
+                      onPress={() => {
+                        skipNextSearch.current = !result.isPrompt;
+                        setSearchQuery(result.name);
+                        setLocationCoords(!result.isPrompt && result.lng != null ? { lng: result.lng, lat: result.lat } : null);
+                        if (!result.isPrompt) setShowSearchAuto(false);
+                      }}
+                    >
                       <SuggestionRow
                         title={result.name}
                         meta={result.district}
                         textStyle={styles.autoCompleteText}
                         metaStyle={styles.autoCompleteMeta}
-                        onPress={() => pickDest(result)}
-                      />
-                    </TouchableOpacity>
-                  ))}
-                </Reanimated.View>
-              )}
-              <Text style={[styles.inputLabel, { marginTop: 16 }]}>{TICKET_NO_LABEL[subType] || '票号'}</Text>
-              <View style={styles.inputWrapper}>
-                <TextInput
-                  style={styles.input}
-                  {...nextFieldProps('no')}
-                  value={ticketNo}
-                  onChangeText={setTicketNo}
-                />
-              </View>
-            </View>
-          )}
-
-          {baseType === 'location' && (
-            <View style={{ zIndex: 10 }}>
-              <Text style={styles.inputLabel}>地点名称</Text>
-              <View style={styles.inputWrapper}>
-                <MapPin size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={styles.input}
-                  {...nextFieldProps('search')}
-                  value={searchQuery}
-                  onChangeText={(t) => {
-                    // 手改名称视为"别名"：坐标跟随选中的地点，改名不影响标点位置
-                    setSearchQuery(t);
-                    if (t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
-                  }}
-                  onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
-                  onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
-                  onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
-                />
-              </View>
-
-              {hasLocationSearch(loc) && showSearchAuto && searchResults.length > 0 && (
-                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
-                  {isSearching ? (
-                    <View style={{ padding: 16, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color={colors.accent} />
-                    </View>
-                  ) : (
-                    searchResults.map((result, idx) => (
-                      <TouchableOpacity
-                        key={idx}
-                        style={styles.autoCompleteItem}
                         onPress={() => {
                           skipNextSearch.current = !result.isPrompt;
                           setSearchQuery(result.name);
                           setLocationCoords(!result.isPrompt && result.lng != null ? { lng: result.lng, lat: result.lat } : null);
                           if (!result.isPrompt) setShowSearchAuto(false);
                         }}
-                      >
-                        <SuggestionRow
-                          title={result.name}
-                          meta={result.district}
-                          textStyle={styles.autoCompleteText}
-                          metaStyle={styles.autoCompleteMeta}
-                          onPress={() => {
-                            skipNextSearch.current = !result.isPrompt;
-                            setSearchQuery(result.name);
-                            setLocationCoords(!result.isPrompt && result.lng != null ? { lng: result.lng, lat: result.lat } : null);
-                            if (!result.isPrompt) setShowSearchAuto(false);
-                          }}
-                        />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </Reanimated.View>
+                      />
+                    </TouchableOpacity>
+                  ))
+                )}
+              </Reanimated.View>
+            )}
+          </View>
+        )}
+
+        {baseType === 'media' && (
+          <View style={styles.groupCard}>
+            <View style={styles.searchCardRow}>
+              {coverUrl ? (
+                <View style={styles.mediaCoverPreview}>
+                  <Image
+                    source={coverUrl.startsWith('http') ? remoteImageSource(coverUrl) : { uri: coverUrl }}
+                    style={StyleSheet.absoluteFill}
+                    contentFit="cover"
+                  />
+                </View>
+              ) : (
+                <View style={[styles.fieldIconBox, { backgroundColor: colors.iconMedia }]}>
+                  <NativeIcon name="magnifyingglass" fallback={Search} size={16} color={colors.groupMedia} />
+                </View>
               )}
+              <TextInput
+                style={styles.primaryInput}
+                {...nextFieldProps('search')}
+                value={searchQuery}
+                placeholder="作品名称"
+                placeholderTextColor={colors.textFaint}
+                onChangeText={(t) => {
+                  setSearchQuery(t);
+                  setCoverUrl(null); setCoverRatio(null);
+                  if (t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
+                }}
+                onFocus={() => { setSearchFocused(true); if (searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
+                onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
+                onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
+              />
             </View>
-          )}
 
-          {baseType === 'media' && (
-            <View style={{ zIndex: 10 }}>
-              <Text style={styles.inputLabel}>记录作品</Text>
-              <View style={[styles.inputWrapper, { marginBottom: 0 }]}>
-                <Search size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
-                <TextInput 
-                  style={styles.input} 
-                  {...nextFieldProps('search')}
-                  value={searchQuery} 
-                  onChangeText={(t) => {
-                    setSearchQuery(t);
-                    setCoverUrl(null); setCoverRatio(null); // 手动改动标题后，之前的网络封面不再匹配
-                    if(t.trim().length === 0) { setShowSearchAuto(false); setSearchResults([]); }
-                  }}
-                  onFocus={() => { setSearchFocused(true); if(searchQuery.trim().length > 0) setShowSearchAuto(true); handleFieldFocus('search'); }}
-                  onBlur={() => { setSearchFocused(false); setTimeout(() => setShowSearchAuto(false), 200); }}
-                  onSubmitEditing={() => { setShowSearchAuto(false); focusNext('search'); }}
-                />
-              </View>
-
-              {showSearchAuto && searchResults.length > 0 && (
-                <Reanimated.View entering={FadeIn.duration(150)} style={[styles.autoCompleteBox, { top: 75 }]}>
-
-                  {isSearching ? (
-                    <View style={{ padding: 16, alignItems: 'center' }}>
-                      <ActivityIndicator size="small" color={colors.accent} />
-                    </View>
-                  ) : (
-                    searchResults.map((result, idx) => (
-                      <TouchableOpacity
-                        key={idx}
-                        style={styles.autoCompleteItem}
+            {showSearchAuto && (isSearching || searchResults.length > 0) && (
+              <Reanimated.View entering={FadeIn.duration(140)} style={styles.inlineSuggestBox}>
+                {isSearching ? (
+                  <View style={styles.suggestLoading}>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  </View>
+                ) : (
+                  searchResults.map((result, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[styles.autoCompleteItem, idx === searchResults.length - 1 && styles.autoCompleteItemLast]}
+                      onPress={() => {
+                        skipNextSearch.current = true;
+                        setSearchQuery(result.title);
+                        setCoverUrl(result.artwork); setCoverRatio(result.ratio || null);
+                        setShowSearchAuto(false);
+                      }}
+                    >
+                      <SuggestionRow
+                        title={result.title}
+                        meta={result.meta}
+                        textStyle={styles.autoCompleteText}
+                        metaStyle={styles.autoCompleteMeta}
                         onPress={() => {
                           skipNextSearch.current = true;
                           setSearchQuery(result.title);
                           setCoverUrl(result.artwork); setCoverRatio(result.ratio || null);
                           setShowSearchAuto(false);
                         }}
-                      >
-                        {/* 长词条可横向拖动查看完整内容 */}
-                        <SuggestionRow
-                          title={result.title}
-                          meta={result.meta}
-                          textStyle={styles.autoCompleteText}
-                          metaStyle={styles.autoCompleteMeta}
-                          onPress={() => {
-                            skipNextSearch.current = true;
-                            setSearchQuery(result.title);
-                            setCoverUrl(result.artwork); setCoverRatio(result.ratio || null);
-                            setShowSearchAuto(false);
-                          }}
-                        />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </Reanimated.View>
-              )}
-            </View>
-          )}
+                      />
+                    </TouchableOpacity>
+                  ))
+                )}
+              </Reanimated.View>
+            )}
+          </View>
+        )}
 
-          {baseType === 'note' && (
-            <View>
-              <Text style={styles.inputLabel}>标题（选填）</Text>
-              <View style={styles.inputWrapper}>
-                <TextInput
-                  style={styles.input}
-                  {...nextFieldProps('noteTitle')}
-                  value={noteTitle}
-                  onChangeText={setNoteTitle}
-                  placeholder={subType === 'diary' ? '给今天起个名字' : '发生了一件什么事'}
-                  placeholderTextColor={colors.textMuted}
+        {baseType === 'note' && (
+          <View style={styles.groupCard}>
+            <View style={styles.noteTitleRow}>
+              <TextInput
+                style={styles.noteTitleInput}
+                {...nextFieldProps('noteTitle')}
+                value={noteTitle}
+                onChangeText={setNoteTitle}
+                placeholder={subType === 'diary' ? '标题（选填）' : '发生了什么事（选填）'}
+                placeholderTextColor={colors.textFaint}
+              />
+              <TouchableOpacity
+                style={styles.expandBtn}
+                onPress={() => { hapticSelection(); setFullscreenComment(true); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <NativeIcon name="arrow.up.left.and.arrow.down.right" fallback={Maximize2} size={12} color={colors.accent} />
+                <Text style={styles.expandBtnText}>全屏</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.cardDivider} />
+            <TextInput
+              style={styles.noteBodyInput}
+              ref={fieldRef('comment')}
+              multiline
+              numberOfLines={5}
+              textAlignVertical="top"
+              onFocus={() => handleFieldFocus('comment')}
+              value={comment}
+              onChangeText={setComment}
+              placeholder="写点什么…"
+              placeholderTextColor={colors.textFaint}
+            />
+          </View>
+        )}
+
+        {/* 同一天已有相关记录提醒（不拦保存） */}
+        {relatedRecords.length > 0 && (
+          <TouchableOpacity
+            style={styles.dupNote}
+            activeOpacity={0.85}
+            onPress={() => openRelatedRecord(relatedRecords[0])}
+          >
+            <Text style={styles.dupNoteTitle}>这一天已经有 {relatedRecords.length} 条相关记录</Text>
+            <Text style={styles.dupNoteBody} numberOfLines={2}>
+              最近一条：{relatedRecords[0].title}
+            </Text>
+            <Text style={styles.dupNoteHint}>点一下查看原记录（仅提醒，不影响保存）</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* 卡片 2：时间与评价（日期 / 旅票时间 / 评分或心情与天气） */}
+        <View style={styles.groupCard}>
+          {Platform.OS === 'ios' ? (
+            <>
+              <View style={styles.metaRow}>
+                <Text style={styles.rowLabel}>发生日期</Text>
+                <DateTimePicker
+                  value={pickerDateValue}
+                  mode="date"
+                  display="compact"
+                  locale="zh-CN"
+                  themeVariant={isDark ? 'dark' : 'light'}
+                  accentColor={colors.accent}
+                  onChange={handleNativeDateChange}
                 />
               </View>
-            </View>
-          )}
-
-          <View style={styles.divider} />
-
-          <View>
-            {Platform.OS === 'ios' ? (
-              <>
-                <View style={styles.nativeDateRow}>
-                  <Text style={[styles.inputLabel, { marginBottom: 0 }]}>发生日期</Text>
-                  <DateTimePicker
-                    value={pickerDateValue}
-                    mode="date"
-                    display="compact"
-                    locale="zh-CN"
-                    themeVariant={isDark ? 'dark' : 'light'}
-                    accentColor={colors.accent}
-                    onChange={handleNativeDateChange}
-                  />
-                </View>
-                {baseType === 'ticket' && (
-                  <View style={[styles.nativeDateRow, { marginTop: 12 }]}>
-                    <Text style={[styles.inputLabel, { marginBottom: 0 }]}>具体时间（选填）</Text>
+              {baseType === 'ticket' && (
+                <>
+                  <View style={styles.cardDivider} />
+                  <View style={styles.metaRow}>
+                    <Text style={styles.rowLabel}>
+                      出发时间 <Text style={styles.rowOptional}>选填</Text>
+                    </Text>
                     {hour || minute ? (
                       <View style={styles.nativeTimeRight}>
                         <DateTimePicker
@@ -1210,15 +1333,17 @@ export default function AddScreen({ navigation, route }) {
                           setMinute(String(now.getMinutes()).padStart(2, '0'));
                         }}
                       >
-                        <Text style={styles.nativeTimeAddText}>添加时间</Text>
+                        <Text style={styles.nativeTimeAddText}>+ 添加时间</Text>
                       </TouchableOpacity>
                     )}
                   </View>
-                )}
-              </>
-            ) : (
-              <>
-                <Text style={styles.inputLabel}>发生日期</Text>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <View style={styles.cardSection}>
+                <Text style={styles.sectionMiniLabel}>发生日期</Text>
                 <View style={styles.dateRow}>
                   <TextInput style={[styles.dateBox, styles.dateBoxYear]} {...dateFieldProps('year', 4, year, setYear)} />
                   <Text style={styles.dateLabelText}>年</Text>
@@ -1227,11 +1352,12 @@ export default function AddScreen({ navigation, route }) {
                   <TextInput style={styles.dateBox} {...dateFieldProps('day', 2, day, setDay)} />
                   <Text style={styles.dateLabelText}>日</Text>
                 </View>
-
-                {/* 只有旅票填时分；列表里只显示日期，具体时分开详情页看 */}
-                {baseType === 'ticket' && (
-                  <View style={{ marginTop: 12 }}>
-                    <Text style={styles.inputLabel}>具体时间（选填）</Text>
+              </View>
+              {baseType === 'ticket' && (
+                <>
+                  <View style={styles.cardDivider} />
+                  <View style={styles.cardSection}>
+                    <Text style={styles.sectionMiniLabel}>出发时间（选填）</Text>
                     <View style={styles.dateRow}>
                       <TextInput style={styles.dateBox} {...dateFieldProps('hour', 2, hour, setHour)} />
                       <Text style={styles.dateLabelText}>时</Text>
@@ -1239,115 +1365,117 @@ export default function AddScreen({ navigation, route }) {
                       <Text style={styles.dateLabelText}>分</Text>
                     </View>
                   </View>
-                )}
-              </>
-            )}
-          </View>
-
-          <View style={styles.divider} />
-          {/* 同一天已经记过同一个地方 / 同一段行程 / 同一部作品时提醒一下（不拦保存） */}
-          {relatedRecords.length > 0 && (
-            <TouchableOpacity
-              style={styles.dupNote}
-              activeOpacity={0.85}
-              onPress={() => openRelatedRecord(relatedRecords[0])}
-            >
-              <Text style={styles.dupNoteTitle}>这一天已经有 {relatedRecords.length} 条相关记录</Text>
-              <Text style={styles.dupNoteBody} numberOfLines={2}>
-                最近一条：{relatedRecords[0].title}
-              </Text>
-              <Text style={styles.dupNoteHint}>点一下打开那条记录（只是提醒，不影响保存）</Text>
-            </TouchableOpacity>
-          )}
-          {/* 随笔用心情 emoji 代替评分；心情必填 */}
-          {baseType === 'note' ? (
-            <View style={styles.ratingSection}>
-              <Text style={styles.inputLabel}>心情 <Text style={styles.requiredMark}>*</Text></Text>
-              <View style={styles.moodRow}>
-                {MOOD_OPTIONS.map((m) => {
-                  const on = mood === m;
-                  return (
-                    <TouchableOpacity
-                      key={m}
-                      style={[styles.moodChip, on && styles.moodChipOn]}
-                      delayPressIn={0}
-                      onPress={() => { hapticSelection(); setMood(on ? null : m); setMoodDraft(''); }}
-                    >
-                      <Text style={styles.moodChipText}>{m}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                <TextInput
-                  style={[styles.moodInput, (moodDraft.trim() && !MOOD_OPTIONS.includes(mood)) && styles.moodChipOn]}
-                  {...nextFieldProps('moodDraft')}
-                  value={moodDraft}
-                  onChangeText={(t) => { setMoodDraft(t); setMood(t ? t : null); }}
-                  placeholder="自填"
-                  placeholderTextColor={colors.textMuted}
-                  maxLength={4}
-                />
-              </View>
-            </View>
-          ) : renderRating()}
-          <View style={[styles.divider, { marginVertical: 12 }]} />
-
-          <View>
-            <View style={styles.labelRow}>
-              <Text style={[styles.inputLabel, styles.labelRowText]}>{baseType === 'note' ? '内容' : '评论'}</Text>
-              {/* 内容写长了可以进全屏编辑 */}
-              <TouchableOpacity
-                style={styles.expandBtn}
-                onPress={() => { hapticSelection(); setFullscreenComment(true); }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <NativeIcon name="arrow.up.left.and.arrow.down.right" fallback={Maximize2} size={13} color={colors.accent} />
-                <Text style={styles.expandBtnText}>全屏</Text>
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={styles.commentInput}
-              ref={fieldRef('comment')}
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-              onFocus={() => handleFieldFocus('comment')}
-              value={comment}
-              onChangeText={setComment}
-              placeholder={baseType === 'note' ? '写点什么…' : '写点评论…'}
-              placeholderTextColor={colors.textMuted}
-            />
-          </View>
-
-          {baseType === 'note' && subType === 'diary' && (
-            <>
-              <View style={styles.divider} />
-              <View>
-                <Text style={styles.inputLabel}>天气（选填）</Text>
-                <View style={styles.moodRow}>
-                  {WEATHER_OPTIONS.map((w) => {
-                    const on = weather === w;
-                    return (
-                      <TouchableOpacity
-                        key={w}
-                        style={[styles.weatherChip, on && styles.moodChipOn]}
-                        delayPressIn={0}
-                        onPress={() => { hapticSelection(); setWeather(on ? null : w); }}
-                      >
-                        <Text style={[styles.weatherChipText, on && styles.weatherChipTextOn]}>{w}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
+                </>
+              )}
             </>
           )}
 
-          <View style={styles.divider} />
+          <View style={styles.cardDivider} />
 
-          <View>
-            {/* 各类型统一叫「照片」：以前旅票是"票根 / 留影"、娱乐/地点是"现场影像 / 截图"，
-                同一个东西三个名字，容易看混 */}
-            <Text style={styles.inputLabel}>照片 ({selectedImages.length})</Text>
+          {baseType === 'note' ? (
+            <>
+              <View style={styles.cardSection}>
+                <Text style={styles.sectionMiniLabel}>
+                  心情 <Text style={styles.requiredMark}>*</Text>
+                </Text>
+                <View style={styles.moodRow}>
+                  {MOOD_OPTIONS.map((m) => {
+                    const on = mood === m;
+                    return (
+                      <TouchableOpacity
+                        key={m}
+                        style={[styles.moodChip, on && styles.moodChipOn]}
+                        delayPressIn={0}
+                        onPress={() => { hapticSelection(); setMood(on ? null : m); setMoodDraft(''); }}
+                      >
+                        <Text style={styles.moodChipText}>{m}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <TextInput
+                    style={[styles.moodInput, (moodDraft.trim() && !MOOD_OPTIONS.includes(mood)) && styles.moodChipOn]}
+                    {...nextFieldProps('moodDraft')}
+                    value={moodDraft}
+                    onChangeText={(t) => { setMoodDraft(t); setMood(t ? t : null); }}
+                    placeholder="自填"
+                    placeholderTextColor={colors.textMuted}
+                    maxLength={4}
+                  />
+                </View>
+              </View>
+              {subType === 'diary' && (
+                <>
+                  <View style={styles.cardDivider} />
+                  <View style={styles.cardSection}>
+                    <Text style={styles.sectionMiniLabel}>天气（选填）</Text>
+                    <View style={styles.moodRow}>
+                      {WEATHER_OPTIONS.map((w) => {
+                        const on = weather === w;
+                        return (
+                          <TouchableOpacity
+                            key={w}
+                            style={[styles.weatherChip, on && styles.moodChipOn]}
+                            delayPressIn={0}
+                            onPress={() => { hapticSelection(); setWeather(on ? null : w); }}
+                          >
+                            <Text style={[styles.weatherChipText, on && styles.weatherChipTextOn]}>{w}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </>
+              )}
+            </>
+          ) : renderRatingRow()}
+        </View>
+
+        {/* 卡片 3：评论卡（随笔的正文已合并在卡片 1 里，不再重复） */}
+        {baseType !== 'note' && (
+          <View style={styles.groupCard}>
+            <View style={styles.cardSection}>
+              <View style={styles.labelRow}>
+                <Text style={styles.rowLabel}>评论</Text>
+                <TouchableOpacity
+                  style={styles.expandBtn}
+                  onPress={() => { hapticSelection(); setFullscreenComment(true); }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <NativeIcon name="arrow.up.left.and.arrow.down.right" fallback={Maximize2} size={12} color={colors.accent} />
+                  <Text style={styles.expandBtnText}>全屏</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.commentInput}
+                ref={fieldRef('comment')}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+                onFocus={() => handleFieldFocus('comment')}
+                value={comment}
+                onChangeText={setComment}
+                placeholder="写点评论…"
+                placeholderTextColor={colors.textFaint}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* 卡片 4：照片与视频 */}
+        <View style={styles.groupCard}>
+          <View style={styles.cardSection}>
+            <View style={styles.labelRow}>
+              <Text style={styles.rowLabel}>
+                照片 <Text style={styles.rowCount}>({selectedImages.length})</Text>
+              </Text>
+              <TouchableOpacity
+                onPress={openMediaPicker}
+                delayPressIn={0}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={styles.pickPhotoLink}>从相册选择</Text>
+              </TouchableOpacity>
+            </View>
             <View style={styles.imageGrid}>
               {selectedImages.map((entry, idx) => (
                 <View key={idx} style={styles.imageGridItem}>
@@ -1367,13 +1495,13 @@ export default function AddScreen({ navigation, route }) {
               ))}
               <View style={styles.imageGridItem}>
                 <TouchableOpacity style={styles.addImageBtn} delayPressIn={0} onPress={openMediaPicker}>
-                  <NativeIcon name="photo.badge.plus" fallback={ImagePlus} size={24} color={colors.textMuted} />
+                  <NativeIcon name="photo.badge.plus" fallback={ImagePlus} size={22} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             </View>
           </View>
-        </ScrollView>
-      </View>
+        </View>
+      </ScrollView>
 
       {/* 评论 / 内容全屏编辑：iOS 用原生 pageSheet（支持下拉关闭），写长文时铺满编辑区 */}
       <Modal
@@ -1407,129 +1535,206 @@ export default function AddScreen({ navigation, route }) {
           />
         </KeyboardAvoidingView>
       </Modal>
-
     </KeyboardAvoidingView>
   );
 }
 
 const makeStyles = (c) => ({
+  container: { flex: 1, backgroundColor: c.bg },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10,
+  },
+  headerBackWrap: {
+    width: 38, height: 38, borderRadius: 19, overflow: 'hidden',
+    shadowColor: c.shadow, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6, elevation: 2,
+  },
+  headerBackBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
+  headerSavePill: {
+    height: 36, minWidth: 64, paddingHorizontal: 16, borderRadius: 18,
+    backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center',
+  },
+  headerSavePillDisabled: { opacity: 0.65 },
+  headerSaveText: { fontSize: 14.5, fontWeight: '600', color: c.textOnAccent },
+  cancelText: { fontSize: 16, color: c.textSecondary },
+  saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
+
+  typeSelectorWrap: { paddingHorizontal: 16, paddingBottom: 10, gap: 10 },
+  nativeCatSeg: { width: '100%', height: 34 },
+  catSegBar: {
+    flexDirection: 'row', backgroundColor: c.fill, borderRadius: 10, padding: 3,
+  },
+  catSegBtn: { flex: 1, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  catSegBtnOn: { backgroundColor: c.bgElevated },
+  catSegText: { fontSize: 13.5, fontWeight: '500', color: c.textSecondary },
+  catSegTextOn: { color: c.textStrong, fontWeight: '600' },
+  subPillRow: { gap: 8, paddingVertical: 2 },
+  subPill: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16,
+    backgroundColor: c.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  subPillOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
+  subPillText: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
+  subPillTextOn: { color: c.accent, fontWeight: '600' },
+
+  formScroll: { flex: 1 },
+  formContent: { paddingHorizontal: 16, paddingTop: 2, gap: 12 },
+  groupCard: {
+    backgroundColor: c.bgElevated, borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    overflow: 'hidden',
+  },
+  cardSection: { paddingHorizontal: 16, paddingVertical: 14 },
+  cardDivider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 16 },
+  rowLabel: { fontSize: 15, fontWeight: '500', color: c.text },
+  rowOptional: { fontSize: 12.5, fontWeight: '400', color: c.textMuted },
+  rowCount: { fontSize: 13.5, fontWeight: '400', color: c.textMuted, fontVariant: ['tabular-nums'] },
+  sectionMiniLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 10 },
+
+  // 旅票登机牌式双栏起终点
+  routeRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
+  routeCol: { flex: 1, minWidth: 0 },
+  routeColRight: { alignItems: 'flex-end' },
+  routeLabel: { fontSize: 12, fontWeight: '500', color: c.textMuted, marginBottom: 4 },
+  routeInput: { fontSize: 17, fontWeight: '600', color: c.textStrong, paddingVertical: 2, width: '100%' },
+  textRight: { textAlign: 'right' },
+  swapBtn: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: c.accentSoft,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  inlineFieldRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, minHeight: 50, gap: 12,
+  },
+  inlineRightInput: {
+    flex: 1, textAlign: 'right', fontSize: 15, fontWeight: '500', color: c.text, paddingVertical: 8,
+  },
+
+  // 地点 / 娱乐搜索输入
+  searchCardRow: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12,
+  },
+  fieldIconBox: {
+    width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  mediaCoverPreview: {
+    width: 40, height: 54, borderRadius: 8, overflow: 'hidden',
+    backgroundColor: c.mediaPlaceholder, flexShrink: 0,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  primaryInput: { flex: 1, fontSize: 16, fontWeight: '600', color: c.textStrong, paddingVertical: 4 },
+
+  // 随笔备忘录式一体输入卡
+  noteTitleRow: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10,
+  },
+  noteTitleInput: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textStrong, paddingVertical: 2 },
+  noteBodyInput: {
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14,
+    fontSize: 15.5, lineHeight: 24, minHeight: 128, color: c.text,
+  },
+
+  // 内联联想列表（嵌在卡片内展开，不会裁切也不会错位）
+  inlineSuggestBox: {
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider,
+    backgroundColor: c.bgSunken,
+  },
+  suggestLoading: { paddingVertical: 14, alignItems: 'center' },
+  autoCompleteItem: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider,
+  },
+  autoCompleteItemLast: { borderBottomWidth: 0 },
+  autoCompleteText: { fontSize: 14.5, color: c.text, fontWeight: '500' },
+  autoCompleteMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+
+  // 重复提醒
   dupNote: {
-    marginTop: 12, padding: 12, borderRadius: 12,
+    padding: 13, borderRadius: 14,
     backgroundColor: c.warnSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.warnText,
   },
   dupNoteTitle: { fontSize: 13.5, fontWeight: '600', color: c.warnText },
-  // lineHeight 是绝对单位（pt），不是倍数：写成 1.5 会把行高压成 1.5pt，
-  // 文字被裁得只剩一条缝——之前"底下那行被遮挡"就是这个
-  dupNoteBody: { fontSize: 12, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
-  dupNoteHint: { fontSize: 11, color: c.warnText, marginTop: 6, opacity: 0.7 },
-  container: { flex: 1, backgroundColor: c.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: 'transparent' },
-  headerCircle: {
-    width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.fill,
+  dupNoteBody: { fontSize: 12.5, color: c.warnText, marginTop: 4, lineHeight: 18, opacity: 0.92 },
+  dupNoteHint: { fontSize: 11.5, color: c.warnText, marginTop: 5, opacity: 0.72 },
+
+  // 日期 / 时间 / 评分行
+  metaRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, minHeight: 52, gap: 12,
   },
-  headerSaveCircle: { backgroundColor: c.accent },
-  cancelText: { fontSize: 16, color: c.textSecondary },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: c.text },
-  saveText: { fontSize: 16, fontWeight: '600', color: c.accent },
-  formCard: {
-    flex: 1, marginHorizontal: 16, marginTop: 10, marginBottom: 0,
-    backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-  },
-  formScroll: { flex: 1 },
-  formContent: { padding: 16 },
-  typeRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 46, marginBottom: 16 },
-  typeLabel: { fontSize: 15, color: c.textMuted, marginRight: 8 },
-  typeValue: { flex: 1, fontSize: 15, fontWeight: '600', color: c.text },
-  typeMenu: {
-    marginTop: -6, marginBottom: 16, padding: 10,
-    backgroundColor: c.bgSunken, borderRadius: 14,
-    borderWidth: 1, borderColor: c.border,
-  },
-  typeMenuCats: { flexDirection: 'row', gap: 6 },
-  typeMenuCat: {
-    flex: 1, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
-    flexDirection: 'row', gap: 4, borderWidth: 1, borderColor: c.borderSoft,
-    backgroundColor: c.bgElevated,
-  },
-  typeMenuCatOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
-  typeMenuCatText: { fontSize: 12, color: c.textSecondary, fontWeight: '500' },
-  typeMenuCatTextOn: { color: c.accent, fontWeight: '600' },
-  typeMenuSubs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  typeMenuSub: {
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14,
-    backgroundColor: c.bgElevated, borderWidth: 1, borderColor: c.borderSoft,
-  },
-  typeMenuSubOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
-  typeMenuSubText: { fontSize: 12.5, color: c.textSecondary },
-  typeMenuSubTextOn: { color: c.accent, fontWeight: '600' },
-  sheetContent: { paddingHorizontal: 16, paddingBottom: 24 },
-  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
-  catRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  catCard: { flex: 1, borderWidth: 1.5, borderColor: c.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
-  catCardActive: { borderColor: c.accent, backgroundColor: c.accentTint },
-  catIconBox: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  catEmoji: { fontSize: 19, lineHeight: 24 },
-  catLabel: { fontSize: 14, fontWeight: '500', color: c.textSecondary },
-  catLabelActive: { color: c.accent, fontWeight: '600' },
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  chip: { paddingVertical: 9, paddingHorizontal: 18, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.borderSoft, borderRadius: 19 },
-  chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
-  chipText: { fontSize: 14, color: c.textSecondary },
-  chipTextActive: { color: c.accent, fontWeight: '500' },
-  inputLabel: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 8 },
-  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, height: 44, marginBottom: 16 },
-  input: { flex: 1, fontSize: 15, color: c.text },
-  autoCompleteBox: { position: 'absolute', top: 70, left: 0, right: 0, backgroundColor: c.bgElevated, borderRadius: 10, shadowColor: c.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4, zIndex: 99, overflow: 'hidden' },
-  autoCompleteItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft },
-  autoCompleteThumb: { width: 36, height: 36, borderRadius: 6 },
-  autoCompleteText: { fontSize: 15, color: c.text },
-  autoCompleteMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
-  divider: { height: 1, backgroundColor: c.borderSoft, marginVertical: 16 },
-  dateRow: { flexDirection: 'row', alignItems: 'center' },
-  nativeDateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 38 },
   nativeTimeRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   nativeTimeAddBtn: {
     paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
     backgroundColor: c.accentSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.accentSoftBorder,
   },
   nativeTimeAddText: { fontSize: 13.5, fontWeight: '600', color: c.accent },
-  nativeTimeClearBtn: { paddingHorizontal: 8, paddingVertical: 6 },
+  nativeTimeClearBtn: { paddingHorizontal: 6, paddingVertical: 6 },
   nativeTimeClearText: { fontSize: 13, color: c.textMuted },
-  dateBox: { backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: c.text },
-  dateBoxYear: { width: 64 }, 
+  dateRow: { flexDirection: 'row', alignItems: 'center' },
+  dateBox: {
+    backgroundColor: c.bgSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    borderRadius: 9, height: 40, width: 46, textAlign: 'center', fontSize: 15.5, fontWeight: '600', color: c.text,
+  },
+  dateBoxYear: { width: 64 },
   dateLabelText: { fontSize: 14, color: c.textSecondary, marginHorizontal: 6, fontWeight: '500' },
-  ratingSection: { marginBottom: 8 },
-  starRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  ratingScore: { fontSize: 18, fontWeight: 'bold', color: c.star, marginLeft: 12 },
+
+  starRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  starRow: { flexDirection: 'row', alignItems: 'center' },
+  ratingScore: { fontSize: 14, fontWeight: '700', color: c.textSecondary, minWidth: 38, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  ratingScoreEmpty: { fontWeight: '500', color: c.textMuted },
   requiredMark: { color: c.danger, fontWeight: '700' },
-  moodRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  moodChip: { width: 44, height: 42, borderRadius: 12, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border,
-    alignItems: 'center', justifyContent: 'center' },
+
+  moodRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  moodChip: {
+    width: 44, height: 42, borderRadius: 12, backgroundColor: c.bgSunken,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
   moodChipOn: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
   moodChipText: { fontSize: 21, lineHeight: 26 },
-  moodInput: { width: 88, height: 42, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: c.border,
-    backgroundColor: c.bgSunken, textAlign: 'center', fontSize: 18, color: c.text, paddingVertical: 0 },
-  weatherChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: c.bgSunken,
-    borderWidth: 1, borderColor: c.border },
-  weatherChipText: { fontSize: 13, color: c.textSecondary },
+  moodInput: {
+    width: 82, height: 42, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: c.border,
+    backgroundColor: c.bgSunken, textAlign: 'center', fontSize: 16, color: c.text, paddingVertical: 0,
+  },
+  weatherChip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16, backgroundColor: c.bgSunken,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
+  weatherChipText: { fontSize: 13.5, color: c.textSecondary },
   weatherChipTextOn: { color: c.accent, fontWeight: '600' },
-  commentInput: { backgroundColor: c.bgSunken, borderRadius: 10, padding: 12, fontSize: 15, height: 100, color: c.text, borderWidth: 1, borderColor: c.border },
-  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  labelRowText: { marginBottom: 0 },
-  expandBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 8, backgroundColor: c.accentSoft },
-  expandBtnText: { fontSize: 11.5, color: c.accent, fontWeight: '600' },
+
+  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  expandBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 4,
+    borderRadius: 8, backgroundColor: c.accentSoft,
+  },
+  expandBtnText: { fontSize: 12, color: c.accent, fontWeight: '600' },
+  commentInput: {
+    fontSize: 15, lineHeight: 23, minHeight: 76, color: c.text, paddingVertical: 2,
+  },
+  pickPhotoLink: { fontSize: 13.5, fontWeight: '600', color: c.accent },
+
   fullscreenWrap: { flex: 1, backgroundColor: c.bg },
-  fullscreenHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
-    paddingVertical: 14, backgroundColor: c.bgElevated, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
-  fullscreenInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, lineHeight: 24, color: c.text, textAlignVertical: 'top' },
-  imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 4 },
-  imageGridItem: { width: '33.33%', padding: 4 },
+  fullscreenHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
+    paddingVertical: 14, backgroundColor: c.bgElevated, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
+  },
+  fullscreenInput: {
+    flex: 1, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, lineHeight: 25, color: c.text, textAlignVertical: 'top',
+  },
+
+  imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4 },
+  imageGridItem: { width: '25%', padding: 4 },
   imageGridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.mediaPlaceholder, overflow: 'hidden' },
   playOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  addImageBtn: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
-  removeImageBtn: { position: 'absolute', top: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }
+  addImageBtn: {
+    width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.bgSunken,
+    borderWidth: 1, borderColor: c.border, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center',
+  },
+  removeImageBtn: {
+    position: 'absolute', top: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.62)',
+    width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  },
 });
