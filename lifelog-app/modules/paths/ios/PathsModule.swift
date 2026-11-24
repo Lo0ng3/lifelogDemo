@@ -113,6 +113,86 @@ public class PathsModule: Module {
       }
     }.runOnQueue(.main)
 
+    // 清理应用沙盒 tmp/ 下的所有临时文件（如早期导出的实况/视频临时缓存）
+    AsyncFunction("clearTempFiles") { () -> Double in
+      let fm = FileManager.default
+      let tmpDir = fm.temporaryDirectory
+      var freed: Int64 = 0
+      guard let items = try? fm.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: nil) else {
+        return 0
+      }
+      for item in items {
+        freed += self.allocatedSizeOf(url: item)
+        try? fm.removeItem(at: item)
+      }
+      return Double(freed)
+    }
+
+    // 与 iOS「设置 → 通用 → iPhone 储存空间 → 文稿与数据」同口径的全沙盒扫描：
+    // 遍历整个 NSHomeDirectory()（Documents / Library / tmp），按文件系统实际占用块（totalFileAllocatedSizeKey）汇总并分类，
+    // 保证各项相加严格等于系统统计的「文稿与数据」总占用。
+    AsyncFunction("getStorageBreakdown") { () -> [String: Any] in
+      let fm = FileManager.default
+      let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+      let homePrefix = homeURL.path.hasSuffix("/") ? homeURL.path : homeURL.path + "/"
+
+      var buckets: [String: (bytes: Int64, files: Int)] = [
+        "records": (0, 0),   // 记录、内部备份与头像（Application Support / internal-backup / profile）
+        "covers": (0, 0),    // 封面小图与视频预览帧（covers / videoPosters / videoThumbs）
+        "media": (0, 0),     // 本地媒体副本（Documents/media）
+        "imageCache": (0, 0),// 图片与缩略图缓存（SDImageCache / expo-image / thumbs / ImageManipulator）
+        "mapCache": (0, 0),  // 地图与网页缓存（WebKit / HTTPStorages / Cookies / URLCache）
+        "temp": (0, 0),      // 临时文件（tmp / motionVideos / backups / VideoThumbnails）
+        "system": (0, 0),    // 其余系统沙盒文件（Preferences / SplashBoard / Saved State 等）
+      ]
+
+      let keys: Set<URLResourceKey> = [
+        .isRegularFileKey,
+        .totalFileAllocatedSizeKey,
+        .fileAllocatedSizeKey,
+        .fileSizeKey,
+      ]
+      var totalBytes: Int64 = 0
+      var totalFiles: Int = 0
+
+      if let enumerator = fm.enumerator(
+        at: homeURL,
+        includingPropertiesForKeys: Array(keys),
+        options: [],
+        errorHandler: nil
+      ) {
+        for case let fileURL as URL in enumerator {
+          guard let vals = try? fileURL.resourceValues(forKeys: keys),
+                vals.isRegularFile == true else {
+            continue
+          }
+          let sz = Int64(vals.totalFileAllocatedSize ?? vals.fileAllocatedSize ?? vals.fileSize ?? 0)
+          let fullPath = fileURL.standardizedFileURL.path
+          let rel = fullPath.hasPrefix(homePrefix)
+            ? String(fullPath.dropFirst(homePrefix.count))
+            : fullPath
+          let bucket = self.classifySandboxPath(rel)
+          if var cur = buckets[bucket] {
+            cur.bytes += sz
+            cur.files += 1
+            buckets[bucket] = cur
+          }
+          totalBytes += sz
+          totalFiles += 1
+        }
+      }
+
+      var resultBuckets: [String: [String: Any]] = [:]
+      for (k, v) in buckets {
+        resultBuckets[k] = ["bytes": Double(v.bytes), "files": v.files]
+      }
+      return [
+        "totalBytes": Double(totalBytes),
+        "totalFiles": totalFiles,
+        "buckets": resultBuckets,
+      ]
+    }
+
     View(LiquidGlassView.self) {
       Prop("cornerRadius") { (view: LiquidGlassView, value: Double) in
         view.setCornerRadius(value)
@@ -146,5 +226,63 @@ public class PathsModule: Module {
     let raw = uri.hasPrefix("file://") ? String(uri.dropFirst("file://".count)) : uri
     let decoded = raw.removingPercentEncoding ?? raw
     return URL(fileURLWithPath: decoded)
+  }
+
+  private func allocatedSizeOf(url: URL) -> Int64 {
+    let keys: Set<URLResourceKey> = [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .fileSizeKey]
+    if let vals = try? url.resourceValues(forKeys: keys), vals.isRegularFile == true {
+      return Int64(vals.totalFileAllocatedSize ?? vals.fileAllocatedSize ?? vals.fileSize ?? 0)
+    }
+    var sum: Int64 = 0
+    if let en = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
+      for case let child as URL in en {
+        if let vals = try? child.resourceValues(forKeys: keys), vals.isRegularFile == true {
+          sum += Int64(vals.totalFileAllocatedSize ?? vals.fileAllocatedSize ?? vals.fileSize ?? 0)
+        }
+      }
+    }
+    return sum
+  }
+
+  private func classifySandboxPath(_ rel: String) -> String {
+    if rel.hasPrefix("tmp/") || rel == "tmp" { return "temp" }
+    if rel.hasPrefix("Documents/media/") { return "media" }
+    if rel.hasPrefix("Documents/covers/")
+      || rel.hasPrefix("Documents/videoPosters/")
+      || rel.hasPrefix("Documents/videoThumbs/") {
+      return "covers"
+    }
+    if rel.hasPrefix("Documents/motionVideos/") { return "temp" }
+    if rel.hasPrefix("Documents/internal-backup/")
+      || rel.hasPrefix("Documents/profile/")
+      || rel.hasPrefix("Library/Application Support/") {
+      return "records"
+    }
+    if rel.hasPrefix("Library/WebKit/")
+      || rel.hasPrefix("Library/HTTPStorages/")
+      || rel.hasPrefix("Library/Cookies/")
+      || rel.hasPrefix("Library/Caches/WebKit/")
+      || rel.hasPrefix("Library/Caches/com.jiyin.lifelog/") {
+      return "mapCache"
+    }
+    if rel.hasPrefix("Library/Caches/backups/")
+      || rel.hasPrefix("Library/Caches/VideoThumbnails/") {
+      return "temp"
+    }
+    if rel.hasPrefix("Library/Caches/com.hackemist.SDImageCache/")
+      || rel.hasPrefix("Library/Caches/org.hackemist.SDImageCache/")
+      || rel.hasPrefix("Library/Caches/expo-image/")
+      || rel.hasPrefix("Library/Caches/thumbs/")
+      || rel.hasPrefix("Library/Caches/ImageManipulator/")
+      || rel.hasPrefix("Library/Caches/image_cache/") {
+      return "imageCache"
+    }
+    if rel.hasPrefix("Library/Caches/") {
+      return "mapCache"
+    }
+    if rel.hasPrefix("Documents/") {
+      return "records"
+    }
+    return "system"
   }
 }

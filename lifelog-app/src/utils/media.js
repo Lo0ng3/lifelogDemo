@@ -8,7 +8,7 @@ import { Image } from 'expo-image';
 import * as RN from 'react-native';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync, deletePathAsync, rebaseAppFileUri } from './storagePaths';
+import { COVERS_DIR, MEDIA_DIR, copyFileAsync, ensureDirAsync, deletePathAsync, rebaseAppFileUri, clearTempFilesAsync } from './storagePaths';
 
 const RNImage = RN.Image;
 const isIOS = () => RN.Platform?.OS === 'ios';
@@ -568,7 +568,10 @@ export const cleanupMediaCaches = async (logs = [], { thumbs = true, motion = tr
       `${FileSystem.cacheDirectory}backups`
     );
   }
-  if (motion) dirs.push(`${FileSystem.documentDirectory}motionVideos`);
+  if (motion) {
+    dirs.push(`${FileSystem.documentDirectory}motionVideos`);
+    if (isIOS()) freed += await clearTempFilesAsync();
+  }
   for (const dir of dirs) {
     try {
       freed += await dirSizeAsync(dir);

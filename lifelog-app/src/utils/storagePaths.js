@@ -121,6 +121,98 @@ export const clearWebKitCacheAsync = async () => {
   }
 };
 
+// iOS 清理 tmp/ 临时目录（早期实况/视频导出临时文件等），返回释放的字节数
+export const clearTempFilesAsync = async () => {
+  if (!native?.clearTempFiles) return 0;
+  try {
+    const freed = await native.clearTempFiles();
+    return typeof freed === 'number' && freed > 0 ? freed : 0;
+  } catch {
+    return 0;
+  }
+};
+
+// 按苹果系统标准（十进制 1000 换算）格式化体积，与 iOS「设置 → iPhone 储存空间」一致
+export const formatStorageSize = (bytes) => {
+  const b = Math.max(0, Number(bytes) || 0);
+  if (b === 0) return '0 KB';
+  if (b < 1000 * 1000) return `${Math.max(1, Math.round(b / 1000))} KB`;
+  if (b < 1000 * 1000 * 1000) return `${(b / (1000 * 1000)).toFixed(1)} MB`;
+  return `${(b / (1000 * 1000 * 1000)).toFixed(2)} GB`;
+};
+
+// 结构化全沙盒体积统计（供「存储与数据」弹窗使用）：
+// - iOS：调用原生 Paths.getStorageBreakdown() 扫描整个 NSHomeDirectory()，按实际磁盘占用块统计，
+//   所有分类相加严格等于系统「文稿与数据」总大小；
+// - Android：按目录统计并汇总。
+export const getStorageSummaryAsync = async () => {
+  if (isIOS() && native?.getStorageBreakdown) {
+    try {
+      const raw = await native.getStorageBreakdown();
+      const b = raw?.buckets || {};
+      const pick = (k) => ({
+        bytes: Number(b[k]?.bytes) || 0,
+        files: Number(b[k]?.files) || 0,
+      });
+      const items = [
+        { key: 'records', label: '记录、备份与头像', note: '文字记录、本地自动备份与个人头像', ...pick('records') },
+        { key: 'covers', label: '封面与视频预览帧', note: '列表/详情封面小图与视频封面帧', ...pick('covers') },
+        { key: 'media', label: '本地媒体副本', note: '分享或导入尚未关联原片的副本', ...pick('media') },
+        { key: 'imageCache', label: '图片与缩略图缓存', note: '看图缓存，清理后可自动重建', ...pick('imageCache') },
+        { key: 'mapCache', label: '地图与网页缓存', note: '地图瓦片、SDK 与网络缓存', ...pick('mapCache') },
+        { key: 'temp', label: '临时文件', note: '实况/导出产生的临时文件，可随时清理', ...pick('temp') },
+        { key: 'system', label: '系统与其它', note: '偏好设置、启动快照等系统开销', ...pick('system') },
+      ];
+      return {
+        exact: true,
+        totalBytes: Number(raw?.totalBytes) || items.reduce((s, i) => s + i.bytes, 0),
+        totalFiles: Number(raw?.totalFiles) || items.reduce((s, i) => s + i.files, 0),
+        locationNote: '应用文档目录（可在「文件」App → 我的 iPhone → 印记查看）',
+        items,
+      };
+    } catch {}
+  }
+
+  // Android / 兜底路径：按主要目录汇总
+  const [stMedia, stCovers, stThumbs, stPosters, stMotion, stBackup, stProfile] = await Promise.all([
+    dirStatsAsync(MEDIA_DIR, 2),
+    dirStatsAsync(COVERS_DIR, 2),
+    dirStatsAsync(`${FileSystem.documentDirectory}videoThumbs`, 2),
+    dirStatsAsync(`${FileSystem.documentDirectory}videoPosters`, 2),
+    dirStatsAsync(`${FileSystem.documentDirectory}motionVideos`, 2),
+    dirStatsAsync(`${FileSystem.documentDirectory}internal-backup`, 2),
+    dirStatsAsync(`${FileSystem.documentDirectory}profile`, 2),
+  ]);
+  let cacheBytes = 0;
+  let cacheFiles = 0;
+  try {
+    const cacheRoot = FileSystem.cacheDirectory;
+    const names = await FileSystem.readDirectoryAsync(cacheRoot);
+    for (const name of names) {
+      const st = await dirStatsAsync(`${cacheRoot}${name}`, 3);
+      cacheBytes += st.bytes;
+      cacheFiles += st.files;
+    }
+  } catch {}
+
+  const items = [
+    { key: 'records', label: '记录、备份与头像', note: '内部备份与个人头像', bytes: stBackup.bytes + stProfile.bytes, files: stBackup.files + stProfile.files },
+    { key: 'covers', label: '封面与视频预览帧', note: '封面小图与视频封面帧', bytes: stCovers.bytes + stThumbs.bytes + stPosters.bytes, files: stCovers.files + stThumbs.files + stPosters.files },
+    { key: 'media', label: '本地媒体副本', note: '未重链回相册的本地副本', bytes: stMedia.bytes, files: stMedia.files },
+    { key: 'imageCache', label: '图片与地图缓存', note: '系统缓存目录，清理后可自动重建', bytes: cacheBytes, files: cacheFiles },
+    { key: 'temp', label: '临时文件', note: '实况动效临时文件', bytes: stMotion.bytes, files: stMotion.files },
+  ];
+  const totalBytes = items.reduce((s, i) => s + i.bytes, 0);
+  const totalFiles = items.reduce((s, i) => s + i.files, 0);
+  return {
+    exact: false,
+    totalBytes,
+    totalFiles,
+    locationNote: IS_EXTERNAL_STORAGE ? '应用外部目录（Android/data，文件管理器可见）' : '应用内部存储',
+    items,
+  };
+};
+
 /* ------------------------------------------------------------------ *
  * 写文件为什么绕到原生去
  *

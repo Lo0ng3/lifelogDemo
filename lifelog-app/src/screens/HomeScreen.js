@@ -30,13 +30,14 @@ import { LogContext } from '../context/LogContext';
 import RecordRow from '../components/RecordRow';
 import MonthView from '../components/MonthView';
 import HelpModal from '../components/HelpModal';
+import StorageModal from '../components/StorageModal';
 import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
-import { describeStorageAsync, clearWebKitCacheAsync } from '../utils/storagePaths';
+import { getStorageSummaryAsync, clearWebKitCacheAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { requestAddDraftReset } from '../utils/draftReset';
@@ -151,8 +152,12 @@ export default function HomeScreen({ navigation }) {
   // 同步进度：显示在底部小条上。以前用 ToastAndroid 报进度，但 Toast 会排队，
   // 最后几条会排在「同步完成」弹窗之后继续弹，看起来像"同步完了还在同步"
   const [syncProgress, setSyncProgress] = useState(null);
-  // 侧边栏「说明」：页面上的说明性文字统一收进这里
+  // 侧边栏「说明」与「数据与存储」弹层
   const [helpOpen, setHelpOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageSummary, setStorageSummary] = useState(null);
+  const [storageCopies, setStorageCopies] = useState(null);
 
   // 「我的」昵称与头像：存在本机，并跟随备份导出/导入
   const [profileName, setProfileName] = useState(DEFAULT_PROFILE_NAME);
@@ -399,32 +404,40 @@ export default function HomeScreen({ navigation }) {
     return applied;
   };
 
-  // 数据目录：看副本/封面实际落在哪、各有多少（含"为什么还留着"的明细），并现场做一次写入测试。
-  // 如果副本是被「添加」页草稿占着（那是个常驻 tab，放弃的分享副本会一直留着），
-  // 这里给一个"清空草稿"的出口：清完立刻扫一遍副本目录，能删的就地删掉。
-  const handleShowStorage = async () => {
-    toggleSidebar(false);
+  const refreshStorageStats = useCallback(async () => {
+    setStorageLoading(true);
     try {
-      const storage = await describeStorageAsync();
-      const copies = await describeMediaCopiesAsync(logData).catch(() => null);
-      const buttons = [{ text: '关闭', style: 'cancel' }];
-      if (copies?.draft) {
-        buttons.unshift({
-          text: '清空添加页草稿',
-          onPress: async () => {
-            requestAddDraftReset();
-            const pruned = await pruneOrphanMediaCopies(logData).catch(() => ({ removed: 0 }));
-            const mb = Math.round((pruned.freed || 0) / 1024 / 1024 * 10) / 10;
-            Alert.alert('已清空草稿', pruned.removed
-              ? `「添加」页里没保存的照片已清掉，并释放了 ${mb} MB（${pruned.removed} 个副本）。`
-              : '「添加」页里没保存的照片已清掉。');
-          },
-        });
-      }
-      Alert.alert('数据目录', [storage, copies?.text].filter(Boolean).join('\n\n'), buttons);
-    } catch (e) {
-      Alert.alert('数据目录', e?.message || '读取目录信息失败');
+      const [summary, copies] = await Promise.all([
+        getStorageSummaryAsync(),
+        describeMediaCopiesAsync(logData).catch(() => null),
+      ]);
+      setStorageSummary(summary);
+      setStorageCopies(copies);
+    } catch {
+      setStorageSummary(null);
+    } finally {
+      setStorageLoading(false);
     }
+  }, [logData]);
+
+  // 数据与存储：仿 iOS 系统储存空间展示全沙盒占用明细，与系统「文稿与数据」保持一致
+  const handleShowStorage = () => {
+    toggleSidebar(false);
+    setStorageOpen(true);
+    refreshStorageStats();
+  };
+
+  const handleClearDraftFromStorage = async () => {
+    requestAddDraftReset();
+    const pruned = await pruneOrphanMediaCopies(logData).catch(() => ({ removed: 0, freed: 0 }));
+    const mb = Math.round((pruned.freed || 0) / 1000 / 1000 * 10) / 10;
+    Alert.alert(
+      '已清空草稿',
+      pruned.removed
+        ? `「添加」页未保存的照片已清掉，并释放了 ${mb} MB（${pruned.removed} 个副本）。`
+        : '「添加」页未保存的照片已清掉。'
+    );
+    refreshStorageStats();
   };
 
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
@@ -1120,8 +1133,8 @@ export default function HomeScreen({ navigation }) {
                   <NativeIcon name="folder" fallback={FolderOpen} size={16} color={colors.textSecondary} />
                 </View>
                 <View style={styles.menuCopy}>
-                  <Text style={styles.menuItemText}>数据目录</Text>
-                  <Text style={styles.menuItemSub}>查看存储位置与空间明细</Text>
+                  <Text style={styles.menuItemText}>数据与存储</Text>
+                  <Text style={styles.menuItemSub}>查看文稿与数据占用明细</Text>
                 </View>
                 <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
@@ -1218,7 +1231,7 @@ export default function HomeScreen({ navigation }) {
         <Reanimated.View
           style={[
             styles.listWrapper,
-            { marginBottom: Math.max(88, insets.bottom + 66) },
+            { marginBottom: Math.max(18, insets.bottom - 10) },
             viewMode !== 'list' && styles.hiddenView,
             viewFadeStyle,
           ]}
@@ -1255,7 +1268,7 @@ export default function HomeScreen({ navigation }) {
         <Reanimated.View
           style={[
             styles.monthWrapper,
-            { marginBottom: Math.max(88, insets.bottom + 66) },
+            { marginBottom: Math.max(18, insets.bottom - 10) },
             viewMode !== 'month' && styles.hiddenView,
             viewFadeStyle,
           ]}
@@ -1277,7 +1290,7 @@ export default function HomeScreen({ navigation }) {
         <Reanimated.View
           // 侧边栏 / 设置 / 说明 打开时，常驻在最上层的地图 WebView 一律不碰触摸：
           // 它抢触摸的话，侧边栏里那几项就会"点了没反应"
-          pointerEvents={viewMode === 'map' && !isSidebarOpen && !settingsOpen && !helpOpen ? 'auto' : 'none'}
+          pointerEvents={viewMode === 'map' && !isSidebarOpen && !settingsOpen && !helpOpen && !storageOpen ? 'auto' : 'none'}
           style={[styles.mapLayer, mapLayerBox, mapFullscreen && styles.mapLayerFullscreen, mapLayerStyle]}
         >
           {/* collapsable={false}：这两层的位置/尺寸就是全屏几何本身，
@@ -1458,6 +1471,18 @@ export default function HomeScreen({ navigation }) {
       </Modal>
 
       <HelpModal visible={helpOpen} onClose={() => setHelpOpen(false)} />
+      <StorageModal
+        visible={storageOpen}
+        loading={storageLoading}
+        summary={storageSummary}
+        copiesInfo={storageCopies}
+        onClose={() => setStorageOpen(false)}
+        onOpenCleanCache={() => {
+          setStorageOpen(false);
+          setTimeout(() => setCachePickerOpen(true), 220);
+        }}
+        onClearDraft={handleClearDraftFromStorage}
+      />
 
       {/* 清理缓存：二级选项，挑清哪些（都是可再生内容，不影响记录和照片引用） */}
       <Modal transparent visible={cachePickerOpen} animationType="fade" onRequestClose={() => setCachePickerOpen(false)}>
@@ -1536,7 +1561,7 @@ const makeStyles = (c) => ({
     flex: 1, backgroundColor: c.bgElevated, marginHorizontal: 16, marginTop: 4,
     borderRadius: 16, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  listContent: { paddingBottom: 12 },
+  listContent: { paddingBottom: 78 },
   monthWrapper: { flex: 1, marginTop: 2 },
   hiddenView: { display: 'none' },
   viewArea: { flex: 1 },
