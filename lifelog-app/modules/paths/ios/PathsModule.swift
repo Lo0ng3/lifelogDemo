@@ -72,13 +72,13 @@ public class PathsModule: Module {
       }
     }
 
-    AsyncFunction("getFileSize") { (uri: String) -> Int64? in
+    AsyncFunction("getFileSize") { (uri: String) -> Double? in
       let target = self.toFileURL(uri)
       guard let attrs = try? FileManager.default.attributesOfItem(atPath: target.path),
             let size = attrs[.size] as? NSNumber else {
         return nil
       }
-      return size.int64Value
+      return size.doubleValue
     }
 
     AsyncFunction("readFileRange") { (uri: String, offset: Double, length: Double) -> Data in

@@ -80,7 +80,7 @@ public class ThumbsModule: Module {
       }
     }
 
-    AsyncFunction("getAssetFileSizeAsync") { (assetId: String) -> Int64? in
+    AsyncFunction("getAssetFileSizeAsync") { (assetId: String) -> Double? in
       guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else {
         return nil
       }
@@ -91,13 +91,13 @@ public class ThumbsModule: Module {
         : [.fullSizePhoto, .photo]
       for preferred in preferredTypes {
         if let res = resources.first(where: { $0.type == preferred }),
-           let size = (res.value(forKey: "fileSize") as? NSNumber)?.int64Value,
+           let size = (res.value(forKey: "fileSize") as? NSNumber)?.doubleValue,
            size > 0 {
           return size
         }
       }
       for res in resources {
-        if let size = (res.value(forKey: "fileSize") as? NSNumber)?.int64Value, size > 0 {
+        if let size = (res.value(forKey: "fileSize") as? NSNumber)?.doubleValue, size > 0 {
           return size
         }
       }

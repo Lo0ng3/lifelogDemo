@@ -95,7 +95,7 @@ jobs:
           cd ios
           LANG=en_US.UTF-8 pod install --deployment 2>/dev/null || LANG=en_US.UTF-8 pod install
           # 确认本地原生模块已被自动链接进 Podfile.lock
-          grep -E "expo-modules-(paths|thumbs)" Podfile.lock || echo "::warning::未在 Podfile.lock 中看到 expo-modules-paths/thumbs，请检查 autolinking 日志"
+          grep -E "(Paths|Thumbs)" Podfile.lock || echo "::warning::未在 Podfile.lock 中看到 Paths/Thumbs，请检查 autolinking 日志"
 
       - name: 配置 Xcode Node 路径
         run: |
