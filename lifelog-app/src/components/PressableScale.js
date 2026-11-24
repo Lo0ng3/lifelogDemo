@@ -1,31 +1,53 @@
-import React, { useRef } from 'react';
-import { Pressable, Animated } from 'react-native';
+import React from 'react';
+import { Pressable } from 'react-native';
+import Reanimated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 
-// 按压缩放反馈：按下轻微缩小、松手弹回，比单纯透明度更有手感
-// containerStyle 作用在最外层 Pressable 上（要占满网格单元时用这个，而不是 style）
-export default function PressableScale({ onPress, onPressIn, style, containerStyle, children, activeScale = 0.97, disabled }) {
-  const scale = useRef(new Animated.Value(1)).current;
+const SPRING_IN = { damping: 24, stiffness: 460, mass: 0.45 };
+const SPRING_OUT = { damping: 20, stiffness: 360, mass: 0.5 };
 
-  const animate = (toValue) => {
-    Animated.spring(scale, {
-      toValue,
-      useNativeDriver: true,
-      speed: 50,
-      bounciness: 5,
-    }).start();
-  };
+// 按压缩放反馈（全 UI 线程 Reanimated 驱动）：
+// 取消旧版 JS Animated.spring 的桥接延迟，并把 delayPressIn 设为 0，按下瞬间响应
+export default function PressableScale({
+  onPress,
+  onPressIn,
+  onPressOut,
+  onLongPress,
+  hitSlop,
+  style,
+  containerStyle,
+  children,
+  activeScale = 0.97,
+  disabled,
+  accessibilityRole,
+  accessibilityLabel,
+}) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
 
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      hitSlop={hitSlop}
+      delayPressIn={0}
       style={containerStyle}
       disabled={disabled}
-      onPressIn={() => { animate(activeScale); onPressIn?.(); }}
-      onPressOut={() => animate(1)}
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel}
+      onPressIn={(e) => {
+        scale.value = withSpring(activeScale, SPRING_IN);
+        onPressIn?.(e);
+      }}
+      onPressOut={(e) => {
+        scale.value = withSpring(1, SPRING_OUT);
+        onPressOut?.(e);
+      }}
     >
-      <Animated.View style={[style, { transform: [{ scale }] }]}>
+      <Reanimated.View style={[style, animStyle]}>
         {children}
-      </Animated.View>
+      </Reanimated.View>
     </Pressable>
   );
 }

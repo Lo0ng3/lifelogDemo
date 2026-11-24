@@ -3,6 +3,7 @@ import { View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform }
 import { X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import NativeIcon from './NativeIcon';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 
 /* ------------------------------------------------------------------ *
@@ -138,17 +139,22 @@ export default function HelpModal({ visible, onClose }) {
   const styles = useThemedStyles(makeStyles);
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
+      onRequestClose={onClose}
+    >
+      <View style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 0 : insets.top }]}>
         <View style={styles.header}>
           <View style={styles.headerSide} />
           <Text style={styles.headerTitle}>说明</Text>
-          <TouchableOpacity style={styles.headerSide} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <X size={22} color={colors.textSecondary} />
+          <TouchableOpacity style={styles.headerSide} onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <NativeIcon name="xmark" fallback={X} size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        <ScrollView showsVerticalScrollIndicator={false} bounces={Platform.OS === 'ios'} contentContainerStyle={styles.content}>
           {SECTIONS.map((section) => (
             <View key={section.title} style={styles.card}>
               <Text style={styles.sectionTitle}>{section.title}</Text>

@@ -6,10 +6,13 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Plane, MapPin, Film, NotebookPen, Search, ImagePlus, X, Check, Star, StarHalf, ChevronRight, ChevronDown, PlayCircle, Maximize2
 } from 'lucide-react-native';
+import NativeIcon from '../components/NativeIcon';
+import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
 import { deletePathAsync } from '../utils/storagePaths';
@@ -23,11 +26,19 @@ import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, ME
 // 二级类型选择：第一级大类 → 第二级子类；地点无子类
 const BASE_LABEL = { ticket: '旅票', location: '地点', media: '娱乐', note: '随笔' };
 const TYPE_MENU = [
-  { id: 'ticket', label: '旅票', Icon: Plane },
-  { id: 'location', label: '地点', Icon: MapPin },
-  { id: 'media', label: '娱乐', Icon: Film },
-  { id: 'note', label: '随笔', Icon: NotebookPen },
+  { id: 'ticket', label: '旅票', Icon: Plane, sfName: 'airplane' },
+  { id: 'location', label: '地点', Icon: MapPin, sfName: 'mappin.and.ellipse' },
+  { id: 'media', label: '娱乐', Icon: Film, sfName: 'film' },
+  { id: 'note', label: '随笔', Icon: NotebookPen, sfName: 'square.and.pencil' },
 ];
+const todayParts = () => {
+  const d = new Date();
+  return {
+    y: String(d.getFullYear()),
+    m: String(d.getMonth() + 1).padStart(2, '0'),
+    d: String(d.getDate()).padStart(2, '0'),
+  };
+};
 const SUB_OPTIONS = {
   ticket: TICKET_SUB_OPTIONS,
   media: MEDIA_SUB_OPTIONS,
@@ -87,7 +98,7 @@ function VideoPreview({ entry }) {
 
 export default function AddScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const { logData, addLog, updateLog, tdtKey, mapProvider, amapKey } = useContext(LogContext);
   // 地点联想 / 地理编码用当前地图服务商的 key（天地图 tk / 高德 Web 服务 key）
@@ -113,9 +124,9 @@ export default function AddScreen({ navigation, route }) {
   const [ticketOrigin, setTicketOrigin] = useState('');
   const [ticketDest, setTicketDest] = useState('');
   const [ticketNo, setTicketNo] = useState(''); 
-  const [year, setYear] = useState('');
-  const [month, setMonth] = useState('');
-  const [day, setDay] = useState('');
+  const [year, setYear] = useState(() => (Platform.OS === 'ios' ? todayParts().y : ''));
+  const [month, setMonth] = useState(() => (Platform.OS === 'ios' ? todayParts().m : ''));
+  const [day, setDay] = useState(() => (Platform.OS === 'ios' ? todayParts().d : ''));
   const [hour, setHour] = useState('');
   const [minute, setMinute] = useState('');
   const [selectedImages, setSelectedImages] = useState([]);
@@ -179,9 +190,10 @@ export default function AddScreen({ navigation, route }) {
   const [sheetBase, setSheetBase] = useState('ticket');
 
   const clearForm = () => {
+    const def = Platform.OS === 'ios' ? todayParts() : { y: '', m: '', d: '' };
     setEditId(null);
     setRating(0); setComment(''); setTicketOrigin(''); setTicketDest(''); setTicketNo('');
-    setYear(''); setMonth(''); setDay(''); setHour(''); setMinute('');
+    setYear(def.y); setMonth(def.m); setDay(def.d); setHour(''); setMinute('');
     setSelectedImages([]); setSearchQuery(''); setShowSearchAuto(false);
     setNoteTitle(''); setMood(null); setWeather(null); setMoodDraft('');
     setEditCoverIndex(null); setEditPhotoCount(0);
@@ -302,12 +314,47 @@ export default function AddScreen({ navigation, route }) {
     const head = baseType === 'ticket' ? ['origin', 'dest', 'no']
       : baseType === 'note' ? ['noteTitle']
         : ['search'];
-    const dates = baseType === 'ticket'
-      ? ['year', 'month', 'day', 'hour', 'minute']
-      : ['year', 'month', 'day'];
+    const dates = Platform.OS === 'ios'
+      ? []
+      : (baseType === 'ticket' ? ['year', 'month', 'day', 'hour', 'minute'] : ['year', 'month', 'day']);
     const tail = baseType === 'note' ? ['moodDraft', 'comment'] : ['comment'];
     return [...head, ...dates, ...tail];
   }, [baseType]);
+
+  const pickerDateValue = useMemo(() => {
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10);
+    const d = parseInt(day, 10);
+    if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d) && y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return new Date(y, m - 1, d, 12, 0, 0);
+    }
+    return new Date();
+  }, [year, month, day]);
+
+  const pickerTimeValue = useMemo(() => {
+    const d = new Date();
+    const h = parseInt(hour, 10);
+    const min = parseInt(minute, 10);
+    if (Number.isFinite(h) && h >= 0 && h <= 23) d.setHours(h);
+    if (Number.isFinite(min) && min >= 0 && min <= 59) d.setMinutes(min);
+    d.setSeconds(0);
+    return d;
+  }, [hour, minute]);
+
+  const handleNativeDateChange = useCallback((_event, date) => {
+    if (!date) return;
+    hapticSelection();
+    setYear(String(date.getFullYear()));
+    setMonth(String(date.getMonth() + 1).padStart(2, '0'));
+    setDay(String(date.getDate()).padStart(2, '0'));
+  }, []);
+
+  const handleNativeTimeChange = useCallback((_event, date) => {
+    if (!date) return;
+    hapticSelection();
+    setHour(String(date.getHours()).padStart(2, '0'));
+    setMinute(String(date.getMinutes()).padStart(2, '0'));
+  }, []);
 
   const focusField = useCallback((key) => {
     const node = fieldNodes.current[key];
@@ -319,11 +366,12 @@ export default function AddScreen({ navigation, route }) {
     if (i >= 0 && i < fieldOrder.length - 1) focusField(fieldOrder[i + 1]);
   }, [fieldOrder, focusField]);
 
-  // 单行输入框的统一属性：回车跳下一项、保持键盘不收起
+  // 单行输入框的统一属性：回车跳下一项、保持键盘不收起；iOS 自带原生清除按钮
   const nextFieldProps = (key) => ({
     ref: fieldRef(key),
     returnKeyType: 'next',
     blurOnSubmit: false,
+    ...(Platform.OS === 'ios' && key !== 'moodDraft' ? { clearButtonMode: 'while-editing' } : {}),
     onFocus: () => handleFieldFocus(key),
     onSubmitEditing: () => focusNext(key),
   });
@@ -587,6 +635,7 @@ export default function AddScreen({ navigation, route }) {
   }, [route.name, navigation]);
 
   const handleStarPress = (s) => {
+    hapticSelection();
     if (rating === s - 0.5) setRating(s); 
     else if (rating === s) setRating(0); 
     else setRating(s - 0.5); 
@@ -785,6 +834,7 @@ export default function AddScreen({ navigation, route }) {
     setSaving(true);
     try {
       await performSave();
+      hapticSuccess();
     } catch (e) {
       Alert.alert('保存失败', `保存时出现问题：${e?.message || e}\n可以再试一次。`);
     } finally {
@@ -802,7 +852,7 @@ export default function AddScreen({ navigation, route }) {
             const isFull = s <= rating;
             const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
             return (
-              <TouchableOpacity key={s} onPress={() => handleStarPress(s)}>
+              <TouchableOpacity key={s} onPress={() => handleStarPress(s)} delayPressIn={0} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
                 {isHalf ? <StarHalf size={32} color={colors.star} fill={colors.star} style={{ marginRight: 8 }} /> : <Star size={32} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : "transparent"} style={{ marginRight: 8 }} />}
               </TouchableOpacity>
             );
@@ -818,15 +868,18 @@ export default function AddScreen({ navigation, route }) {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerCircle}
+          delayPressIn={0}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           onPress={() => { clearForm(); if (route.name === 'Edit') { navigation.popToTop(); } else { navigation.navigate('Main', { screen: 'Home' }); } }}
           accessibilityRole="button"
           accessibilityLabel="取消"
         >
-          <X size={19} color={colors.textSecondary} />
+          <NativeIcon name="xmark" fallback={X} size={17} color={colors.textSecondary} weight="semibold" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
           style={[styles.headerCircle, styles.headerSaveCircle]}
+          delayPressIn={0}
           onPress={() => { Keyboard.dismiss(); handleSave(); }}
           disabled={saving}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -835,7 +888,7 @@ export default function AddScreen({ navigation, route }) {
         >
           {saving
             ? <ActivityIndicator size="small" color={colors.textOnAccent} />
-            : <Check size={19} color={colors.textOnAccent} />}
+            : <NativeIcon name="checkmark" fallback={Check} size={17} color={colors.textOnAccent} weight="bold" />}
         </TouchableOpacity>
       </View>
 
@@ -855,16 +908,17 @@ export default function AddScreen({ navigation, route }) {
           {/* 类型字段：在表单顶部就地展开大类 / 子类，避免从底部弹层再选一次 */}
           <TouchableOpacity
             style={styles.typeRow}
-            onPress={() => { setSheetBase(baseType); setTypeMenuOpen(v => !v); }}
+            onPress={() => { hapticSelection(); setSheetBase(baseType); setTypeMenuOpen(v => !v); }}
             activeOpacity={0.75}
+            delayPressIn={0}
           >
             <Text style={styles.typeLabel}>类型</Text>
             <Text style={styles.typeValue}>
               {baseType === 'location' ? '地点' : `${BASE_LABEL[baseType] || ''} · ${SUB_LABEL[subType] || ''}`}
             </Text>
             {typeMenuOpen
-              ? <ChevronDown size={16} color={colors.textFaint} />
-              : <ChevronRight size={16} color={colors.textFaint} />}
+              ? <NativeIcon name="chevron.down" fallback={ChevronDown} size={14} color={colors.textFaint} weight="semibold" />
+              : <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />}
           </TouchableOpacity>
 
           {typeMenuOpen && (
@@ -872,14 +926,14 @@ export default function AddScreen({ navigation, route }) {
               <View style={styles.typeMenuCats}>
                 {TYPE_MENU.map((cat) => {
                   const on = sheetBase === cat.id;
-                  const Icon = cat.Icon;
                   return (
                     <TouchableOpacity
                       key={cat.id}
                       style={[styles.typeMenuCat, on && styles.typeMenuCatOn]}
-                      onPress={() => chooseCategory(cat.id)}
+                      delayPressIn={0}
+                      onPress={() => { hapticSelection(); chooseCategory(cat.id); }}
                     >
-                      <Icon size={15} color={on ? colors.accent : colors.textSecondary} />
+                      <NativeIcon name={cat.sfName} fallback={cat.Icon} size={15} color={on ? colors.accent : colors.textSecondary} />
                       <Text style={[styles.typeMenuCatText, on && styles.typeMenuCatTextOn]}>{cat.label}</Text>
                     </TouchableOpacity>
                   );
@@ -893,7 +947,8 @@ export default function AddScreen({ navigation, route }) {
                       <TouchableOpacity
                         key={opt.id}
                         style={[styles.typeMenuSub, active && styles.typeMenuSubOn]}
-                        onPress={() => { applyType(sheetBase, opt.id); setTypeMenuOpen(false); }}
+                        delayPressIn={0}
+                        onPress={() => { hapticSelection(); applyType(sheetBase, opt.id); setTypeMenuOpen(false); }}
                       >
                         <Text style={[styles.typeMenuSubText, active && styles.typeMenuSubTextOn]}>{opt.label}</Text>
                       </TouchableOpacity>
@@ -1108,27 +1163,84 @@ export default function AddScreen({ navigation, route }) {
           <View style={styles.divider} />
 
           <View>
-            <Text style={styles.inputLabel}>发生日期</Text>
-            <View style={styles.dateRow}>
-              <TextInput style={[styles.dateBox, styles.dateBoxYear]} {...dateFieldProps('year', 4, year, setYear)} />
-              <Text style={styles.dateLabelText}>年</Text>
-              <TextInput style={styles.dateBox} {...dateFieldProps('month', 2, month, setMonth)} />
-              <Text style={styles.dateLabelText}>月</Text>
-              <TextInput style={styles.dateBox} {...dateFieldProps('day', 2, day, setDay)} />
-              <Text style={styles.dateLabelText}>日</Text>
-            </View>
-
-            {/* 只有旅票填时分；列表里只显示日期，具体时分开详情页看 */}
-            {baseType === 'ticket' && (
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.inputLabel}>具体时间（选填）</Text>
-                <View style={styles.dateRow}>
-                  <TextInput style={styles.dateBox} {...dateFieldProps('hour', 2, hour, setHour)} />
-                  <Text style={styles.dateLabelText}>时</Text>
-                  <TextInput style={styles.dateBox} {...dateFieldProps('minute', 2, minute, setMinute)} />
-                  <Text style={styles.dateLabelText}>分</Text>
+            {Platform.OS === 'ios' ? (
+              <>
+                <View style={styles.nativeDateRow}>
+                  <Text style={[styles.inputLabel, { marginBottom: 0 }]}>发生日期</Text>
+                  <DateTimePicker
+                    value={pickerDateValue}
+                    mode="date"
+                    display="compact"
+                    locale="zh-CN"
+                    themeVariant={isDark ? 'dark' : 'light'}
+                    accentColor={colors.accent}
+                    onChange={handleNativeDateChange}
+                  />
                 </View>
-              </View>
+                {baseType === 'ticket' && (
+                  <View style={[styles.nativeDateRow, { marginTop: 12 }]}>
+                    <Text style={[styles.inputLabel, { marginBottom: 0 }]}>具体时间（选填）</Text>
+                    {hour || minute ? (
+                      <View style={styles.nativeTimeRight}>
+                        <DateTimePicker
+                          value={pickerTimeValue}
+                          mode="time"
+                          display="compact"
+                          locale="zh-CN"
+                          themeVariant={isDark ? 'dark' : 'light'}
+                          accentColor={colors.accent}
+                          onChange={handleNativeTimeChange}
+                        />
+                        <TouchableOpacity
+                          style={styles.nativeTimeClearBtn}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          onPress={() => { hapticSelection(); setHour(''); setMinute(''); }}
+                        >
+                          <Text style={styles.nativeTimeClearText}>清除</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.nativeTimeAddBtn}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        onPress={() => {
+                          hapticSelection();
+                          const now = new Date();
+                          setHour(String(now.getHours()).padStart(2, '0'));
+                          setMinute(String(now.getMinutes()).padStart(2, '0'));
+                        }}
+                      >
+                        <Text style={styles.nativeTimeAddText}>添加时间</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={styles.inputLabel}>发生日期</Text>
+                <View style={styles.dateRow}>
+                  <TextInput style={[styles.dateBox, styles.dateBoxYear]} {...dateFieldProps('year', 4, year, setYear)} />
+                  <Text style={styles.dateLabelText}>年</Text>
+                  <TextInput style={styles.dateBox} {...dateFieldProps('month', 2, month, setMonth)} />
+                  <Text style={styles.dateLabelText}>月</Text>
+                  <TextInput style={styles.dateBox} {...dateFieldProps('day', 2, day, setDay)} />
+                  <Text style={styles.dateLabelText}>日</Text>
+                </View>
+
+                {/* 只有旅票填时分；列表里只显示日期，具体时分开详情页看 */}
+                {baseType === 'ticket' && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={styles.inputLabel}>具体时间（选填）</Text>
+                    <View style={styles.dateRow}>
+                      <TextInput style={styles.dateBox} {...dateFieldProps('hour', 2, hour, setHour)} />
+                      <Text style={styles.dateLabelText}>时</Text>
+                      <TextInput style={styles.dateBox} {...dateFieldProps('minute', 2, minute, setMinute)} />
+                      <Text style={styles.dateLabelText}>分</Text>
+                    </View>
+                  </View>
+                )}
+              </>
             )}
           </View>
 
@@ -1158,7 +1270,8 @@ export default function AddScreen({ navigation, route }) {
                     <TouchableOpacity
                       key={m}
                       style={[styles.moodChip, on && styles.moodChipOn]}
-                      onPress={() => { setMood(on ? null : m); setMoodDraft(''); }}
+                      delayPressIn={0}
+                      onPress={() => { hapticSelection(); setMood(on ? null : m); setMoodDraft(''); }}
                     >
                       <Text style={styles.moodChipText}>{m}</Text>
                     </TouchableOpacity>
@@ -1184,10 +1297,10 @@ export default function AddScreen({ navigation, route }) {
               {/* 内容写长了可以进全屏编辑 */}
               <TouchableOpacity
                 style={styles.expandBtn}
-                onPress={() => setFullscreenComment(true)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                onPress={() => { hapticSelection(); setFullscreenComment(true); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Maximize2 size={14} color={colors.accent} />
+                <NativeIcon name="arrow.up.left.and.arrow.down.right" fallback={Maximize2} size={13} color={colors.accent} />
                 <Text style={styles.expandBtnText}>全屏</Text>
               </TouchableOpacity>
             </View>
@@ -1217,7 +1330,8 @@ export default function AddScreen({ navigation, route }) {
                       <TouchableOpacity
                         key={w}
                         style={[styles.weatherChip, on && styles.moodChipOn]}
-                        onPress={() => setWeather(on ? null : w)}
+                        delayPressIn={0}
+                        onPress={() => { hapticSelection(); setWeather(on ? null : w); }}
                       >
                         <Text style={[styles.weatherChipText, on && styles.weatherChipTextOn]}>{w}</Text>
                       </TouchableOpacity>
@@ -1242,14 +1356,18 @@ export default function AddScreen({ navigation, route }) {
                   ) : (
                     <Image source={{ uri: mediaUri(entry) }} style={styles.imageGridImage} contentFit="cover" cachePolicy="memory" />
                   )}
-                  <TouchableOpacity style={styles.removeImageBtn} onPress={() => { const n = [...selectedImages]; n.splice(idx,1); setSelectedImages(n); }}>
-                    <X size={12} color="#FFF" />
+                  <TouchableOpacity
+                    style={styles.removeImageBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    onPress={() => { hapticSelection(); const n = [...selectedImages]; n.splice(idx, 1); setSelectedImages(n); }}
+                  >
+                    <NativeIcon name="xmark" fallback={X} size={11} color="#FFF" weight="bold" />
                   </TouchableOpacity>
                 </View>
               ))}
               <View style={styles.imageGridItem}>
-                <TouchableOpacity style={styles.addImageBtn} onPress={openMediaPicker}>
-                  <ImagePlus size={24} color={colors.textMuted} />
+                <TouchableOpacity style={styles.addImageBtn} delayPressIn={0} onPress={openMediaPicker}>
+                  <NativeIcon name="photo.badge.plus" fallback={ImagePlus} size={24} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -1257,10 +1375,15 @@ export default function AddScreen({ navigation, route }) {
         </ScrollView>
       </View>
 
-      {/* 评论 / 内容全屏编辑：写长文时把输入区铺满整屏 */}
-      <Modal visible={fullscreenComment} animationType="slide" onRequestClose={() => setFullscreenComment(false)}>
+      {/* 评论 / 内容全屏编辑：iOS 用原生 pageSheet（支持下拉关闭），写长文时铺满编辑区 */}
+      <Modal
+        visible={fullscreenComment}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
+        onRequestClose={() => setFullscreenComment(false)}
+      >
         <KeyboardAvoidingView
-          style={[styles.fullscreenWrap, { paddingTop: insets.top }]}
+          style={[styles.fullscreenWrap, { paddingTop: Platform.OS === 'ios' ? 0 : insets.top }]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.fullscreenHeader}>
@@ -1365,6 +1488,15 @@ const makeStyles = (c) => ({
   autoCompleteMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
   divider: { height: 1, backgroundColor: c.borderSoft, marginVertical: 16 },
   dateRow: { flexDirection: 'row', alignItems: 'center' },
+  nativeDateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 38 },
+  nativeTimeRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  nativeTimeAddBtn: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+    backgroundColor: c.accentSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.accentSoftBorder,
+  },
+  nativeTimeAddText: { fontSize: 13.5, fontWeight: '600', color: c.accent },
+  nativeTimeClearBtn: { paddingHorizontal: 8, paddingVertical: 6 },
+  nativeTimeClearText: { fontSize: 13, color: c.textMuted },
   dateBox: { backgroundColor: c.bgSunken, borderWidth: 1, borderColor: c.border, borderRadius: 8, height: 42, width: 48, textAlign: 'center', fontSize: 16, fontWeight: '600', color: c.text },
   dateBoxYear: { width: 64 }, 
   dateLabelText: { fontSize: 14, color: c.textSecondary, marginHorizontal: 6, fontWeight: '500' },

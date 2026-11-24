@@ -109,6 +109,8 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
                 accessibilityRole="button"
                 accessibilityState={focused ? { selected: true } : {}}
                 accessibilityLabel={itemOptions.tabBarAccessibilityLabel}
+                delayPressIn={0}
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                 onPress={() => {
                   if (isIOS && !focused) {
                     try { Haptics?.selectionAsync?.(); } catch {}
@@ -116,7 +118,7 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
                   const event = navigation.emit({ type: 'tabPress', target: item.key, canPreventDefault: true });
                   if (!focused && !event.defaultPrevented) navigation.navigate(item.name);
                 }}
-                style={styles.item}
+                style={({ pressed }) => [styles.item, pressed && !focused && { opacity: 0.65 }]}
               >
                 {itemOptions.tabBarIcon?.({ focused, color, size: 21 })}
                 <Text style={[styles.label, { color, fontWeight: focused ? '700' : '500' }]}>{label}</Text>

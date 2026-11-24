@@ -208,6 +208,32 @@ public class ThumbsModule: Module {
         self.exportVideoFallback(asset: asset, dest: dir.appendingPathComponent("vid_\(safeId).mp4"), promise: promise)
       }
     }
+
+    View(NativeLivePhotoView.self) {
+      Events("onPlaybackChange", "onLoadState")
+      Prop("assetId") { (view: NativeLivePhotoView, value: String) in
+        view.setAssetId(value)
+      }
+      Prop("active") { (view: NativeLivePhotoView, value: Bool) in
+        view.setActive(value)
+      }
+      Prop("playTrigger") { (view: NativeLivePhotoView, value: Int) in
+        view.setPlayTrigger(value)
+      }
+    }
+
+    View(NativeVideoPlayerView.self) {
+      Events("onStatusChange")
+      Prop("assetId") { (view: NativeVideoPlayerView, value: String?) in
+        view.setAssetId(value)
+      }
+      Prop("uri") { (view: NativeVideoPlayerView, value: String?) in
+        view.setUri(value)
+      }
+      Prop("active") { (view: NativeVideoPlayerView, value: Bool) in
+        view.setActive(value)
+      }
+    }
   }
 
   private func exportVideoFallback(asset: PHAsset, dest: URL, promise: Promise) {

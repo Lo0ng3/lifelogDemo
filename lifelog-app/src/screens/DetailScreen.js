@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Modal, Alert, ActivityIndicator, Platform, ToastAndroid, InteractionManager
+  Dimensions, Modal, Alert, ActionSheetIOS, ActivityIndicator, Platform, ToastAndroid, InteractionManager
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
 import LiquidGlassSurface from '../components/LiquidGlassSurface';
+import NativeIcon from '../components/NativeIcon';
+import NativeLivePhoto, { hasNativeLivePhoto } from '../components/NativeLivePhoto';
+import NativeVideoPlayer, { hasNativeVideoPlayer } from '../components/NativeVideoPlayer';
 import {
   Star, StarHalf, X, PlayCircle, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
@@ -24,14 +27,11 @@ import { getLivePhotoInfo, extractMotionVideo } from '../utils/livePhoto';
 import { shortTicketTitle } from '../utils/format';
 import { fetchSuggestions, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { hapticLight, hapticSelection, hapticWarning } from '../utils/haptics';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// 震动反馈：模块缺失（旧构建）时静默跳过，不影响功能。
-// 拖动换格时给一次极轻的反馈，用户能"摸到"影像插到哪一格了
-let Haptics = null;
-try { Haptics = require('expo-haptics'); } catch {}
-const lightTap = () => { try { Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyle.Light); } catch {} };
+const lightTap = hapticLight;
 
 /* ---------------- 影像九宫格：长按拖动排序 ----------------
    交互约定（和"长按设为封面"共存，不靠任何角标/把手）：
@@ -57,6 +57,7 @@ function MediaGridCell({
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
   const active = useSharedValue(0);
+  const pressed = useSharedValue(0);
   const started = useSharedValue(0);
   const moved = useSharedValue(0);
   const cur = useSharedValue(displayIndex);    // 当前所在格子（显示下标）
@@ -70,9 +71,9 @@ function MediaGridCell({
   // 回调走 ref：拖动过程中父组件每次交换顺序都会重渲染，
   // 若把这些回调放进 useMemo 依赖里，手势会被反复重建、正在拖的那一下会断
   const cbRef = useRef({});
-  cbRef.current = { onMove, onIdleLongPress, onDragState, onOpen };
+  cbRef.current = { onMove, onIdleLongPress, onDragState, onOpen, originalIndex };
 
-  const pan = useMemo(() => {
+  const cellGesture = useMemo(() => {
     // 落点判定：只看「手指从起点挪了多远」+ 起始格子，不碰屏幕坐标。
     // 被拖的这张是跟手的，它的位移正好等于手指位移，所以"这张影像的中心落在哪一格"
     // 就是 round(起始格 + 位移 / 格宽)。列表滚动过、之前量到的位置过期，都不会算错
@@ -84,9 +85,10 @@ function MediaGridCell({
       const row = Math.max(0, Math.round(row0 + dy / ch.value));
       return Math.max(0, Math.min(total.value - 1, row * GRID_COLS + col));
     };
-    return Gesture.Pan()
+    const pan = Gesture.Pan()
       .activateAfterLongPress(260)
       .onStart(() => {
+        pressed.value = 0;
         started.value = 1;
         active.value = 1;
         moved.value = 0;
@@ -127,7 +129,16 @@ function MediaGridCell({
         // 只有"确实长按到了、但没有移动"才算原来的长按（弹封面菜单）
         if (!didMove) runOnJS(cbRef.current.onIdleLongPress)();
       });
-  }, [active, ch, cur, cw, from, moved, started, total, tx, ty]);
+    // 用 RNGH 原生 Tap 与长按拖动竞争，彻底消除 ScrollView 内 GestureDetector 套 TouchableOpacity 在 iOS 掉点的问题
+    const tap = Gesture.Tap()
+      .maxDistance(12)
+      .onBegin(() => { pressed.value = 1; })
+      .onEnd((_e, success) => {
+        if (success) runOnJS(cbRef.current.onOpen)(cbRef.current.originalIndex);
+      })
+      .onFinalize(() => { pressed.value = 0; });
+    return Gesture.Race(pan, tap);
+  }, [active, ch, cur, cw, from, moved, pressed, started, total, tx, ty]);
 
   const animStyle = useAnimatedStyle(() => ({
     transform: [
@@ -136,13 +147,13 @@ function MediaGridCell({
       { scale: 1 + active.value * 0.06 },
     ],
     zIndex: active.value ? 20 : 0,
-    opacity: active.value ? 0.92 : 1,
+    opacity: active.value ? 0.92 : (pressed.value ? 0.8 : 1),
   }));
 
   return (
-    <GestureDetector gesture={pan}>
+    <GestureDetector gesture={cellGesture}>
       <Animated.View style={[styles.gridItem, animStyle]}>
-        <TouchableOpacity activeOpacity={0.85} onPress={() => onOpen(originalIndex)}>
+        <View>
           {isVideoEntry(entry) ? (
             <View style={styles.videoThumbnailBox}>
               <VideoThumb
@@ -151,7 +162,7 @@ function MediaGridCell({
                 enabled={displayIndex < maxEnabled}
                 onPosterReady={onPosterReady}
               />
-              <View style={styles.playOverlay}><PlayCircle size={30} color="#FFF" /></View>
+              <View style={styles.playOverlay}><NativeIcon name="play.circle.fill" fallback={PlayCircle} size={30} color="#FFF" /></View>
             </View>
           ) : (
             <>
@@ -160,7 +171,7 @@ function MediaGridCell({
             </>
           )}
           {coverOn && <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>封面</Text></View>}
-        </TouchableOpacity>
+        </View>
       </Animated.View>
     </GestureDetector>
   );
@@ -463,24 +474,30 @@ function LiveGridBadge({ entry, enabled = true }) {
   return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
 }
 
-// 全屏查看器里的实况照片页：默认静帧，点按提取内嵌视频并播放。
-// 静帧始终垫底：视频出首帧才盖上来（消除开始时的闪黑），播完自动回到静帧、可再次点按重播
+// 全屏查看器里的实况照片页：
+// - iOS 相册实况原片：直接使用苹果原生 PHLivePhotoView（零文件导出，支持系统原生任意位置长按 & 单击播放）；
+// - 普通照片与 Android 动态照片：走可缩放静帧 + 按需提取播放。
 function LivePhotoPage({ entry, active, onZoomChange }) {
   const styles = useThemedStyles(makeStyles);
   const [info, setInfo] = useState(null);
   const [playingUri, setPlayingUri] = useState(null);
   const [videoReady, setVideoReady] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [nativePlaying, setNativePlaying] = useState(false);
+  const [nativePlayTrigger, setNativePlayTrigger] = useState(0);
+  const [nativeFailed, setNativeFailed] = useState(false);
+
   useEffect(() => {
     let alive = true;
     setPlayingUri(null);
     setVideoReady(false);
+    setNativePlaying(false);
+    setNativePlayTrigger(0);
+    setNativeFailed(false);
     if (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios')) {
       setInfo({ live: false });
       return () => { alive = false; };
     }
-    // iOS 已知是实况的照片不再提前调用 getAssetInfoAsync 导出配对 .mov，
-    // 直接展示「实况」角标，等用户真正点击播放时再按需拉取
     if (Platform.OS === 'ios' && entry?.liveStatus === 'live') {
       setInfo({ live: true, source: 'ios' });
       return () => { alive = false; };
@@ -491,7 +508,10 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
     });
     return () => { alive = false; };
   }, [entry]);
+
   const isLive = !!info?.live;
+  const useNativeLive = Platform.OS === 'ios' && hasNativeLivePhoto && isLive && !!entry?.assetId && !nativeFailed;
+
   const handlePlay = async () => {
     if (loading || playingUri) return;
     setLoading(true);
@@ -499,7 +519,6 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
       const uri = await extractMotionVideo(entry, info);
       if (uri) { setVideoReady(false); setPlayingUri(uri); }
       else if (Platform.OS === 'android') {
-        // 提取失败别静默：以前失败在这里被吞掉，用户只看到"点了没反应"
         ToastAndroid.show('实况动效读取失败，先看静帧吧（可在侧边栏「数据目录」查看）', ToastAndroid.LONG);
       } else {
         Alert.alert('无法播放实况', '实况动效读取失败，可能尚未从 iCloud 下载或已移除。');
@@ -508,7 +527,38 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
       setLoading(false);
     }
   };
-  /* 普通照片和实况照片的静帧都用同一个可缩放视图（双指捏合 / 双击放大 / 放大后拖动）。
+
+  if (useNativeLive) {
+    return (
+      <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
+        <Image source={{ uri: entry.uri }} style={StyleSheet.absoluteFill} contentFit="contain" cachePolicy="memory" />
+        <NativeLivePhoto
+          assetId={entry.assetId}
+          active={active}
+          playTrigger={nativePlayTrigger}
+          onPlaybackChange={setNativePlaying}
+          onLoadState={(s) => { if (s?.error) setNativeFailed(true); }}
+          style={StyleSheet.absoluteFill}
+        />
+        {!nativePlaying && (
+          <TouchableOpacity
+            style={styles.livePlayBadge}
+            activeOpacity={0.8}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={() => {
+              hapticSelection();
+              setNativePlayTrigger((n) => n + 1);
+            }}
+          >
+            <NativeIcon name="livephoto" fallback={PlayCircle} size={15} color="#FFF" style={{ marginRight: 5 }} />
+            <Text style={styles.livePlayText}>实况 · 轻点或长按</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
+
+  /* 普通照片和 Android 动态照片的静帧都用同一个可缩放视图（双指捏合 / 双击放大 / 放大后拖动）。
      实况多传一个 onSingleTap：没放大时点一下 = 播动效（放大状态下单击不触发，避免误播）。 */
   return (
     <View style={{ width: '100%', height: '80%', alignItems: 'center', justifyContent: 'center' }}>
@@ -526,7 +576,7 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
           ) : (
             <>
               <Text style={styles.livePlayText}>实况</Text>
-              <PlayCircle size={16} color="#FFF" />
+              <NativeIcon name="livephoto" fallback={PlayCircle} size={16} color="#FFF" />
             </>
           )}
         </View>
@@ -555,14 +605,22 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
   );
 }
 
-// 全屏查看器里的视频页：滑到当前页才按需把 iOS 相册视频导出到沙盒 tmp/ 并挂载播放器，
-// 划走立即卸载；加载前底下垫封面帧，避免黑屏闪烁
+// 全屏查看器里的视频页：
+// - iOS：直接使用苹果原生 AVPlayerViewController（PhotoKit 流式播放，零拷贝秒开，支持 PiP / AirPlay / HDR）；
+// - Android：按需解析并挂载 expo-av 播放器。
 function VideoPlayerPage({ entry, active }) {
   const styles = useThemedStyles(makeStyles);
   const [playableUri, setPlayableUri] = useState(null);
   const [failed, setFailed] = useState(false);
+  const [nativeStatus, setNativeStatus] = useState('loading');
+
+  const useNativePlayer = Platform.OS === 'ios' && hasNativeVideoPlayer;
 
   useEffect(() => {
+    if (useNativePlayer) {
+      if (!active) setNativeStatus('loading');
+      return undefined;
+    }
     if (!active) {
       setPlayableUri(null);
       setFailed(false);
@@ -578,12 +636,41 @@ function VideoPlayerPage({ entry, active }) {
       })
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, [active, entry]);
+  }, [active, entry, useNativePlayer]);
 
   if (!active) {
     return (
       <View style={{ width: '100%', height: '80%', backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
         <VideoThumb entry={entry} style={{ width: '100%', height: '100%' }} contentFit="contain" />
+      </View>
+    );
+  }
+
+  if (useNativePlayer) {
+    return (
+      <View style={{ width: '100%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
+        {nativeStatus !== 'ready' && (
+          <VideoThumb entry={entry} style={StyleSheet.absoluteFill} contentFit="contain" />
+        )}
+        <NativeVideoPlayer
+          assetId={entry?.assetId || null}
+          uri={entry?.uri || null}
+          active={active}
+          onStatusChange={(s) => {
+            if (s?.status) setNativeStatus(s.status);
+          }}
+          style={{ width: '100%', height: '100%' }}
+        />
+        {nativeStatus === 'loading' && (
+          <View style={styles.playOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color="#FFF" />
+          </View>
+        )}
+        {nativeStatus === 'error' && (
+          <View style={styles.playOverlay} pointerEvents="none">
+            <Text style={styles.videoErrorText}>视频无法播放（可能未从 iCloud 下载或已移除）</Text>
+          </View>
+        )}
       </View>
     );
   }
@@ -730,31 +817,54 @@ export default function DetailScreen({ route, navigation }) {
   // 设为封面时同步生成小图文件（covers/ 目录），列表/详情直接显示，重启无需重新解析相册
   const handleGridLongPress = (idx) => {
     const isCurrentCover = item.coverIndex === idx;
+    const applyCover = async () => {
+      let coverThumbUrl = null;
+      try {
+        const entry = normalizeMediaEntry(item.localImages?.[idx]);
+        let coverInput = null;
+        if (isVideoEntry(entry)) {
+          coverInput = entry?.videoPoster?.uri || await getVideoThumbnail(entry);
+        } else if (Platform.OS === 'ios' && entry?.assetId) {
+          coverInput = `ph://${entry.assetId}`;
+        } else {
+          const resolved = await resolveMediaUri(entry);
+          coverInput = resolved || entry?.uri;
+        }
+        if (coverInput) coverThumbUrl = await downscaleCover(coverInput);
+      } catch {}
+      updateLog({ ...item, coverIndex: idx, coverThumbUrl: coverThumbUrl || null });
+    };
+    const clearCover = () => updateLog({ ...item, coverIndex: null, coverThumbUrl: null });
+
+    if (Platform.OS === 'ios') {
+      hapticSelection();
+      const hasCover = item.coverIndex != null;
+      const options = hasCover
+        ? [isCurrentCover ? '重新设为封面' : '设为封面', '取消封面', '取消']
+        : ['设为封面', '取消'];
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: '封面设置',
+          options,
+          destructiveButtonIndex: hasCover ? 1 : undefined,
+          cancelButtonIndex: options.length - 1,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) applyCover();
+          else if (hasCover && buttonIndex === 1) clearCover();
+        }
+      );
+      return;
+    }
+
     Alert.alert('封面设置', '将这张照片设为该记录的封面吗？', [
       { text: '取消', style: 'cancel' },
       ...(item.coverIndex != null
-        ? [{ text: '取消封面', style: 'destructive', onPress: () => updateLog({ ...item, coverIndex: null, coverThumbUrl: null }) }]
+        ? [{ text: '取消封面', style: 'destructive', onPress: clearCover }]
         : []),
       {
         text: isCurrentCover ? '重新设为封面' : '设为封面',
-        onPress: async () => {
-          let coverThumbUrl = null;
-          try {
-            const entry = normalizeMediaEntry(item.localImages?.[idx]);
-            let coverInput = null;
-            if (isVideoEntry(entry)) {
-              coverInput = entry?.videoPoster?.uri || await getVideoThumbnail(entry);
-            } else if (Platform.OS === 'ios' && entry?.assetId) {
-              // iOS 相册图直接传 ph:// 给 downscaleCover（走 PhotoKit/ImageManipulator，避开 DCIM 沙盒权限限制）
-              coverInput = `ph://${entry.assetId}`;
-            } else {
-              const resolved = await resolveMediaUri(entry);
-              coverInput = resolved || entry?.uri;
-            }
-            if (coverInput) coverThumbUrl = await downscaleCover(coverInput);
-          } catch {}
-          updateLog({ ...item, coverIndex: idx, coverThumbUrl: coverThumbUrl || null });
-        },
+        onPress: applyCover,
       },
     ]);
   };
@@ -795,8 +905,30 @@ export default function DetailScreen({ route, navigation }) {
     if (!year) return item.date || '';
     return `${year}年${month}月${day}日${timePart ? ` · ${timePart}` : ''}`;
   })();
-  const handleEdit = () => navigation.push('Edit', { editItem: item });
+  const handleEdit = () => {
+    hapticSelection();
+    navigation.push('Edit', { editItem: item });
+  };
   const confirmDelete = () => {
+    if (Platform.OS === 'ios') {
+      hapticWarning();
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: `确定要删除「${displayTitle}」吗？`,
+          message: '删除后无法恢复。',
+          options: ['删除印记', '取消'],
+          destructiveButtonIndex: 0,
+          cancelButtonIndex: 1,
+        },
+        async (buttonIndex) => {
+          if (buttonIndex === 0) {
+            await deleteLog(item.id);
+            navigation.goBack();
+          }
+        }
+      );
+      return;
+    }
     Alert.alert('删除印记', `确定要删除「${displayTitle}」吗？删除后无法恢复。`, [
       { text: '取消', style: 'cancel' },
       {
@@ -818,8 +950,14 @@ export default function DetailScreen({ route, navigation }) {
       <View pointerEvents="box-none" style={[styles.fixedTop, { paddingTop: insets.top + 6 }]}>
         <View style={styles.fixedBack}>
           <LiquidGlassSurface cornerRadius={20} isDark={isDark} interactive />
-          <TouchableOpacity style={styles.fixedBackBtn} onPress={() => navigation.goBack()} activeOpacity={0.82}>
-            <ChevronLeft size={24} color={colors.text} />
+          <TouchableOpacity
+            style={styles.fixedBackBtn}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.82}
+            delayPressIn={0}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <NativeIcon name="chevron.left" fallback={ChevronLeft} size={22} color={colors.text} weight="semibold" />
           </TouchableOpacity>
         </View>
       </View>
@@ -918,13 +1056,13 @@ export default function DetailScreen({ route, navigation }) {
         <View style={styles.actionShadow}>
           <View style={styles.actionBar}>
             <LiquidGlassSurface cornerRadius={30} isDark={isDark} interactive />
-            <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75}>
-              <Edit3 size={17} color={colors.accent} />
+            <TouchableOpacity style={styles.actionBtn} onPress={handleEdit} activeOpacity={0.75} delayPressIn={0}>
+              <NativeIcon name="pencil" fallback={Edit3} size={17} color={colors.accent} />
               <Text style={[styles.actionText, { color: colors.accent }]}>修改</Text>
             </TouchableOpacity>
             <View style={[styles.actionDivider, { backgroundColor: colors.border }]} />
-            <TouchableOpacity style={styles.actionBtn} onPress={confirmDelete} activeOpacity={0.75}>
-              <Trash2 size={17} color={colors.danger} />
+            <TouchableOpacity style={styles.actionBtn} onPress={confirmDelete} activeOpacity={0.75} delayPressIn={0}>
+              <NativeIcon name="trash" fallback={Trash2} size={17} color={colors.danger} />
               <Text style={[styles.actionText, { color: colors.danger }]}>删除</Text>
             </TouchableOpacity>
           </View>
@@ -943,8 +1081,12 @@ export default function DetailScreen({ route, navigation }) {
             里面必须自己再包一层 GestureHandlerRootView，否则捏合缩放/双击放大根本不生效 */}
         <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.viewerContainer}>
-          <TouchableOpacity style={[styles.viewerCloseBtn, { top: insets.top + 10 }]} onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}>
-            <X size={28} color="#FFF" />
+          <TouchableOpacity
+            style={[styles.viewerCloseBtn, { top: insets.top + 10 }]}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={() => { setViewerIndex(-1); setCurrentViewIndex(-1); setViewerZoomed(false); }}
+          >
+            <NativeIcon name="xmark" fallback={X} size={24} color="#FFF" weight="semibold" />
           </TouchableOpacity>
 
           <FlatList

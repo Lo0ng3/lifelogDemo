@@ -1,19 +1,18 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, ActionSheetIOS, Platform } from 'react-native';
 import { Edit3, Trash2 } from 'lucide-react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Reanimated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
 import CoverIcon from './CoverIcon';
 import PressableScale from './PressableScale';
+import NativeIcon from './NativeIcon';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { labelOf, groupColor, groupSoft, isEssay, starsOf } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
+import { hapticLight, hapticWarning } from '../utils/haptics';
 
-// 震动反馈：模块缺失（旧构建）时静默跳过，不影响功能
-let Haptics = null;
-try { Haptics = require('expo-haptics'); } catch {}
-const lightTap = () => { try { Haptics?.impactAsync?.(Haptics.ImpactFeedbackStyle.Light); } catch {} };
+const lightTap = hapticLight;
 
 // 右滑操作区：固定宽度保证滑动距离可测
 const ACTIONS_WIDTH = 148;
@@ -76,13 +75,13 @@ function SwipeActions({ drag, onEdit, onDelete }) {
     <Reanimated.View style={[styles.swipeActions, containerStyle]}>
       <Reanimated.View style={[styles.swipeBtnWrap, editStyle]}>
         <TouchableOpacity style={[styles.swipeBtn, styles.swipeEditBtn]} onPress={onEdit} activeOpacity={0.85}>
-          <Edit3 size={18} color="#FFF" />
+          <NativeIcon name="pencil" fallback={Edit3} size={18} color="#FFF" />
           <Text style={styles.swipeBtnText}>修改</Text>
         </TouchableOpacity>
       </Reanimated.View>
       <Reanimated.View style={[styles.swipeBtnWrap, delStyle]}>
         <TouchableOpacity style={[styles.swipeBtn, styles.swipeDeleteBtn]} onPress={onDelete} activeOpacity={0.85}>
-          <Trash2 size={18} color="#FFF" />
+          <NativeIcon name="trash" fallback={Trash2} size={18} color="#FFF" />
           <Text style={styles.swipeBtnText}>删除</Text>
         </TouchableOpacity>
       </Reanimated.View>
@@ -101,11 +100,12 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
 
   const stars = starsOf(item.rating);
   const essay = isEssay(item);
-  // 右滑操作区默认不挂：每行省下两个按钮 + 两个图标 + 三个动画 ≈ 14 个原生 View。
-  // 手指一碰到这一行（onPressIn，早于右滑手势 activate 几十毫秒）就补上，
-  // 所以第一次右滑照样跟手——Swipeable 是在手势 activate 时才量操作区宽度的。
-  const [actionsReady, setActionsReady] = useState(false);
-  const armActions = useCallback(() => setActionsReady(true), []);
+  // Android 沿用按需挂载右滑操作区以减少低端机初始 View 数；
+  // iOS 直接就绪，彻底消除首次轻点行时 onPressIn -> setState 重渲染打断点击识别的“触控不灵敏”问题
+  const [actionsReady, setActionsReady] = useState(Platform.OS === 'ios');
+  const armActions = useCallback(() => {
+    if (Platform.OS !== 'ios') setActionsReady(true);
+  }, []);
   // 日期分两行：上面年份、下面 月-日（缺年份的历史记录就按原样显示）。
   // 时分只在旅票里有意义，放到详情页看；正文一行，保证每行高度完全一致
   const dateText = String(item.date || '');
@@ -113,14 +113,32 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
   const dayLabel = dateText.slice(5, 10);
   const textLine = [item.subtitle, item.comment].filter(Boolean).join(' · ');
 
-  const confirmDelete = useCallback(() => Alert.alert(
-    '删除印记',
-    `确定要删除「${item.title}」吗？删除后无法恢复。`,
-    [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => onDelete?.(item.id) },
-    ]
-  ), [item.id, item.title, onDelete]);
+  const confirmDelete = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      hapticWarning();
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: `确定要删除「${item.title}」吗？`,
+          message: '删除后无法恢复。',
+          options: ['删除印记', '取消'],
+          destructiveButtonIndex: 0,
+          cancelButtonIndex: 1,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) onDelete?.(item.id);
+        }
+      );
+      return;
+    }
+    Alert.alert(
+      '删除印记',
+      `确定要删除「${item.title}」吗？删除后无法恢复。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '删除', style: 'destructive', onPress: () => onDelete?.(item.id) },
+      ]
+    );
+  }, [item.id, item.title, onDelete]);
 
   // 用 useCallback 稳住引用：SwipeActions 里是三个 useAnimatedStyle，
   // 每次无关重渲染都重建一遍纯属白花
@@ -142,10 +160,12 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, onEdit,
       overshootRight={false}
       friction={1.7}
       rightThreshold={36}
+      activeOffsetX={[-20, 20]}
+      failOffsetY={[-12, 12]}
       onSwipeableWillOpen={lightTap}
       containerStyle={[styles.swipeContainer, style]}
     >
-      <PressableScale style={styles.cardRow} onPress={() => onPress?.(item)} onPressIn={armActions}>
+      <PressableScale style={styles.cardRow} onPress={() => onPress?.(item)} onPressIn={Platform.OS === 'ios' ? undefined : armActions}>
         <View style={[styles.cardItem, !isLast && styles.cardItemBorder]}>
           <CoverIcon item={item} height={64} />
           <View style={styles.itemContent}>

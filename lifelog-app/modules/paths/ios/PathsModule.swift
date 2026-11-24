@@ -124,6 +124,19 @@ public class PathsModule: Module {
         view.setInteractive(value)
       }
     }
+
+    View(NativeSegmentedControlView.self) {
+      Events("onValueChange")
+      Prop("segments") { (view: NativeSegmentedControlView, value: [String]) in
+        view.setSegments(value)
+      }
+      Prop("selectedIndex") { (view: NativeSegmentedControlView, value: Int) in
+        view.setSelectedIndex(value)
+      }
+      Prop("isDark") { (view: NativeSegmentedControlView, value: Bool) in
+        view.setIsDark(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {

@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
@@ -11,6 +12,7 @@ import DetailScreen from '../screens/DetailScreen';
 import MediaPickerScreen from '../screens/MediaPickerScreen';
 import ShareTargetScreen from '../screens/ShareTargetScreen';
 import AppTabBar from '../components/AppTabBar';
+import NativeIcon from '../components/NativeIcon';
 import { useTheme } from '../theme/ThemeProvider';
 
 const Tab = createBottomTabNavigator();
@@ -26,8 +28,8 @@ function Tabs() {
     <Tab.Navigator
       tabBar={(props) => <AppTabBar {...props} />}
       screenOptions={{
-        // Tab 之间用轻微的位移过渡，比硬切更顺；键盘弹出时收起 TabBar
-        animation: 'shift',
+        // iOS Tab 即点即切（配合底部液态玻璃胶囊弹簧过渡更跟手）；Android 保留轻微位移
+        animation: Platform.OS === 'ios' ? 'none' : 'shift',
         // 配置底部导航栏的样式（跟随主题）
         tabBarActiveTintColor: colors.accent, // 选中时的颜色
         tabBarInactiveTintColor: colors.textMuted,  // 未选中时的颜色
@@ -39,8 +41,13 @@ function Tabs() {
         component={HomeScreen}
         options={{
           tabBarLabel: '印记',
-          tabBarIcon: ({ color, size }) => (
-            <Compass color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <NativeIcon
+              name={focused ? 'safari.fill' : 'safari'}
+              fallback={Compass}
+              color={color}
+              size={size}
+            />
           ),
         }}
       />
@@ -49,8 +56,13 @@ function Tabs() {
         component={AddScreen}
         options={{
           tabBarLabel: '添加',
-          tabBarIcon: ({ color, size }) => (
-            <PlusCircle color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <NativeIcon
+              name={focused ? 'plus.circle.fill' : 'plus.circle'}
+              fallback={PlusCircle}
+              color={color}
+              size={size}
+            />
           ),
         }}
       />
@@ -84,11 +96,11 @@ export default function AppNavigator() {
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
-          // 统一的页面切换动画：二级页面从右侧滑入；背景色跟随主题，转场时不会闪白
-          animation: 'slide_from_right',
-          animationDuration: 300,
+          // iOS 走原生 UIKit 转场与左边缘交互返回（关闭全屏手势避免和点击/横滑/拖动排序抢触摸）
+          animation: Platform.OS === 'ios' ? 'default' : 'slide_from_right',
+          ...(Platform.OS === 'ios' ? {} : { animationDuration: 300 }),
           gestureEnabled: true,
-          fullScreenGestureEnabled: true,
+          fullScreenGestureEnabled: Platform.OS !== 'ios',
           contentStyle: { backgroundColor: colors.bg },
         }}
       >

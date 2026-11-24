@@ -18,6 +18,7 @@ import { LogContext } from '../context/LogContext';
 import { hasGalleryAccess } from '../utils/media';
 import { getFileSizeAsync } from '../utils/storagePaths';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
+import { hapticSelection } from '../utils/haptics';
 
 // 双端系统微缩略图原生模块（Android: MediaStore loadThumbnail / iOS: PhotoKit requestImage）：
 // 毫秒级出图且原生侧有缓存；模块缺失时回退原图显示
@@ -199,6 +200,7 @@ const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, i
   return (
     <TouchableOpacity
       activeOpacity={0.85}
+      delayPressIn={0}
       style={styles.cell}
       onPress={() => (isVideo ? onToggle(asset) : onOpen(index))}
     >
@@ -219,8 +221,9 @@ const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, i
       ) : (
         <TouchableOpacity
           style={[styles.selectBadge, selected && styles.selectBadgeOn]}
+          delayPressIn={0}
           onPress={() => onToggle(asset)}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           {selected && <Check size={14} color="#FFF" />}
         </TouchableOpacity>
@@ -466,6 +469,7 @@ export default function MediaPickerScreen({ route, navigation }) {
   const toggle = useCallback((asset) => {
     setSelected(prev => {
       if (isUsedElsewhere(asset)) return prev;
+      hapticSelection();
       const next = new Set(prev);
       if (next.has(asset.id)) next.delete(asset.id);
       else next.add(asset.id);
@@ -705,16 +709,16 @@ export default function MediaPickerScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <View style={[styles.navBar, { paddingTop: insets.top + 6 }]}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.albumBtn} onPress={() => setShowAlbums(v => !v)} disabled={status !== 'granted'}>
+        <TouchableOpacity style={styles.albumBtn} onPress={() => { hapticSelection(); setShowAlbums(v => !v); }} disabled={status !== 'granted'} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={styles.navTitle} numberOfLines={1}>{albumTitle}</Text>
           {showAlbums
             ? <ChevronUp size={16} color={colors.text} />
             : <ChevronDown size={16} color={colors.text} />}
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navBtn} onPress={handleConfirm} disabled={selected.size === 0 || confirming}>
+        <TouchableOpacity style={styles.navBtn} onPress={handleConfirm} disabled={selected.size === 0 || confirming} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Text style={[styles.confirmText, (selected.size === 0 || confirming) && styles.confirmDisabled]}>
             {confirming ? '处理中…' : (selected.size > 0 ? `完成(${selected.size})` : '完成')}
           </Text>
@@ -769,6 +773,7 @@ export default function MediaPickerScreen({ route, navigation }) {
               renderItem={renderItem}
               onScroll={scrollHandler}
               scrollEventThrottle={16}
+              bounces={Platform.OS === 'ios'}
               onEndReached={onEndReached}
               onEndReachedThreshold={1.5}
               // numColumns>1 时 FlatList 传给 getItemLayout 的 index 是行号（每行=CELL 高）

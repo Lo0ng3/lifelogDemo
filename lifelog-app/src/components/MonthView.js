@@ -11,6 +11,7 @@ import RecordRow from './RecordRow';
 import PressableScale from './PressableScale';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { groupColor } from '../utils/recordMeta';
+import { hapticSelection } from '../utils/haptics';
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日'];
 const MAX_DOTS = 3;
@@ -112,6 +113,7 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
   byDateRef.current = byDate;
   const selectDay = useCallback((date, scrollTop) => {
     if ((byDateRef.current.get(date) || NO_RECORDS).length === 0) return;
+    hapticSelection();
     setSelected((prev) => (prev === date ? null : date));
     if (scrollTop) listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
@@ -220,9 +222,9 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
     });
   }, [cursor.y, cursor.m, selected]);
 
-  // 日历区左右滑动换月（纵向手势留给下面的列表滚动）
+  // 日历区左右滑动换月（纵向手势留给下面的列表滚动；加大横向阈值避免轻点日期格被误判为滑月）
   const swipeMonth = useMemo(() => Gesture.Pan()
-    .activeOffsetX([-14, 14])
+    .activeOffsetX([-22, 22])
     .failOffsetY([-12, 12])
     .onEnd((e) => {
       if (e.translationX < -48) runOnJS(goMonth)(1);
@@ -261,20 +263,21 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
         {/* 点年月可以跳到任意年月（不带日） */}
         <TouchableOpacity
           style={styles.monthLabelBtn}
-          onPress={() => { setPickerYear(cursor.y); setPickerOpen(v => !v); }}
+          onPress={() => { hapticSelection(); setPickerYear(cursor.y); setPickerOpen(v => !v); }}
           activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
         >
           <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
           <Text style={[styles.monthLabelChevron, pickerOpen && styles.monthLabelChevronUp]}>⌄</Text>
         </TouchableOpacity>
         <View style={styles.nav}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(-1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+          <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); goMonth(-1); }} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}>
             <Text style={styles.navBtnText}>‹</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navBtn} onPress={() => goMonth(1)} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+          <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); goMonth(1); }} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}>
             <Text style={styles.navBtnText}>›</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.todayBtn} onPress={() => { goToday(); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }}>
+          <TouchableOpacity style={styles.todayBtn} onPress={() => { hapticSelection(); goToday(); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
             <Text style={styles.todayBtnText}>今天</Text>
           </TouchableOpacity>
         </View>
@@ -313,6 +316,8 @@ export default function MonthView({ records, onPressItem, onEditItem, onDeleteIt
           showsVerticalScrollIndicator={false}
           bounces={Platform.OS === 'ios'}
           overScrollMode="never"
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           // 同首页列表：收窄虚拟化窗口、Android 裁掉屏外行，切换日历/滑动更稳
           initialNumToRender={6}
           maxToRenderPerBatch={4}
