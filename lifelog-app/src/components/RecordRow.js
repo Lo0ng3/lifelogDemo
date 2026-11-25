@@ -3,30 +3,28 @@ import { View, Text } from 'react-native';
 
 import CoverIcon from './CoverIcon';
 import PressableScale from './PressableScale';
+import RatingStar from './RatingStar';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { labelOf, groupColor, groupSoft, isEssay, starsOf } from '../utils/recordMeta';
 import { shortTicketTitle } from '../utils/format';
 
-/* 星级：整星 / 空星 / 半星全部用同一个字形、同一个字号画，尺寸完全统一。
-   每颗星占固定宽度、字形居中，半星裁掉右半边即可。 */
+// 星级：使用严格对称的 RatingStar 组件（整星 / 半星 / 空星完全对称）
 function renderStars(stars, colors, styles) {
   if (!stars) return null;
   const { full, half } = stars;
   return (
     <View style={styles.starContainer}>
       {[1, 2, 3, 4, 5].map((i) => {
-        if (half && i === full + 1) {
-          return (
-            <View key={i} style={styles.starHalfClip}>
-              <Text style={[styles.starGlyph, { color: colors.star }]}>★</Text>
-            </View>
-          );
-        }
-        const on = i <= full;
+        const state = i <= full ? 'full' : (half && i === full + 1 ? 'half' : 'empty');
         return (
-          <Text key={i} style={[styles.starGlyph, { color: on ? colors.star : colors.starEmpty }]}>
-            {on ? '★' : '☆'}
-          </Text>
+          <RatingStar
+            key={i}
+            state={state}
+            size={12.5}
+            activeColor={colors.star}
+            emptyColor={colors.starEmpty}
+            style={{ marginRight: 1.5 }}
+          />
         );
       })}
     </View>

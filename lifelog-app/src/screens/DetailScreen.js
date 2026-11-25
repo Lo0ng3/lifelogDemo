@@ -10,8 +10,9 @@ import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeLivePhoto, { hasNativeLivePhoto } from '../components/NativeLivePhoto';
 import NativeVideoPlayer, { hasNativeVideoPlayer } from '../components/NativeVideoPlayer';
+import RatingStar from '../components/RatingStar';
 import {
-  Star, StarHalf, X, PlayCircle, CircleDot, ChevronLeft, Edit3, Trash2
+  X, PlayCircle, CircleDot, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -1003,8 +1004,16 @@ export default function DetailScreen({ route, navigation }) {
                   {[1, 2, 3, 4, 5].map((i) => {
                     const isFull = i <= item.rating;
                     const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                    if (isHalf) return <StarHalf key={i} size={16} color={colors.star} fill={colors.star} style={{ marginRight: 2 }} />;
-                    return <Star key={i} size={16} color={isFull ? colors.star : colors.starEmpty} fill={isFull ? colors.star : 'transparent'} style={{ marginRight: 2 }} />;
+                    return (
+                      <RatingStar
+                        key={i}
+                        state={isHalf ? 'half' : (isFull ? 'full' : 'empty')}
+                        size={16}
+                        activeColor={colors.star}
+                        emptyColor={colors.starEmpty}
+                        style={{ marginRight: 2 }}
+                      />
+                    );
                   })}
                   <Text style={styles.reviewScore}>{item.rating} 分</Text>
                 </>

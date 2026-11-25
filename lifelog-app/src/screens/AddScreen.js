@@ -4,16 +4,19 @@ import {
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
   BackHandler, ToastAndroid, Modal, Keyboard
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  MapPin, Search, ImagePlus, X, Star, StarHalf, PlayCircle, Maximize2, ArrowLeftRight
+  MapPin, Search, ImagePlus, X, PlayCircle, Maximize2, ArrowLeftRight
 } from 'lucide-react-native';
 import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
+import NativeScoreMenu, { hasNativeScoreMenu } from '../components/NativeScoreMenu';
+import RatingStar from '../components/RatingStar';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { mediaUri, normalizeMediaEntry, resolveMediaUri, remoteImageSource, downloadRemoteCoverVariants, getVideoThumbnail, isAppOwnedMediaPath, isVideoEntry, setDraftMediaEntries } from '../utils/media';
 import { relinkNewEntries } from '../utils/mediaSync';
@@ -116,10 +119,69 @@ export default function AddScreen({ navigation, route }) {
   
   const [rating, setRating] = useState(0); 
   const [comment, setComment] = useState(''); 
-  // 随笔（一级）专用：标题选填、心情必填
+  // 随笔（一级）专用：标题选填、心情必填（5 个快捷心情支持长按自定义并持久保存）
   const [noteTitle, setNoteTitle] = useState('');
   const [mood, setMood] = useState(null);
   const [moodDraft, setMoodDraft] = useState('');
+  const [moodPresets, setMoodPresets] = useState(MOOD_OPTIONS);
+  const [moodEditSlot, setMoodEditSlot] = useState(null);
+  const [moodEditDraft, setMoodEditDraft] = useState('');
+  const [scoreModalOpen, setScoreModalOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem('@custom_mood_presets_v1')
+      .then((raw) => {
+        if (!alive || !raw) return;
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length === MOOD_OPTIONS.length && arr.every((x) => typeof x === 'string' && x.trim())) {
+          setMoodPresets(arr);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const updateMoodPresetSlot = useCallback((idx, rawValue) => {
+    const cleaned = String(rawValue || '').trim().slice(0, 4);
+    if (!cleaned) return;
+    setMoodPresets((prev) => {
+      const oldVal = prev[idx];
+      const next = prev.slice();
+      next[idx] = cleaned;
+      AsyncStorage.setItem('@custom_mood_presets_v1', JSON.stringify(next)).catch(() => {});
+      if (mood === oldVal) setMood(cleaned);
+      return next;
+    });
+    hapticSuccess();
+  }, [mood]);
+
+  const resetMoodPresets = useCallback(() => {
+    setMoodPresets(MOOD_OPTIONS);
+    AsyncStorage.removeItem('@custom_mood_presets_v1').catch(() => {});
+    hapticSuccess();
+  }, []);
+
+  const openMoodPresetEditor = useCallback((idx) => {
+    hapticSelection();
+    const cur = moodPresets[idx] || MOOD_OPTIONS[idx] || '';
+    if (Platform.OS === 'ios' && typeof Alert.prompt === 'function') {
+      Alert.prompt(
+        '修改心情图标',
+        undefined,
+        [
+          { text: '恢复默认', onPress: resetMoodPresets },
+          { text: '取消', style: 'cancel' },
+          { text: '保存', onPress: (val) => updateMoodPresetSlot(idx, val) },
+        ],
+        'plain-text',
+        cur
+      );
+      return;
+    }
+    setMoodEditSlot(idx);
+    setMoodEditDraft(cur);
+  }, [moodPresets, resetMoodPresets, updateMoodPresetSlot]);
   const [editCoverIndex, setEditCoverIndex] = useState(null);   // 编辑时原封带回顾有的封面选择
   const [editPhotoCount, setEditPhotoCount] = useState(0);
   const [fullscreenComment, setFullscreenComment] = useState(false);  // 评论/内容全屏编辑
@@ -965,69 +1027,51 @@ export default function AddScreen({ navigation, route }) {
   const subList = SUB_OPTIONS[baseType] || [];
 
   const renderRatingRow = () => (
-    <View style={styles.ratingBlock}>
-      <View style={styles.ratingTopRow}>
-        <Text style={styles.rowLabel}>评分</Text>
-        <View style={styles.starRowRight}>
-          <GestureDetector gesture={starGesture}>
-            <View style={[styles.starTrack, { width: STAR_TRACK_W }]}>
-              {[1, 2, 3, 4, 5].map((s) => {
-                const isFull = s <= rating;
-                const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
-                return (
-                  <View key={s} style={styles.starSlot} pointerEvents="none">
-                    {isHalf ? (
-                      <StarHalf size={27} color={colors.star} fill={colors.star} />
-                    ) : (
-                      <Star
-                        size={27}
-                        color={isFull ? colors.star : colors.starEmpty}
-                        fill={isFull ? colors.star : 'transparent'}
-                      />
-                    )}
-                  </View>
-                );
-              })}
-            </View>
-          </GestureDetector>
+    <View style={styles.metaRow}>
+      <Text style={styles.rowLabel}>评分</Text>
+      <View style={styles.starRowRight}>
+        <GestureDetector gesture={starGesture}>
+          <View style={[styles.starTrack, { width: STAR_TRACK_W }]}>
+            {[1, 2, 3, 4, 5].map((s) => {
+              const isFull = s <= rating;
+              const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
+              return (
+                <View key={s} style={styles.starSlot} pointerEvents="none">
+                  <RatingStar
+                    state={isHalf ? 'half' : (isFull ? 'full' : 'empty')}
+                    size={26}
+                    activeColor={colors.star}
+                    emptyColor={colors.starEmpty}
+                  />
+                </View>
+              );
+            })}
+          </View>
+        </GestureDetector>
+        {hasNativeScoreMenu ? (
+          <NativeScoreMenu
+            rating={rating}
+            isDark={isDark}
+            accentColor={colors.accent}
+            onSelect={(val) => {
+              hapticSelection();
+              setRating(val);
+            }}
+            style={styles.scoreMenuPill}
+          />
+        ) : (
           <TouchableOpacity
-            disabled={!rating}
-            onPress={() => { hapticSelection(); setRating(0); }}
+            style={[styles.scorePillFallback, rating > 0 && styles.scorePillFallbackOn]}
+            onPress={() => { hapticSelection(); setScoreModalOpen(true); }}
             hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            activeOpacity={0.7}
+            activeOpacity={0.75}
           >
-            <Text style={[styles.ratingScore, !rating && styles.ratingScoreEmpty]}>
+            <Text style={[styles.ratingScore, rating > 0 ? styles.ratingScoreActive : styles.ratingScoreEmpty]}>
               {rating > 0 ? `${rating} 分` : '未评'}
             </Text>
           </TouchableOpacity>
-        </View>
+        )}
       </View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.ratingNumRow}
-      >
-        {RATING_STEPS.map((val) => {
-          const on = rating === val;
-          return (
-            <TouchableOpacity
-              key={val}
-              style={[styles.ratingNumChip, on && styles.ratingNumChipOn]}
-              delayPressIn={0}
-              activeOpacity={0.75}
-              onPress={() => {
-                hapticSelection();
-                setRating(on ? 0 : val);
-              }}
-            >
-              <Text style={[styles.ratingNumText, on && styles.ratingNumTextOn]}>
-                {Number.isInteger(val) ? `${val}` : val.toFixed(1)}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
     </View>
   );
 
@@ -1523,21 +1567,23 @@ export default function AddScreen({ navigation, route }) {
                   心情 <Text style={styles.requiredMark}>*</Text>
                 </Text>
                 <View style={styles.moodRow}>
-                  {MOOD_OPTIONS.map((m) => {
+                  {moodPresets.map((m, idx) => {
                     const on = mood === m;
                     return (
                       <TouchableOpacity
-                        key={m}
+                        key={`${idx}-${m}`}
                         style={[styles.moodChip, on && styles.moodChipOn]}
                         delayPressIn={0}
+                        delayLongPress={400}
                         onPress={() => { hapticSelection(); setMood(on ? null : m); setMoodDraft(''); }}
+                        onLongPress={() => openMoodPresetEditor(idx)}
                       >
                         <Text style={styles.moodChipText}>{m}</Text>
                       </TouchableOpacity>
                     );
                   })}
                   <TextInput
-                    style={[styles.moodInput, (moodDraft.trim() && !MOOD_OPTIONS.includes(mood)) && styles.moodChipOn]}
+                    style={[styles.moodInput, (moodDraft.trim() && !moodPresets.includes(mood)) && styles.moodChipOn]}
                     {...nextFieldProps('moodDraft')}
                     value={moodDraft}
                     onChangeText={(t) => { setMoodDraft(t); setMood(t ? t : null); }}
@@ -1648,6 +1694,75 @@ export default function AddScreen({ navigation, route }) {
             placeholderTextColor={colors.textMuted}
           />
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Android 评分数值选择弹层（iOS 使用原生下拉菜单 NativeScoreMenu） */}
+      {!hasNativeScoreMenu && (
+        <Modal transparent visible={scoreModalOpen} animationType="fade" onRequestClose={() => setScoreModalOpen(false)}>
+          <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setScoreModalOpen(false)}>
+            <TouchableOpacity style={styles.pickerCard} activeOpacity={1} onPress={() => {}}>
+              <Text style={styles.pickerTitle}>选择评分</Text>
+              <View style={styles.pickerGrid}>
+                {[0, ...RATING_STEPS].map((val) => {
+                  const on = rating === val;
+                  return (
+                    <TouchableOpacity
+                      key={val}
+                      style={[styles.pickerChip, on && styles.pickerChipOn]}
+                      onPress={() => {
+                        hapticSelection();
+                        setRating(val);
+                        setScoreModalOpen(false);
+                      }}
+                    >
+                      <Text style={[styles.pickerChipText, on && styles.pickerChipTextOn]}>
+                        {val === 0 ? '未评' : `${val} 分`}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
+      {/* Android 长按修改预设心情弹窗（iOS 使用原生 Alert.prompt） */}
+      <Modal transparent visible={moodEditSlot !== null} animationType="fade" onRequestClose={() => setMoodEditSlot(null)}>
+        <TouchableOpacity style={styles.pickerOverlay} activeOpacity={1} onPress={() => setMoodEditSlot(null)}>
+          <TouchableOpacity style={styles.pickerCard} activeOpacity={1} onPress={() => {}}>
+            <Text style={styles.pickerTitle}>修改心情图标</Text>
+            <TextInput
+              style={styles.moodEditInput}
+              value={moodEditDraft}
+              onChangeText={setMoodEditDraft}
+              maxLength={4}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={() => {
+                if (moodEditSlot !== null) updateMoodPresetSlot(moodEditSlot, moodEditDraft);
+                setMoodEditSlot(null);
+              }}
+            />
+            <View style={styles.moodEditBtns}>
+              <TouchableOpacity style={styles.moodEditBtn} onPress={() => { resetMoodPresets(); setMoodEditSlot(null); }}>
+                <Text style={styles.moodEditReset}>恢复默认</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.moodEditBtn} onPress={() => setMoodEditSlot(null)}>
+                <Text style={styles.moodEditCancel}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.moodEditBtn, styles.moodEditSaveBtn]}
+                onPress={() => {
+                  if (moodEditSlot !== null) updateMoodPresetSlot(moodEditSlot, moodEditDraft);
+                  setMoodEditSlot(null);
+                }}
+              >
+                <Text style={styles.moodEditSave}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -1802,25 +1917,40 @@ const makeStyles = (c) => ({
   dateBoxYear: { width: 64 },
   dateLabelText: { fontSize: 14, color: c.textSecondary, marginHorizontal: 6, fontWeight: '500' },
 
-  ratingBlock: { paddingTop: 4, paddingBottom: 12 },
-  ratingTopRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, minHeight: 48, gap: 10,
-  },
   starRowRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   starTrack: { flexDirection: 'row', alignItems: 'center', height: 42 },
   starSlot: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  ratingScore: { fontSize: 14, fontWeight: '700', color: c.textSecondary, minWidth: 40, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  scoreMenuPill: { width: 64, height: 30 },
+  scorePillFallback: {
+    minWidth: 58, height: 30, paddingHorizontal: 10, borderRadius: 9,
+    backgroundColor: c.bgSunken, alignItems: 'center', justifyContent: 'center',
+  },
+  scorePillFallbackOn: { backgroundColor: c.accentSoft },
+  ratingScore: { fontSize: 13.5, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  ratingScoreActive: { color: c.accent },
   ratingScoreEmpty: { fontWeight: '500', color: c.textMuted },
-  ratingNumRow: { paddingHorizontal: 16, paddingTop: 4, gap: 6, flexDirection: 'row', alignItems: 'center' },
-  ratingNumChip: {
-    minWidth: 36, height: 28, paddingHorizontal: 8, borderRadius: 14,
+  pickerOverlay: { flex: 1, backgroundColor: c.overlay, justifyContent: 'center', alignItems: 'center', padding: 28 },
+  pickerCard: { width: '100%', backgroundColor: c.bgElevated, borderRadius: 16, padding: 18 },
+  pickerTitle: { fontSize: 16, fontWeight: '600', color: c.textStrong, marginBottom: 14 },
+  pickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  pickerChip: {
+    minWidth: 64, height: 34, paddingHorizontal: 10, borderRadius: 10,
     backgroundColor: c.bgSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     alignItems: 'center', justifyContent: 'center',
   },
-  ratingNumChipOn: { backgroundColor: c.accent, borderColor: c.accent },
-  ratingNumText: { fontSize: 12.5, fontWeight: '500', color: c.textSecondary, fontVariant: ['tabular-nums'] },
-  ratingNumTextOn: { color: '#FFF', fontWeight: '600' },
+  pickerChipOn: { backgroundColor: c.accent, borderColor: c.accent },
+  pickerChipText: { fontSize: 13.5, color: c.textSecondary, fontWeight: '500' },
+  pickerChipTextOn: { color: '#FFF', fontWeight: '600' },
+  moodEditInput: {
+    height: 46, borderWidth: 1, borderColor: c.border, borderRadius: 10,
+    backgroundColor: c.bgSunken, textAlign: 'center', fontSize: 22, color: c.text,
+  },
+  moodEditBtns: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
+  moodEditBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  moodEditSaveBtn: { backgroundColor: c.accent },
+  moodEditReset: { fontSize: 13.5, color: c.textMuted },
+  moodEditCancel: { fontSize: 13.5, color: c.textSecondary },
+  moodEditSave: { fontSize: 13.5, fontWeight: '600', color: '#FFF' },
   requiredMark: { color: c.danger, fontWeight: '700' },
 
   moodRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },

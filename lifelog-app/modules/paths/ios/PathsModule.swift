@@ -394,6 +394,19 @@ public class PathsModule: Module {
         view.setIsDark(value)
       }
     }
+
+    View(NativeScoreMenuView.self) {
+      Events("onSelect")
+      Prop("rating") { (view: NativeScoreMenuView, value: Double) in
+        view.setRating(value)
+      }
+      Prop("isDark") { (view: NativeScoreMenuView, value: Bool) in
+        view.setIsDark(value)
+      }
+      Prop("accentColor") { (view: NativeScoreMenuView, value: String) in
+        view.setAccentColor(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {
