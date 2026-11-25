@@ -19,7 +19,8 @@ import { mediaUri, normalizeMediaEntry, resolveMediaUri, remoteImageSource, down
 import { relinkNewEntries } from '../utils/mediaSync';
 import { deletePathAsync } from '../utils/storagePaths';
 import { onAddDraftReset } from '../utils/draftReset';
-import Reanimated, { FadeIn } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Reanimated, { FadeIn, runOnJS } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
@@ -200,15 +201,56 @@ export default function AddScreen({ navigation, route }) {
     setPhotoCoord(null);
   };
 
-  // 二级选择的最终结果；切换大类不清空表单，日期/评论/影像等已填内容保留
+  // 切换一级大类时清空各分类专属字段，避免地点/娱乐/旅票/随笔之间互相串数据；
+  // 保留已选日期与系统分享进来的照片（selectedImages），防止分享照片后选类型时丢图
+  const resetCategoryFields = () => {
+    skipNextSearch.current = false;
+    skipOriginSearch.current = false;
+    skipDestSearch.current = false;
+    setSearchQuery('');
+    setSearchResults([]);
+    setShowSearchAuto(false);
+    setCoverUrl(null);
+    setCoverRatio(null);
+    setLocationCoords(null);
+    setTicketOrigin('');
+    setTicketDest('');
+    setTicketNo('');
+    setOriginResults([]);
+    setShowOriginAuto(false);
+    setOriginCoord(null);
+    setDestResults([]);
+    setShowDestAuto(false);
+    setDestCoord(null);
+    setNoteTitle('');
+    setMood(null);
+    setMoodDraft('');
+    setComment('');
+    setRating(0);
+    setHour('');
+    setMinute('');
+  };
+
   const applyType = (base, sub) => {
+    if (base !== baseType) {
+      Keyboard.dismiss();
+      resetCategoryFields();
+    } else if (!editId && base === 'media' && sub !== subType) {
+      // 娱乐内切子类型（如电影 → 游戏/书籍）时也清掉旧作品名与封面，避免串类
+      skipNextSearch.current = false;
+      setSearchQuery('');
+      setSearchResults([]);
+      setShowSearchAuto(false);
+      setCoverUrl(null);
+      setCoverRatio(null);
+    }
     setBaseType(base);
     setSubType(sub);
   };
 
   const chooseCategory = (id) => {
     if (id === 'location') {
-      applyType('location', 'location');
+      if (baseType !== 'location') applyType('location', 'location');
       return;
     }
     const defaultSub = id === 'ticket' ? 'flight' : id === 'media' ? 'movie' : 'diary';
@@ -677,12 +719,45 @@ export default function AddScreen({ navigation, route }) {
     return () => sub.remove();
   }, [route.name, navigation]);
 
-  const handleStarPress = (s) => {
-    hapticSelection();
-    if (rating === s - 0.5) setRating(s); 
-    else if (rating === s) setRating(0); 
-    else setRating(s - 0.5); 
-  };
+  // 评分交互：支持在星条上左右滑动（0.5 步进，实时震动）+ 单击落点选分 + 下方快捷数值点选
+  const RATING_STEPS = useMemo(() => [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], []);
+  const STAR_TRACK_W = 165;
+  const ratingRef = useRef(rating);
+  ratingRef.current = rating;
+  const applyRatingFromX = useCallback((x, isTap) => {
+    let next;
+    if (!isTap && x <= 6) {
+      next = 0;
+    } else {
+      const clamped = Math.max(0, Math.min(STAR_TRACK_W, x));
+      next = Math.min(5, Math.max(0.5, Math.ceil((clamped / STAR_TRACK_W) * 10) / 2));
+      if (isTap && next === ratingRef.current) next = 0;
+    }
+    if (next !== ratingRef.current) {
+      ratingRef.current = next;
+      hapticSelection();
+      setRating(next);
+    }
+  }, []);
+
+  const starGesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .activeOffsetX([-3, 3])
+      .failOffsetY([-14, 14])
+      .onBegin((e) => {
+        'worklet';
+        runOnJS(applyRatingFromX)(e.x, false);
+      })
+      .onUpdate((e) => {
+        'worklet';
+        runOnJS(applyRatingFromX)(e.x, false);
+      });
+    const tap = Gesture.Tap().onEnd((e, ok) => {
+      'worklet';
+      if (ok) runOnJS(applyRatingFromX)(e.x, true);
+    });
+    return Gesture.Exclusive(pan, tap);
+  }, [applyRatingFromX]);
 
   // 出发地/目的地落库：联想选中的坐标优先，没选中则天地图地理编码兜底；名称始终保留
   const resolvePlace = async (name, coord) => {
@@ -890,38 +965,69 @@ export default function AddScreen({ navigation, route }) {
   const subList = SUB_OPTIONS[baseType] || [];
 
   const renderRatingRow = () => (
-    <View style={styles.metaRow}>
-      <Text style={styles.rowLabel}>评分</Text>
-      <View style={styles.starRowRight}>
-        <View style={styles.starRow}>
-          {[1, 2, 3, 4, 5].map((s) => {
-            const isFull = s <= rating;
-            const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
-            return (
-              <TouchableOpacity
-                key={s}
-                onPress={() => handleStarPress(s)}
-                delayPressIn={0}
-                hitSlop={{ top: 10, bottom: 10, left: 3, right: 3 }}
-              >
-                {isHalf ? (
-                  <StarHalf size={25} color={colors.star} fill={colors.star} style={{ marginHorizontal: 2 }} />
-                ) : (
-                  <Star
-                    size={25}
-                    color={isFull ? colors.star : colors.starEmpty}
-                    fill={isFull ? colors.star : 'transparent'}
-                    style={{ marginHorizontal: 2 }}
-                  />
-                )}
-              </TouchableOpacity>
-            );
-          })}
+    <View style={styles.ratingBlock}>
+      <View style={styles.ratingTopRow}>
+        <Text style={styles.rowLabel}>评分</Text>
+        <View style={styles.starRowRight}>
+          <GestureDetector gesture={starGesture}>
+            <View style={[styles.starTrack, { width: STAR_TRACK_W }]}>
+              {[1, 2, 3, 4, 5].map((s) => {
+                const isFull = s <= rating;
+                const isHalf = s === Math.ceil(rating) && !Number.isInteger(rating);
+                return (
+                  <View key={s} style={styles.starSlot} pointerEvents="none">
+                    {isHalf ? (
+                      <StarHalf size={27} color={colors.star} fill={colors.star} />
+                    ) : (
+                      <Star
+                        size={27}
+                        color={isFull ? colors.star : colors.starEmpty}
+                        fill={isFull ? colors.star : 'transparent'}
+                      />
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          </GestureDetector>
+          <TouchableOpacity
+            disabled={!rating}
+            onPress={() => { hapticSelection(); setRating(0); }}
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.ratingScore, !rating && styles.ratingScoreEmpty]}>
+              {rating > 0 ? `${rating} 分` : '未评'}
+            </Text>
+          </TouchableOpacity>
         </View>
-        <Text style={[styles.ratingScore, !rating && styles.ratingScoreEmpty]}>
-          {rating > 0 ? `${rating} 分` : '未评'}
-        </Text>
       </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.ratingNumRow}
+      >
+        {RATING_STEPS.map((val) => {
+          const on = rating === val;
+          return (
+            <TouchableOpacity
+              key={val}
+              style={[styles.ratingNumChip, on && styles.ratingNumChipOn]}
+              delayPressIn={0}
+              activeOpacity={0.75}
+              onPress={() => {
+                hapticSelection();
+                setRating(on ? 0 : val);
+              }}
+            >
+              <Text style={[styles.ratingNumText, on && styles.ratingNumTextOn]}>
+                {Number.isInteger(val) ? `${val}` : val.toFixed(1)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 
@@ -1696,10 +1802,25 @@ const makeStyles = (c) => ({
   dateBoxYear: { width: 64 },
   dateLabelText: { fontSize: 14, color: c.textSecondary, marginHorizontal: 6, fontWeight: '500' },
 
-  starRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  starRow: { flexDirection: 'row', alignItems: 'center' },
-  ratingScore: { fontSize: 14, fontWeight: '700', color: c.textSecondary, minWidth: 38, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  ratingBlock: { paddingTop: 4, paddingBottom: 12 },
+  ratingTopRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, minHeight: 48, gap: 10,
+  },
+  starRowRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  starTrack: { flexDirection: 'row', alignItems: 'center', height: 42 },
+  starSlot: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  ratingScore: { fontSize: 14, fontWeight: '700', color: c.textSecondary, minWidth: 40, textAlign: 'right', fontVariant: ['tabular-nums'] },
   ratingScoreEmpty: { fontWeight: '500', color: c.textMuted },
+  ratingNumRow: { paddingHorizontal: 16, paddingTop: 4, gap: 6, flexDirection: 'row', alignItems: 'center' },
+  ratingNumChip: {
+    minWidth: 36, height: 28, paddingHorizontal: 8, borderRadius: 14,
+    backgroundColor: c.bgSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ratingNumChipOn: { backgroundColor: c.accent, borderColor: c.accent },
+  ratingNumText: { fontSize: 12.5, fontWeight: '500', color: c.textSecondary, fontVariant: ['tabular-nums'] },
+  ratingNumTextOn: { color: '#FFF', fontWeight: '600' },
   requiredMark: { color: c.danger, fontWeight: '700' },
 
   moodRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
