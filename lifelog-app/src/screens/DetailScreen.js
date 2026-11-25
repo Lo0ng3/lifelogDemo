@@ -994,27 +994,30 @@ export default function DetailScreen({ route, navigation }) {
             <View style={styles.reviewRow}>
               {essay ? (
                 <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
-              ) : item.rating ? (
-                <>
-                  {[1, 2, 3, 4, 5].map((i) => {
-                    const isFull = i <= item.rating;
-                    const isHalf = i === Math.ceil(item.rating) && !Number.isInteger(item.rating);
-                    return (
-                      <RatingStar
-                        key={i}
-                        state={isHalf ? 'half' : (isFull ? 'full' : 'empty')}
-                        size={16}
-                        activeColor={colors.star}
-                        emptyColor={colors.starEmpty}
-                        style={{ marginRight: 2 }}
-                      />
-                    );
-                  })}
-                  <Text style={styles.reviewScore}>{item.rating} 分</Text>
-                </>
-              ) : (
-                <Text style={styles.mutedScore}>未评分</Text>
-              )}
+              ) : (() => {
+                const score = Number.isFinite(Number(item.rating)) && item.rating !== null && item.rating !== ''
+                  ? Math.max(0, Number(item.rating))
+                  : 0;
+                return (
+                  <>
+                    {[1, 2, 3, 4, 5].map((i) => {
+                      const isFull = i <= score;
+                      const isHalf = i === Math.ceil(score) && !Number.isInteger(score);
+                      return (
+                        <RatingStar
+                          key={i}
+                          state={isHalf ? 'half' : (isFull ? 'full' : 'empty')}
+                          size={16}
+                          activeColor={colors.star}
+                          emptyColor={colors.starEmpty}
+                          style={{ marginRight: 2 }}
+                        />
+                      );
+                    })}
+                    <Text style={styles.reviewScore}>{score} 分</Text>
+                  </>
+                );
+              })()}
             </View>
           </View>
         </View>

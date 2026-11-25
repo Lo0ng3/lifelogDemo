@@ -2,7 +2,7 @@ import ExpoModulesCore
 import UIKit
 
 // iOS 原生评分下拉菜单按钮（UIButton + UIMenu，iOS 15+ 原生弹出菜单，风格与原生日期胶囊一致）：
-// 点击右侧「未评 / 4.5 分」胶囊直接弹出系统原生菜单选择 0.5–5.0 分或取消评分，无需多占一行。
+// 点击右侧「0 分 – 5 分」胶囊直接弹出系统原生菜单选择 0–5 分（步进 0.5），无需多占一行。
 public final class NativeScoreMenuView: ExpoView {
   private let button = UIButton(type: .system)
   private var currentRating: Double = 0
@@ -60,11 +60,11 @@ public final class NativeScoreMenuView: ExpoView {
   }
 
   private func labelFor(_ val: Double) -> String {
-    if val <= 0 { return "未评" }
-    if abs(val.rounded() - val) < 0.001 {
-      return "\(Int(val.rounded())) 分"
+    let clamped = max(0, val)
+    if abs(clamped.rounded() - clamped) < 0.001 {
+      return "\(Int(clamped.rounded())) 分"
     }
-    return String(format: "%.1f 分", val)
+    return String(format: "%.1f 分", clamped)
   }
 
   private func refreshUI() {
@@ -78,13 +78,8 @@ public final class NativeScoreMenuView: ExpoView {
       ? UIColor(red: 0.294, green: 0.545, blue: 1.0, alpha: 1.0)
       : UIColor(red: 0.114, green: 0.388, blue: 0.929, alpha: 1.0))
 
-    if currentRating > 0 {
-      button.setTitleColor(accent, for: .normal)
-      button.backgroundColor = accent.withAlphaComponent(isDarkMode ? 0.18 : 0.12)
-    } else {
-      button.setTitleColor(isDarkMode ? UIColor(white: 0.65, alpha: 1) : UIColor(white: 0.45, alpha: 1), for: .normal)
-      button.backgroundColor = isDarkMode ? UIColor(white: 1.0, alpha: 0.08) : UIColor(white: 0.0, alpha: 0.06)
-    }
+    button.setTitleColor(accent, for: .normal)
+    button.backgroundColor = accent.withAlphaComponent(isDarkMode ? 0.18 : 0.12)
 
     let actions = Self.options.map { val -> UIAction in
       let selected = abs(val - currentRating) < 0.001

@@ -955,7 +955,7 @@ export default function AddScreen({ navigation, route }) {
         + (baseType === 'ticket' && (hour || minute)
           ? ` ${(hour || '00').padStart(2,'0')}:${(minute || '00').padStart(2,'0')}`
           : ''),
-      rating: baseType === 'note' ? null : (rating > 0 ? rating : null),
+      rating: baseType === 'note' ? null : (Number.isFinite(rating) ? rating : 0),
       start,
       end,
       localImages: relink.entries.map((entry) => ({
@@ -1061,13 +1061,13 @@ export default function AddScreen({ navigation, route }) {
           />
         ) : (
           <TouchableOpacity
-            style={[styles.scorePillFallback, rating > 0 && styles.scorePillFallbackOn]}
+            style={[styles.scorePillFallback, styles.scorePillFallbackOn]}
             onPress={() => { hapticSelection(); setScoreModalOpen(true); }}
             hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             activeOpacity={0.75}
           >
-            <Text style={[styles.ratingScore, rating > 0 ? styles.ratingScoreActive : styles.ratingScoreEmpty]}>
-              {rating > 0 ? `${rating} 分` : '未评'}
+            <Text style={[styles.ratingScore, styles.ratingScoreActive]}>
+              {`${rating} 分`}
             </Text>
           </TouchableOpacity>
         )}
@@ -1716,7 +1716,7 @@ export default function AddScreen({ navigation, route }) {
                       }}
                     >
                       <Text style={[styles.pickerChipText, on && styles.pickerChipTextOn]}>
-                        {val === 0 ? '未评' : `${val} 分`}
+                        {`${val} 分`}
                       </Text>
                     </TouchableOpacity>
                   );

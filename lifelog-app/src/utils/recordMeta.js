@@ -48,10 +48,11 @@ export const groupSoft = (item, colors) => ({
   note: colors.groupNoteSoft,
 }[item?.baseType] || colors.groupPlaceSoft);
 
-// 列表 / 时间线里的星级（随笔用心情 emoji 顶替这一行）
+// 列表 / 时间线里的星级（随笔用心情 emoji 顶替这一行；最低 0 分显示 5 颗空星）
 export const starsOf = (rating) => {
-  if (!rating) return null;
-  const full = Math.floor(rating);
-  const half = rating % 1 >= 0.5;
+  const n = Number(rating);
+  const val = Number.isFinite(n) && n > 0 ? n : 0;
+  const full = Math.floor(val);
+  const half = val % 1 >= 0.5;
   return { full, half };
 };
