@@ -12,6 +12,7 @@ import {
   isVideoEntry,
   mediaSignature,
   purgeReferencedMediaCopies,
+  dedupeAndOptimizeCovers,
 } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { syncMediaFromGallery, warmGalleryIndex } from '../utils/mediaSync';
@@ -374,6 +375,67 @@ export const LogProvider = ({ children }) => {
     }
     return res;
   };
+  // 清理并合并重复/高清旧封面，更新记录后立即重写本地自动备份使其同步瘦身
+  const dedupeCovers = async () => {
+    const res = await dedupeAndOptimizeCovers(logDataRef.current);
+    if (res.changed) {
+      await commitLogs(res.logs);
+      await flushInternalBackup();
+    }
+    return res;
+  };
+
+  // 用户在「数据与存储」中手动删除某个本地文件后，同步摘除记录中指向该文件的失效引用
+  const removeMediaFileReference = async (fileName) => {
+    const base = String(fileName || '').trim();
+    if (!base) return false;
+    const matches = (uri) => typeof uri === 'string' && uri.startsWith('file://') && uri.split('?')[0].split('/').pop() === base;
+    let changed = false;
+    const nextLogs = logDataRef.current.map((log) => {
+      if (!log) return log;
+      let dirty = false;
+      const copy = { ...log };
+      if (matches(copy.coverUrl)) { copy.coverUrl = null; dirty = true; }
+      if (matches(copy.coverThumbUrl)) { copy.coverThumbUrl = null; dirty = true; }
+      if (Array.isArray(copy.localImages) && copy.localImages.length) {
+        const nextImages = [];
+        let imgsDirty = false;
+        for (const entry of copy.localImages) {
+          if (typeof entry === 'string') {
+            if (matches(entry)) { imgsDirty = true; continue; }
+            nextImages.push(entry);
+            continue;
+          }
+          if (entry && typeof entry === 'object') {
+            if (matches(entry.uri)) { imgsDirty = true; continue; }
+            if (entry.videoPoster && matches(entry.videoPoster.uri)) {
+              const nextEntry = { ...entry };
+              delete nextEntry.videoPoster;
+              nextImages.push(nextEntry);
+              imgsDirty = true;
+              continue;
+            }
+          }
+          nextImages.push(entry);
+        }
+        if (imgsDirty) {
+          copy.localImages = nextImages;
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        changed = true;
+        return copy;
+      }
+      return log;
+    });
+    if (changed) {
+      await commitLogs(nextLogs);
+      await flushInternalBackup();
+    }
+    return changed;
+  };
+
   const importLogs = async (incoming, mode = 'merge') => {
     let next;
     let added = 0;
@@ -425,7 +487,7 @@ export const LogProvider = ({ children }) => {
   return (
     // 记得把新方法暴露出去
     <LogContext.Provider value={{
-      logData, addLog, deleteLog, updateLog, syncMedia, purgeReferencedCopies, importLogs,
+      logData, addLog, deleteLog, updateLog, syncMedia, purgeReferencedCopies, dedupeCovers, removeMediaFileReference, importLogs,
       saveVideoPoster,
       tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
       amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode,

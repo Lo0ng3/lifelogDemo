@@ -38,7 +38,7 @@ import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
-import { getStorageSummaryAsync, clearWebKitCacheAsync } from '../utils/storagePaths';
+import { getStorageSummaryAsync, clearWebKitCacheAsync, deleteSandboxFileAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { requestAddDraftReset } from '../utils/draftReset';
@@ -80,7 +80,7 @@ const CACHE_TARGETS = [
   { key: 'thumbs', label: '视频封面帧', note: '按需自动重建' },
   { key: 'images', label: '图片缓存', note: '看图磁盘缓存' },
   { key: 'motion', label: '临时文件', note: '实况与导出临时文件' },
-  { key: 'covers', label: '无引用封面', note: '已删除记录残留的封面小图' },
+  { key: 'covers', label: '无引用与重复封面', note: '合并重复/旧版高清封面、清孤儿封面并瘦身自动备份' },
   { key: 'map', label: '地图缓存', note: '地图瓦片与 SDK 缓存' },
 ];
 const MAP_PROVIDERS = [
@@ -146,7 +146,7 @@ function ViewSwitcher({ value, onChange }) {
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const {
-    logData, syncMedia, purgeReferencedCopies, importLogs, deleteLog,
+    logData, syncMedia, purgeReferencedCopies, dedupeCovers, removeMediaFileReference, importLogs, deleteLog,
     tdtKey, setTdtKey, mapProvider, setMapProvider, amapKey, setAmapKey,
     amapJsKey, setAmapJsKey, amapJsCode, setAmapJsCode, requestBackupSync,
   } = useContext(LogContext);
@@ -505,6 +505,24 @@ export default function HomeScreen({ navigation }) {
     refreshStorageStats();
   };
 
+  // 在「数据与存储」明细中手动删除单个文件：删除磁盘文件后，如被记录引用则同步摘除断链并刷新统计
+  const handleDeleteStorageFile = async (file, owner) => {
+    const res = await deleteSandboxFileAsync(file?.relPath);
+    if (!res.ok) {
+      Alert.alert('删除失败', res.error || '未能删除该文件，请稍后再试。');
+      return;
+    }
+    if (file?.name && (owner || ['media', 'covers', 'videoPosters'].includes(file.subKey))) {
+      await removeMediaFileReference(file.name).catch(() => {});
+    }
+    if (file?.subKey === 'profile') {
+      setProfileAvatarUri(null);
+      await saveProfile({ name: profileName, avatarUri: null }).catch(() => {});
+    }
+    hapticSuccess();
+    await refreshStorageStats();
+  };
+
   // 备份导入：文件选择器直接选一份备份 JSON → 确认覆盖/合并 → 导入后引导同步相册重新关联影像
   const doImport = async (logs, mode, coversRestored, postersRestored, keys, profile) => {
     const report = await importLogs(logs, mode);
@@ -585,7 +603,11 @@ export default function HomeScreen({ navigation }) {
     }
     setCachePickerOpen(false);
     try {
-      const res = await cleanupMediaCaches(logData, {
+      let dedupeRes = { logs: logData, deduped: 0, compressed: 0, removedFiles: 0, freed: 0 };
+      if (t.covers) {
+        dedupeRes = await dedupeCovers().catch(() => dedupeRes);
+      }
+      const res = await cleanupMediaCaches(dedupeRes.logs || logData, {
         thumbs: t.thumbs, images: t.images, motion: t.motion, covers: t.covers,
       });
       // 实况提取目录刚被清空，内存里"已就绪"的地址也要一起作废，不然会指向不存在的文件
@@ -597,10 +619,20 @@ export default function HomeScreen({ navigation }) {
           else mapRef.current?.clearCache?.(true);
         } catch {}
       }
-      const mb = Math.round((res.freed / 1024 / 1024) * 10) / 10;
+      const totalFreed = (res.freed || 0) + (dedupeRes.freed || 0);
+      const mb = Math.round((totalFreed / 1000 / 1000) * 10) / 10;
       const parts = [];
       if (t.thumbs || t.images || t.motion) parts.push('缓存');
-      if (t.covers && res.covers) parts.push(`没人引用的封面小图 ${res.covers} 张`);
+      const totalCoversCleaned = (res.covers || 0) + (dedupeRes.removedFiles || 0);
+      if (t.covers && totalCoversCleaned) {
+        parts.push(`冗余/重复封面 ${totalCoversCleaned} 张`);
+      }
+      if (t.covers && res.posters) {
+        parts.push(`无引用视频封面 ${res.posters} 张`);
+      }
+      if (t.covers && dedupeRes.compressed) {
+        parts.push(`压缩旧高清封面 ${dedupeRes.compressed} 张`);
+      }
       Alert.alert('清理完成',
         `已释放 ${mb} MB 空间${parts.length ? `（${parts.join(' + ')}）` : ''}。`
         + (t.map ? '\n地图缓存（瓦片 + 高德 SDK）也清空了，下次进地图会重新下载。' : ''));
@@ -1240,7 +1272,7 @@ export default function HomeScreen({ navigation }) {
                   <Text style={styles.menuItemText}>地图服务</Text>
                   <Text style={styles.menuItemSub} numberOfLines={1}>
                     {mapProvider === 'amap'
-                      ? `高德 · ${amapJsKey ? '矢量渲染' : '栅格底图'}${amapKey ? ' · 已配检索' : ''}`
+                      ? `高德 · ${useJsApi ? '矢量渲染' : (amapJsKey && jsApiFailed ? '栅格底图（矢量回退）' : '栅格底图')}${amapKey ? ' · 已配检索' : ''}`
                       : (tdtKey ? '天地图已配置' : '天地图未配置')}
                   </Text>
                 </View>
@@ -1469,9 +1501,11 @@ export default function HomeScreen({ navigation }) {
                 ref={mapRef}
                 originWhitelist={['*']}
                 source={mapSource}
+                containerStyle={{ backgroundColor: mapPalette.map.bg }}
                 style={[styles.map, { backgroundColor: mapPalette.map.bg }]}
                 scrollEnabled={false}
                 bounces={false}
+                overScrollMode="never"
                 allowsInlineMediaPlayback
                 allowsLinkPreview={false}
                 contentInsetAdjustmentBehavior="never"
@@ -1641,7 +1675,7 @@ export default function HomeScreen({ navigation }) {
                       style={styles.sheetInput}
                       value={jsCodeDraft}
                       onChangeText={setJsCodeDraft}
-                      placeholder="选填"
+                      placeholder="配合 JS API Key 填写（官方深色样式必需）"
                       placeholderTextColor={colors.textFaint}
                       autoCapitalize="none"
                       autoCorrect={false}
@@ -1695,6 +1729,7 @@ export default function HomeScreen({ navigation }) {
           setTimeout(() => setCachePickerOpen(true), 220);
         }}
         onClearDraft={handleClearDraftFromStorage}
+        onDeleteFile={handleDeleteStorageFile}
       />
 
       {/* 清理缓存：统一冰川极简 pageSheet 风格 */}

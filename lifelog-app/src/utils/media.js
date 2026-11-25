@@ -593,7 +593,15 @@ export const cleanupMediaCaches = async (logs = [], { thumbs = true, motion = tr
       coversRemoved = r.removed;
     } catch {}
   }
-  return { freed, covers: coversRemoved };
+  let postersRemoved = 0;
+  if (covers) {
+    try {
+      const p = await pruneOrphanVideoPosters(logs);
+      freed += p.freed;
+      postersRemoved = p.removed;
+    } catch {}
+  }
+  return { freed, covers: coversRemoved, posters: postersRemoved };
 };
 
 // 刚生成不到 5 分钟的副本一律不动：可能是添加页草稿里刚挑的、或刚分享进来还没保存的
@@ -910,6 +918,210 @@ export const pruneOrphanCovers = async (logs = [], { dryRun = false } = {}) => {
 
 // 「数据目录」里的副本明细：按"为什么留着"分开报，一眼能看出是不是真删漏了。
 // 返回 { text, draft, orphan }：text 给弹窗显示，draft / orphan 给上层做按钮（比如"清空草稿"）
+// 清理 videoPosters/ 里没有被任何记录引用的视频封面图
+export const pruneOrphanVideoPosters = async (logs = []) => {
+  const posterDir = `${FileSystem.documentDirectory}videoPosters`;
+  const referenced = new Set();
+  for (const log of logs || []) {
+    for (const entry of log?.localImages || []) {
+      const uri = entry?.videoPoster?.uri;
+      if (typeof uri === 'string' && uri.startsWith('file://')) {
+        const name = mediaNameOfUri(uri);
+        if (name) referenced.add(name);
+      }
+    }
+  }
+  let names;
+  try {
+    names = await FileSystem.readDirectoryAsync(posterDir);
+  } catch {
+    return { removed: 0, freed: 0 };
+  }
+  let removed = 0;
+  let freed = 0;
+  for (const name of names) {
+    if (name.startsWith('.') || referenced.has(name)) continue;
+    const path = `${posterDir}/${name}`;
+    try {
+      const info = await FileSystem.getInfoAsync(path);
+      if (!info?.exists) continue;
+      const mtime = typeof info.modificationTime === 'number' ? info.modificationTime * 1000 : 0;
+      if (!mtime || Date.now() - mtime < ORPHAN_MIN_AGE_MS) continue;
+      const res = await deletePathAsync(path);
+      if (res.ok) {
+        removed++;
+        if (typeof info.size === 'number') freed += info.size;
+      }
+    } catch {}
+  }
+  return { removed, freed };
+};
+
+// 合并去重与压缩冗余封面（并入「清理缓存」）：
+// 1) 旧版同时保留高清 coverUrl + 小图 coverThumbUrl，或备份导入写出两份相同封面 → 统一复用单张 360px 缩略图；
+// 2) covers/ 中不同文件名但字节完全相同的重复文件 → 合并指向同一份规范文件；
+// 3) 历史遗留超大图（>120KB）压缩到 360px；
+// 4) 立即删除合并后被淘汰的冗余文件（由上层同步刷新本地自动备份，让自动备份一并瘦身）。
+export const dedupeAndOptimizeCovers = async (logs = []) => {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return { logs, changed: false, deduped: 0, compressed: 0, removedFiles: 0, freed: 0 };
+  }
+  let changed = false;
+  let deduped = 0;
+  let compressed = 0;
+  const retiredPaths = new Set();
+
+  // 第一步：同一条记录里 coverUrl 与 coverThumbUrl 指向两份不同本地文件时，统一改用较小的缩略图
+  let nextLogs = [];
+  for (const log of logs) {
+    const cu = rebaseAppFileUri(log?.coverUrl);
+    const ct = rebaseAppFileUri(log?.coverThumbUrl);
+    if (
+      typeof cu === 'string' && cu.startsWith(`${COVERS_DIR}/`) &&
+      typeof ct === 'string' && ct.startsWith(`${COVERS_DIR}/`) &&
+      cu !== ct
+    ) {
+      const [infoU, infoT] = await Promise.all([
+        FileSystem.getInfoAsync(cu).catch(() => ({ exists: false })),
+        FileSystem.getInfoAsync(ct).catch(() => ({ exists: false })),
+      ]);
+      if (infoT?.exists) {
+        if (infoU?.exists) retiredPaths.add(cu);
+        nextLogs.push({ ...log, coverUrl: ct, coverThumbUrl: ct });
+        changed = true;
+        deduped++;
+        continue;
+      }
+    }
+    nextLogs.push(log);
+  }
+
+  // 第二步：扫描所有被引用的 covers 文件，把体积 >120KB 的历史高清封面压成 360px
+  const rewroteByPath = new Map();
+  const checkedPaths = new Set();
+  for (const log of nextLogs) {
+    for (const field of ['coverUrl', 'coverThumbUrl']) {
+      const raw = rebaseAppFileUri(log?.[field]);
+      if (typeof raw !== 'string' || !raw.startsWith(`${COVERS_DIR}/`) || checkedPaths.has(raw)) continue;
+      checkedPaths.add(raw);
+      try {
+        const info = await FileSystem.getInfoAsync(raw);
+        if (!info?.exists || typeof info.size !== 'number' || info.size <= 120 * 1024) continue;
+        const dims = await new Promise((resolve) => {
+          RNImage.getSize(raw, (w, h) => resolve(w && h ? { w, h } : null), () => resolve(null));
+        });
+        if (!dims) continue;
+        const long = Math.max(dims.w, dims.h);
+        if (long <= COVER_MAX_EDGE * 1.2) continue;
+        const scale = COVER_MAX_EDGE / long;
+        const rendered = await ImageManipulator.manipulate(raw)
+          .resize({ width: Math.max(1, Math.round(dims.w * scale)), height: Math.max(1, Math.round(dims.h * scale)) })
+          .renderAsync();
+        const saved = await rendered.saveAsync({ compress: 0.82, format: SaveFormat.JPEG });
+        const dest = `${COVERS_DIR}/cover_${hashKey(`opt:${raw}`)}.jpg`;
+        await copyFileAsync(saved.uri, dest);
+        try { await FileSystem.deleteAsync(saved.uri, { idempotent: true }); } catch {}
+        const newInfo = await FileSystem.getInfoAsync(dest).catch(() => ({ exists: false }));
+        if (newInfo?.exists && (typeof newInfo.size !== 'number' || newInfo.size < info.size)) {
+          rewroteByPath.set(raw, dest);
+          if (dest !== raw) retiredPaths.add(raw);
+          compressed++;
+        } else if (dest !== raw) {
+          await deletePathAsync(dest);
+        }
+      } catch {}
+    }
+  }
+  if (rewroteByPath.size > 0) {
+    nextLogs = nextLogs.map((log) => {
+      const cu = rebaseAppFileUri(log?.coverUrl);
+      const ct = rebaseAppFileUri(log?.coverThumbUrl);
+      const nu = rewroteByPath.get(cu) || log.coverUrl;
+      const nt = rewroteByPath.get(ct) || log.coverThumbUrl;
+      if (nu === log.coverUrl && nt === log.coverThumbUrl) return log;
+      changed = true;
+      return { ...log, coverUrl: nu, coverThumbUrl: nt };
+    });
+  }
+
+  // 第三步：跨记录对不同文件名但内容完全相同的 covers 文件去重（按文件大小分组后再比对 base64）
+  const refPaths = new Set();
+  for (const log of nextLogs) {
+    for (const field of ['coverUrl', 'coverThumbUrl']) {
+      const p = rebaseAppFileUri(log?.[field]);
+      if (typeof p === 'string' && p.startsWith(`${COVERS_DIR}/`)) refPaths.add(p);
+    }
+  }
+  const bySize = new Map();
+  for (const p of refPaths) {
+    try {
+      const info = await FileSystem.getInfoAsync(p);
+      if (!info?.exists || typeof info.size !== 'number' || info.size <= 0) continue;
+      if (!bySize.has(info.size)) bySize.set(info.size, []);
+      bySize.get(info.size).push(p);
+    } catch {}
+  }
+  const canonicalByPath = new Map();
+  for (const [, group] of bySize) {
+    if (group.length < 2) continue;
+    const seenContent = new Map();
+    for (const p of group) {
+      try {
+        const b64 = await FileSystem.readAsStringAsync(p, { encoding: FileSystem.EncodingType.Base64 });
+        if (!b64) continue;
+        const hit = seenContent.get(b64);
+        if (hit) {
+          canonicalByPath.set(p, hit);
+          retiredPaths.add(p);
+          deduped++;
+        } else {
+          seenContent.set(b64, p);
+        }
+      } catch {}
+    }
+  }
+  if (canonicalByPath.size > 0) {
+    nextLogs = nextLogs.map((log) => {
+      const cu = rebaseAppFileUri(log?.coverUrl);
+      const ct = rebaseAppFileUri(log?.coverThumbUrl);
+      const nu = canonicalByPath.get(cu) || log.coverUrl;
+      const nt = canonicalByPath.get(ct) || log.coverThumbUrl;
+      if (nu === log.coverUrl && nt === log.coverThumbUrl) return log;
+      changed = true;
+      return { ...log, coverUrl: nu, coverThumbUrl: nt };
+    });
+  }
+
+  // 第四步：删掉本次明确淘汰且不再被任何记录引用的文件（不受 5 分钟保护期限制）
+  const stillReferenced = new Set();
+  for (const log of nextLogs) {
+    for (const field of ['coverUrl', 'coverThumbUrl']) {
+      const p = rebaseAppFileUri(log?.[field]);
+      if (typeof p === 'string' && p.startsWith('file://')) {
+        const name = mediaNameOfUri(p);
+        if (name) stillReferenced.add(name);
+      }
+    }
+  }
+  let removedFiles = 0;
+  let freed = 0;
+  for (const p of retiredPaths) {
+    const name = mediaNameOfUri(p);
+    if (!name || stillReferenced.has(name)) continue;
+    try {
+      const info = await FileSystem.getInfoAsync(p);
+      if (!info?.exists) continue;
+      const res = await deletePathAsync(p);
+      if (res.ok) {
+        removedFiles++;
+        if (typeof info.size === 'number') freed += info.size;
+      }
+    } catch {}
+  }
+
+  return { logs: nextLogs, changed, deduped, compressed, removedFiles, freed };
+};
+
 export const describeMediaCopiesAsync = async (logs = []) => {
   const c = await classifyMediaCopies(logs);
   const covers = await pruneOrphanCovers(logs, { dryRun: true });

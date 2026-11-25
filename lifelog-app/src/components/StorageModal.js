@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform, ActivityIndicator,
+  View, Text, Modal, ScrollView, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Alert,
 } from 'react-native';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Trash2, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import NativeIcon from './NativeIcon';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { formatStorageSize } from '../utils/storagePaths';
-import { hapticSelection } from '../utils/haptics';
+import { hapticSelection, hapticWarning } from '../utils/haptics';
 
 // 精简为 4 项清晰分类，合计严格等于系统「文稿与数据」总占用
 const buildDisplayGroups = (summary, colors) => {
@@ -144,6 +144,7 @@ export default function StorageModal({
   onClose,
   onOpenCleanCache,
   onClearDraft,
+  onDeleteFile,
 }) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -151,6 +152,7 @@ export default function StorageModal({
 
   const [selectedGroupKey, setSelectedGroupKey] = useState(null);
   const [selectedSubKey, setSelectedSubKey] = useState(null);
+  const [deletingPath, setDeletingPath] = useState(null);
 
   useEffect(() => {
     if (!visible) {
@@ -211,6 +213,44 @@ export default function StorageModal({
       return;
     }
     onClose();
+  };
+
+  const canDeleteFile = (file) => (
+    !!onDeleteFile
+    && !!file?.relPath
+    && file.subKey !== 'asyncStorage'
+    && !String(file.relPath).includes('RCTAsyncLocalStorage')
+  );
+
+  const confirmDeleteFile = (file, info) => {
+    if (!canDeleteFile(file) || deletingPath) return;
+    hapticWarning();
+    const owner = ownerMap.get(file.name);
+    const ownerWarn = owner
+      ? `\n\n该文件正被印记「${owner.title}」引用（${owner.role}），删除后该条记录会移除这张图片引用（文字与日期保留）。`
+      : '';
+    const backupWarn = file.subKey === 'internalBackup'
+      ? '\n\n删除后下次记录变动时仍会自动生成新的本地备份。'
+      : '';
+    Alert.alert(
+      '删除此文件？',
+      `${info.title}\n路径：${file.relPath}\n大小：${formatStorageSize(file.bytes)}${ownerWarn}${backupWarn}\n\n删除后无法恢复，确定继续吗？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingPath(file.relPath);
+            try {
+              await onDeleteFile(file, owner || null);
+            } finally {
+              setDeletingPath(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -354,6 +394,8 @@ export default function StorageModal({
               <View style={styles.listCard}>
                 {activeFiles.map((file, idx) => {
                   const info = describeFileEntry(file, ownerMap, copiesInfo);
+                  const deletable = canDeleteFile(file);
+                  const isDeleting = deletingPath === file.relPath;
                   return (
                     <View key={`${file.relPath || file.name}-${idx}`}>
                       <View style={styles.fileRow}>
@@ -373,6 +415,22 @@ export default function StorageModal({
                           )}
                         </View>
                         <Text style={styles.fileSize}>{formatStorageSize(file.bytes)}</Text>
+                        {deletable && (
+                          <TouchableOpacity
+                            style={styles.fileDeleteBtn}
+                            onPress={() => confirmDeleteFile(file, info)}
+                            disabled={!!deletingPath}
+                            activeOpacity={0.65}
+                            hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+                            accessibilityLabel={`删除 ${info.title}`}
+                          >
+                            {isDeleting ? (
+                              <ActivityIndicator size="small" color={colors.danger} />
+                            ) : (
+                              <NativeIcon name="trash" fallback={Trash2} size={15} color={colors.danger} />
+                            )}
+                          </TouchableOpacity>
+                        )}
                       </View>
                       {idx < activeFiles.length - 1 && <View style={styles.fileDivider} />}
                     </View>
@@ -550,6 +608,10 @@ const makeStyles = (c) => ({
   fileBadgeText: { fontSize: 11, fontWeight: '500', color: c.textSecondary },
   fileSub: { fontSize: 12, color: c.textMuted },
   fileSize: { fontSize: 14, fontWeight: '600', color: c.textSecondary, fontVariant: ['tabular-nums'] },
+  fileDeleteBtn: {
+    width: 30, height: 30, borderRadius: 8, backgroundColor: c.dangerSoft,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
   fileDivider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider, marginLeft: 16 },
 
   emptyCard: {

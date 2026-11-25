@@ -448,6 +448,37 @@ export const deletePathAsync = async (path) => {
   return { ok: false, error: error || '文件还在（删除没有生效）' };
 };
 
+// 按沙盒相对路径安全删除单个文件（供「数据与存储」明细列表使用）：
+// 禁止删除 AsyncStorage 核心数据库与路径穿越。
+export const deleteSandboxFileAsync = async (relPath) => {
+  const cleaned = String(relPath || '').trim();
+  if (!cleaned || cleaned.startsWith('/') || cleaned.includes('..') || cleaned.includes('RCTAsyncLocalStorage')) {
+    return { ok: false, error: '该文件受系统保护，不支持直接删除' };
+  }
+  if (isIOS() && native?.deleteSandboxFile) {
+    try {
+      const ok = await native.deleteSandboxFile(cleaned);
+      return ok ? { ok: true, error: null } : { ok: false, error: '删除文件失败' };
+    } catch (e) {
+      return { ok: false, error: e?.message || '删除文件失败' };
+    }
+  }
+  let fullPath = null;
+  if (cleaned.startsWith('Documents/media/')) {
+    fullPath = `${MEDIA_DIR}/${cleaned.slice('Documents/media/'.length)}`;
+  } else if (cleaned.startsWith('Documents/covers/')) {
+    fullPath = `${COVERS_DIR}/${cleaned.slice('Documents/covers/'.length)}`;
+  } else if (cleaned.startsWith('Documents/')) {
+    fullPath = `${FileSystem.documentDirectory}${cleaned.slice('Documents/'.length)}`;
+  } else if (cleaned.startsWith('cache/')) {
+    fullPath = `${FileSystem.cacheDirectory}${cleaned.slice('cache/'.length)}`;
+  }
+  if (!fullPath) {
+    return { ok: false, error: '当前版本不支持直接删除此路径，请重新构建后重试' };
+  }
+  return deletePathAsync(fullPath);
+};
+
 // 目录体积：递归统计文件数与字节数。目录不存在/读不了都返回 0，不抛错。
 // expo-file-system 的 getInfoAsync 对**不存在**的沙盒外路径会先抛权限错，
 // 所以每一层都要自己吞异常；maxEntries 兜底，避免缓存目录里几万个文件把诊断卡住

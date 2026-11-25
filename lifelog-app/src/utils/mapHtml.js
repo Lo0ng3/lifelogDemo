@@ -143,12 +143,16 @@ export function buildMapHtml({
   <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <meta name="color-scheme" content="${isDark ? 'dark' : 'light'}" />
       ${hasLeaflet ? `<style>${leafletCss}</style>` : ''}
       ${cdnFallback}
       <style>
+          html { color-scheme: ${isDark ? 'dark' : 'light'}; }
           html, body { height: 100%; width: 100%; margin: 0; padding: 0; background: ${c.bg};
               font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
-          #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: ${c.bg}; }
+          #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: ${c.bg};
+              touch-action: none; -webkit-transform: translateZ(0); transform: translateZ(0);
+              -webkit-backface-visibility: hidden; backface-visibility: hidden; }
           .leaflet-control-attribution { display: none; }
           .leaflet-container { background: ${c.bg}; outline: none; isolation: isolate; }
           /* 覆盖 Leaflet 1.9 默认的 mix-blend-mode: plus-lighter：
@@ -156,12 +160,19 @@ export function buildMapHtml({
           .leaflet-container img.leaflet-tile {
               mix-blend-mode: normal !important;
           }
-          .leaflet-tile-pane { -webkit-transform: translateZ(0); transform: translateZ(0); }
-          .amap-container { background: ${c.bg} !important; }
+          .amap-container, .amap-maps, .amap-layers { background: ${c.bg} !important; }
+          /* 高德矢量底图深色兜底：仅当官方 amap://styles/dark 未生效（如缺安全密钥、
+             iOS WKWebView 样式拉取受阻或静默回退浅色）时挂到 .amap-layers 上，
+             标点(.amap-markers)与弹窗/控件保持原色不被反转 */
+          #map.rc-amap-dark-fallback .amap-layers,
+          html.rc-amap-dark-fallback #map .amap-layers {
+              filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.85) !important;
+              -webkit-filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.85) !important;
+          }
           /* 与 Android 版完全一致的深色滤镜：挂在单张瓦片 img 上（不挂在含 3D 子层的 .leaflet-tile-pane 父容器上），
              配合 mix-blend-mode: normal、img.decode() 与双帧延后清理旧瓦片，保证深色显示准确且缩放无闪烁 */
           ${hasLeaflet && c.tileFilter && c.tileFilter !== 'none'
-            ? `.leaflet-container .leaflet-tile-pane img.leaflet-tile { filter: ${c.tileFilter}; -webkit-filter: ${c.tileFilter}; }`
+            ? `.leaflet-container .leaflet-tile-pane img.leaflet-tile { filter: ${c.tileFilter} !important; -webkit-filter: ${c.tileFilter} !important; }`
             : ''}
           /* 高德 JS API 自带版权/Logo，按规范原样保留，不做隐藏 */
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
@@ -326,6 +337,7 @@ export function buildMapHtml({
           var COLLAPSE_ICON = ${safeJson(ICON_COLLAPSE)};
           var NOTICE = ${safeJson(notice || '')};
           var DARK = ${isDark ? 'true' : 'false'};
+          var HAS_SECURITY = ${security ? 'true' : 'false'};
           var fullscreen = false;
           // 用户动过地图（拖/缩）之后不再自动全览
           var mapTouched = false;
@@ -715,14 +727,107 @@ export function buildMapHtml({
                   // （标点的点击被自己的手势拦下了，不会和地图的双击冲突）
                   doubleClickZoom: true,
                   showLabel: true,
+                  touchZoomCenter: 0,
+                  // iOS WKWebView 下 WebGL 默认 preserveDrawingBuffer=false：双指/双击缩放时
+                  // WebKit 异步合成会读到被清空的帧缓冲导致整图白闪；开启后保留上一帧消除闪烁，
+                  // 同时允许深色兜底逻辑读取画布真实亮度判断是否成功切到官方深色样式。
+                  WebGLParams: { preserveDrawingBuffer: true },
                   mapStyle: DARK ? 'amap://styles/dark' : 'amap://styles/normal',
                   features: ['bg', 'road', 'building', 'point'],
               });
-              if (DARK && typeof map.setMapStyle === 'function') {
-                  map.on('complete', function () {
-                      safe(function () { map.setMapStyle('amap://styles/dark'); });
-                  });
+              // 仅在首次 complete 时校验官方深色样式是否真正生效，并绑定 WebGL 上下文恢复：
+              // 1) 若高德因缺 securityJsCode 或 WKWebView 样式拉取失败静默退回浅色底图，
+              //    先补调一次 setMapStyle，仍为亮底则自动启用 .amap-layers 深色滤镜兜底；
+              // 2) 若官方深色样式稍后加载到位，原始像素变暗后自动撤掉兜底滤镜，避免双重反相。
+              var amapPostInitDone = false;
+              function setAmapDarkFallback(on) {
+                  var root = (typeof document !== 'undefined' && document.documentElement) || $('map');
+                  if (!root) return;
+                  if (root.classList) {
+                      if (on) root.classList.add('rc-amap-dark-fallback');
+                      else root.classList.remove('rc-amap-dark-fallback');
+                      return;
+                  }
+                  var cls = String(root.className || '').replace(/\brc-amap-dark-fallback\b/g, '').trim();
+                  root.className = on ? (cls ? cls + ' rc-amap-dark-fallback' : 'rc-amap-dark-fallback') : cls;
               }
+              function sampleAmapBrightness() {
+                  try {
+                      if (typeof document === 'undefined' || !document.querySelectorAll) return -1;
+                      var nodes = document.querySelectorAll('#map .amap-layers canvas');
+                      if (!nodes || !nodes.length) nodes = document.querySelectorAll('#map canvas');
+                      if (!nodes || !nodes.length) return -1;
+                      var probe = document.createElement('canvas');
+                      if (!probe || typeof probe.getContext !== 'function') return -1;
+                      probe.width = 16;
+                      probe.height = 16;
+                      var ctx = probe.getContext('2d');
+                      if (!ctx || typeof ctx.drawImage !== 'function' || typeof ctx.getImageData !== 'function') return -1;
+                      var bestCount = 0, bestLuma = -1;
+                      for (var n = 0; n < nodes.length; n++) {
+                          var src = nodes[n];
+                          if (!src || !src.width || !src.height) continue;
+                          ctx.clearRect(0, 0, 16, 16);
+                          ctx.drawImage(src, 0, 0, 16, 16);
+                          var data = ctx.getImageData(0, 0, 16, 16).data;
+                          var sum = 0, count = 0;
+                          for (var i = 0; i < data.length; i += 4) {
+                              if (data[i + 3] < 20) continue;
+                              sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                              count++;
+                          }
+                          if (count > bestCount) {
+                              bestCount = count;
+                              bestLuma = sum / count;
+                          }
+                      }
+                      return bestCount > 8 ? bestLuma : -1;
+                  } catch (e) { return -1; }
+              }
+              function verifyAmapDark(allowRetry) {
+                  if (!DARK) return;
+                  var luma = sampleAmapBrightness();
+                  if (luma < 0) return;
+                  if (luma <= 125) {
+                      setAmapDarkFallback(false);
+                  } else if (luma > 145) {
+                      if (allowRetry && HAS_SECURITY && typeof map.setMapStyle === 'function') {
+                          safe(function () { map.setMapStyle('amap://styles/dark'); });
+                      } else {
+                          setAmapDarkFallback(true);
+                      }
+                  }
+              }
+              map.on('complete', function () {
+                  if (amapPostInitDone) return;
+                  amapPostInitDone = true;
+                  safe(function () {
+                      if (typeof document !== 'undefined' && document.querySelector) {
+                          var cv = document.querySelector('#map canvas');
+                          if (cv && cv.addEventListener && !cv.__rcCtxBound) {
+                              cv.__rcCtxBound = true;
+                              cv.addEventListener('webglcontextlost', function (ev) {
+                                  if (ev && ev.preventDefault) ev.preventDefault();
+                              }, false);
+                              cv.addEventListener('webglcontextrestored', function () {
+                                  safe(function () { if (typeof map.resize === 'function') map.resize(); });
+                              }, false);
+                          }
+                      }
+                  });
+                  if (DARK) {
+                      if (typeof map.setMapStyle === 'function') {
+                          var cur = safe(function () { return typeof map.getMapStyle === 'function' ? map.getMapStyle() : ''; });
+                          if (!/dark/i.test(String(cur || ''))) {
+                              safe(function () { map.setMapStyle('amap://styles/dark'); });
+                          }
+                      }
+                      if (!HAS_SECURITY) setAmapDarkFallback(true);
+                      setTimeout(function () { verifyAmapDark(true); }, 550);
+                      setTimeout(function () { verifyAmapDark(false); }, 1650);
+                      setTimeout(function () { verifyAmapDark(false); }, 3600);
+                  }
+              });
               function group() {
                   var items = [];
                   return {

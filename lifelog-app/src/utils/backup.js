@@ -236,8 +236,10 @@ export const importBackup = async () => {
     if (!logs) return { ok: false, invalid: true };
 
     // 封面文件还原：备份里的 base64 写回本地 covers 目录，并把记录的 coverUrl / coverThumbUrl
-    // 指向新文件。缺 covers 字段（老备份）或对应文件缺失的记录保持原样，交给回填机制兜底
+    // 指向新文件。同一原文件名只落盘一次（避免 coverUrl 与 coverThumbUrl 指向同图时写两份副本）。
+    // 缺 covers 字段（老备份）或对应文件缺失的记录保持原样，交给回填机制兜底
     const covers = payload?.covers && typeof payload.covers === 'object' ? payload.covers : {};
+    const coverDestByBase = new Map();
     let coversRestored = 0;
     const restoredLogs = [];
     for (const log of logs) {
@@ -249,12 +251,16 @@ export const importBackup = async () => {
         const b64 = base ? covers[base] : null;
         if (typeof b64 !== 'string' || b64.length === 0) continue;
         try {
-          await ensureDirAsync(COVERS_DIR);
-          const ext = (base.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
-          const dest = `${COVERS_DIR}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
-          await writeFileBase64Async(dest, b64);
+          let dest = coverDestByBase.get(base);
+          if (!dest) {
+            await ensureDirAsync(COVERS_DIR);
+            const ext = (base.match(/\.(jpe?g|png|webp)$/i) || [])[1] || 'jpg';
+            dest = `${COVERS_DIR}/cover_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+            await writeFileBase64Async(dest, b64);
+            coverDestByBase.set(base, dest);
+            coversRestored++;
+          }
           restoredLog[field] = dest;
-          coversRestored++;
         } catch {}
       }
       restoredLogs.push(restoredLog);

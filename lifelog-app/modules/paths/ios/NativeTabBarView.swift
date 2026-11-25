@@ -27,6 +27,15 @@ public final class NativeTabBarView: ExpoView {
     segmentedControl.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     segmentedControl.addTarget(self, action: #selector(handleValueChanged(_:)), for: .valueChanged)
     addSubview(segmentedControl)
+    applySelectionTint()
+  }
+
+  private func applySelectionTint() {
+    segmentedControl.overrideUserInterfaceStyle = isDarkMode ? .dark : .light
+    // 避开 UISegmentedControl 默认的纯白选中块，改用与 iOS 26 系统 UITabBar 一致的轻透玻璃选中态
+    segmentedControl.selectedSegmentTintColor = isDarkMode
+      ? UIColor(white: 1.0, alpha: 0.16)
+      : UIColor(white: 0.0, alpha: 0.08)
   }
 
   public override func layoutSubviews() {
@@ -73,7 +82,7 @@ public final class NativeTabBarView: ExpoView {
       return
     }
     isDarkMode = isDark
-    segmentedControl.overrideUserInterfaceStyle = isDark ? .dark : .light
+    applySelectionTint()
     refreshSegmentImages()
   }
 

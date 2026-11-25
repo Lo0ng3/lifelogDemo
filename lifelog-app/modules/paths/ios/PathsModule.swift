@@ -89,6 +89,29 @@ public class PathsModule: Module {
       }
     }
 
+    // 按沙盒相对路径（如 "Documents/xxx"、"Library/Caches/xxx"、"tmp/xxx"）安全删除单个文件：
+    // 严格限定在 NSHomeDirectory() 内，禁止路径穿越与删除 AsyncStorage 核心数据库。
+    AsyncFunction("deleteSandboxFile") { (relPath: String) -> Bool in
+      let cleaned = relPath.trimmingCharacters(in: .whitespacesAndNewlines)
+      if cleaned.isEmpty || cleaned.hasPrefix("/") || cleaned.contains("..") || cleaned.contains("RCTAsyncLocalStorage") {
+        return false
+      }
+      let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+      let homePrefix = homeURL.path.hasSuffix("/") ? homeURL.path : homeURL.path + "/"
+      let target = homeURL.appendingPathComponent(cleaned).standardizedFileURL
+      guard target.path.hasPrefix(homePrefix) else { return false }
+      let fm = FileManager.default
+      if !fm.fileExists(atPath: target.path) {
+        return true
+      }
+      do {
+        try fm.removeItem(at: target)
+        return !fm.fileExists(atPath: target.path)
+      } catch {
+        return false
+      }
+    }
+
     AsyncFunction("getFileSize") { (uri: String) -> Double? in
       let target = self.toFileURL(uri)
       guard let attrs = try? FileManager.default.attributesOfItem(atPath: target.path),
