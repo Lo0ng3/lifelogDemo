@@ -1654,9 +1654,8 @@ export default function HomeScreen({ navigation }) {
                   }}
                   style={[styles.chip, on && styles.chipActive]}
                 >
-                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.accent : colors.textSecondary} />}
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={12.5} color={on ? '#FFF' : colors.textSecondary} />}
                   <Text style={[styles.chipText, on && styles.chipTextActive]}>{sub.label}</Text>
-                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.accent} weight="bold" />}
                 </BottomSheetTouchableOpacity>
               );
             })}
@@ -1674,9 +1673,8 @@ export default function HomeScreen({ navigation }) {
                   }}
                   style={[styles.chip, on && styles.chipActiveRed]}
                 >
-                  <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.danger : colors.textSecondary} />
+                  <NativeIcon name={ic.sf} fallback={ic.fallback} size={12.5} color={on ? '#FFF' : colors.textSecondary} />
                   <Text style={[styles.chipText, on && styles.chipTextActiveRed]}>地点</Text>
-                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.danger} weight="bold" />}
                 </BottomSheetTouchableOpacity>
               );
             })()}
@@ -1695,9 +1693,8 @@ export default function HomeScreen({ navigation }) {
                   }}
                   style={[styles.chip, on && styles.chipActivePurple]}
                 >
-                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.purple : colors.textSecondary} />}
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={12.5} color={on ? '#FFF' : colors.textSecondary} />}
                   <Text style={[styles.chipText, on && styles.chipTextActivePurple]}>{sub.label}</Text>
-                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.purple} weight="bold" />}
                 </BottomSheetTouchableOpacity>
               );
             })}
@@ -1716,9 +1713,8 @@ export default function HomeScreen({ navigation }) {
                   }}
                   style={[styles.chip, on && styles.chipActiveGreen]}
                 >
-                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.groupNote : colors.textSecondary} />}
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={12.5} color={on ? '#FFF' : colors.textSecondary} />}
                   <Text style={[styles.chipText, on && styles.chipTextActiveGreen]}>{sub.label}</Text>
-                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.groupNote} weight="bold" />}
                 </BottomSheetTouchableOpacity>
               );
             })}
@@ -2115,24 +2111,23 @@ const makeStyles = (c) => ({
   sheetTitle: { fontSize: 17, fontWeight: '600', color: c.text },
   sheetBtnTextGray: { fontSize: 16, color: c.textSecondary },
   sheetBtnTextBlue: { fontSize: 16, fontWeight: '600', color: c.accent },
-  sheetScroll: { flex: 1, paddingHorizontal: 20, paddingTop: 10 },
+  sheetScroll: { flex: 1, paddingHorizontal: 16, paddingTop: 10 },
   categoryTitle: { fontSize: 18, fontWeight: 'bold', color: c.text, marginTop: 12, marginBottom: 4 },
-  sectionTitle: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 12, marginTop: 8 },
+  sectionTitle: { fontSize: 13, fontWeight: '500', color: c.textMuted, marginBottom: 10, marginTop: 8 },
   horizontalScroll: { flexDirection: 'row', marginBottom: 20 },
   monthSection: { marginBottom: 20 },
   divider: { height: 1, backgroundColor: c.border, marginVertical: 16 },
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
-  chip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, backgroundColor: c.bgSunken, paddingHorizontal: 14, borderRadius: 18, borderWidth: 1, borderColor: c.borderSoft, marginRight: 10, marginBottom: 10 },
-  chipText: { fontSize: 14, color: c.textSecondary },
-  checkIcon: { marginRight: 4, marginTop: 1 }, 
-  chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },
-  chipTextActive: { color: c.accent, fontWeight: '500' },
-  chipActiveRed: { backgroundColor: c.dangerSoft, borderColor: c.dangerSoftBorder },
-  chipTextActiveRed: { color: c.danger, fontWeight: '500' },
-  chipActivePurple: { backgroundColor: c.purpleSoft, borderColor: c.purpleSoftBorder },
-  chipTextActivePurple: { color: c.purple, fontWeight: '500' },
-  chipActiveGreen: { backgroundColor: c.groupNoteSoft, borderColor: c.groupNoteSoft },
-  chipTextActiveGreen: { color: c.groupNote, fontWeight: '500' },
+  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 18 },
+  chip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, height: 34, backgroundColor: c.bgSunken, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: c.borderSoft },
+  chipText: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
+  chipActive: { backgroundColor: c.accent, borderColor: c.accent },
+  chipTextActive: { color: '#FFF', fontWeight: '600' },
+  chipActiveRed: { backgroundColor: c.danger, borderColor: c.danger },
+  chipTextActiveRed: { color: '#FFF', fontWeight: '600' },
+  chipActivePurple: { backgroundColor: c.purple, borderColor: c.purple },
+  chipTextActivePurple: { color: '#FFF', fontWeight: '600' },
+  chipActiveGreen: { backgroundColor: c.groupNote, borderColor: c.groupNote },
+  chipTextActiveGreen: { color: '#FFF', fontWeight: '600' },
   // 统一冰川极简 pageSheet 弹层样式（地图服务 / 清理缓存 / 与数据与存储一致）
   sheetPage: { flex: 1, backgroundColor: c.bg },
   sheetPageHeader: {
