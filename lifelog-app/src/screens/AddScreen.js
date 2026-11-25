@@ -1096,7 +1096,7 @@ export default function AddScreen({ navigation, route }) {
             <NativeIcon name="xmark" fallback={X} size={17} color={colors.textSecondary} weight="semibold" />
           </TouchableOpacity>
         </View>
-        <Text style={styles.headerTitle}>{editId ? '编辑印记' : '新印记'}</Text>
+        <Text style={styles.headerTitle} pointerEvents="none">{editId ? '编辑印记' : '新印记'}</Text>
         <TouchableOpacity
           style={[styles.headerSavePill, Platform.OS === 'ios' && styles.headerSavePillGlass, saving && styles.headerSavePillDisabled]}
           delayPressIn={0}
@@ -1781,7 +1781,10 @@ const makeStyles = (c) => ({
     shadowOpacity: Platform.OS === 'ios' ? 0.06 : 0.08, shadowRadius: 6, elevation: 2,
   },
   headerBackBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: c.textStrong },
+  headerTitle: {
+    position: 'absolute', left: 84, right: 84, textAlign: 'center',
+    fontSize: 17, fontWeight: '600', color: c.textStrong,
+  },
   headerSavePill: {
     height: 36, minWidth: 64, paddingHorizontal: 16, borderRadius: 18,
     backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center',

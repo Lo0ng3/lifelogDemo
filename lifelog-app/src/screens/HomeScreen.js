@@ -9,8 +9,9 @@ import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen,
-  ChevronLeft, ChevronRight, Pencil, Plane, Train, Bus, Ship, MapPin, Film, Tv, Sparkles, Gamepad2, BookOpen, BookText, FileText
+  ChevronLeft, ChevronRight, Pencil, Plane, Train, Bus, Ship, MapPin, Film, Tv, Sparkles, Gamepad2, BookOpen, BookText, FileText, Maximize2
 } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { WebView } from 'react-native-webview';
@@ -36,6 +37,7 @@ import StorageModal from '../components/StorageModal';
 import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
+import NativeMapFilterMenu, { hasNativeMapFilterMenu } from '../components/NativeMapFilterMenu';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
@@ -666,8 +668,47 @@ export default function HomeScreen({ navigation }) {
   const [viewMode, setViewMode] = useState('list'); 
   const [pillMode, setPillMode] = useState('list');   // 药丸的选中态，跟手一点
   const pendingView = useRef(null);                   // 最近一次点击的目标视图
-  const [mapMounted, setMapMounted] = useState(false); // 首次进地图才挂 WebView，之后一直保活
+  const [mapMounted, setMapMounted] = useState(false); // 首次进地图才挂视图，之后一直保活
   const mapRef = useRef(null);
+  const [mapFitSeq, setMapFitSeq] = useState(0);
+  const [mapFilter, setMapFilter] = useState({
+    flight: true, train: true, bus: true, ship: true, location: true,
+  });
+
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem('@rc_apple_map_tools_v1')
+      .then((raw) => {
+        if (!alive || !raw) return;
+        const p = JSON.parse(raw);
+        if (!p || typeof p !== 'object') return;
+        setMapFilter((prev) => ({
+          flight: typeof p.flight === 'boolean' ? p.flight : prev.flight,
+          train: typeof p.train === 'boolean' ? p.train : prev.train,
+          bus: typeof p.bus === 'boolean' ? p.bus : prev.bus,
+          ship: typeof p.ship === 'boolean' ? p.ship : prev.ship,
+          location: typeof p.location === 'boolean'
+            ? p.location
+            : (typeof p.loc === 'boolean' ? p.loc : prev.location),
+        }));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const mapFilterKeys = useMemo(
+    () => Object.keys(mapFilter).filter((k) => mapFilter[k]),
+    [mapFilter]
+  );
+
+  const toggleMapFilterKey = useCallback((key) => {
+    hapticSelection();
+    setMapFilter((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      AsyncStorage.setItem('@rc_apple_map_tools_v1', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (viewMode !== 'map') return undefined;
@@ -1415,7 +1456,40 @@ export default function HomeScreen({ navigation }) {
           <View style={{ width: 36 }} /> 
         </View>
 
-        <Text style={styles.largeTitle}>印记</Text>
+        <View style={styles.largeTitleRow}>
+          <Text style={styles.largeTitle}>印记</Text>
+          {viewMode === 'map' && useAppleMap && (
+            <View style={styles.mapActionRow}>
+              <TouchableOpacity
+                style={styles.mapActionBtn}
+                activeOpacity={0.78}
+                delayPressIn={0}
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                onPress={() => {
+                  hapticSelection();
+                  setMapFitSeq((n) => n + 1);
+                }}
+              >
+                <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />
+                <NativeIcon name="viewfinder" fallback={Maximize2} size={16} color={colors.textSecondary} weight="medium" />
+              </TouchableOpacity>
+              {hasNativeMapFilterMenu && (
+                <View style={styles.mapActionBtn}>
+                  <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />
+                  <NativeMapFilterMenu
+                    selectedKeys={mapFilterKeys}
+                    isDark={isDark}
+                    iconColor={colors.textSecondary}
+                    accentColor={colors.accent}
+                    onToggle={toggleMapFilterKey}
+                    style={StyleSheet.absoluteFill}
+                  />
+                  {mapFilterKeys.length < 5 && <View style={styles.filterDot} pointerEvents="none" />}
+                </View>
+              )}
+            </View>
+          )}
+        </View>
 
         {viewMode === 'list' && (
           <View style={styles.filterBar}>
@@ -1562,11 +1636,8 @@ export default function HomeScreen({ navigation }) {
                   segs={mapData.segs}
                   isDark={mapIsDark}
                   mapColors={mapPalette.map}
-                  fullscreen={mapFullscreen}
-                  onToggleFullscreen={(on) => {
-                    if (on) enterMapFullscreen();
-                    else exitMapFullscreen();
-                  }}
+                  mapFilter={mapFilter}
+                  fitSignal={mapFitSeq}
                   onOpenDetail={(id) => {
                     const item = logData.find((l) => String(l.id) === String(id));
                     openDetailFromMap(item);
@@ -1958,7 +2029,17 @@ const makeStyles = (c) => ({
     width: 36, height: 36, borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
-  largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
+  largeTitleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, marginTop: 10, marginBottom: 10,
+  },
+  largeTitle: { fontSize: 34, fontWeight: 'bold', color: c.textStrong },
+  mapActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mapActionBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center',
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
+  },
   segmentedControl: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: 9, padding: 2, width: 204 },
   nativeSegmented: { width: 210, height: 34 },
   // 药丸不要挂 elevation/阴影：Android 上移动的阴影每帧都要重画，高亮滑动会一顿一顿的
