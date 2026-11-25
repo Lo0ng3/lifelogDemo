@@ -141,10 +141,41 @@ export const formatStorageSize = (bytes) => {
   return `${(b / (1000 * 1000 * 1000)).toFixed(2)} GB`;
 };
 
+const SUB_BUCKET_NOTES = {
+  media: '分享或导入、尚未关联相册原片的本地副本',
+  covers: '列表与详情使用的封面小图',
+  videoPosters: '视频静态封面图',
+  videoThumbs: '视频列表预览帧，清理后可按需重建',
+  internalBackup: '应用自动生成的本地 JSON 备份',
+  profile: '个人头像与资料文件',
+  asyncStorage: '所有文字印记、标签与地图配置',
+  appSupport: '应用运行支持文件',
+  documentsOther: '文档目录下的其他文件',
+  imageDiskCache: '列表与看图磁盘缓存，清理后自动重建',
+  thumbs: '相册选图器与视频缩略图缓存',
+  imageManipulator: '图片裁剪与压缩临时产物',
+  webKit: '地图瓦片、高德 SDK 与网页离线缓存',
+  httpCache: '网络请求与地图瓦片 HTTP 缓存',
+  tmp: '系统临时目录（实况/视频导出临时文件）',
+  motionVideos: '实况照片动效临时提取文件',
+  cacheBackups: '导出备份时生成的临时 JSON 文件',
+  videoThumbnailsCache: '视频帧提取临时缓存',
+  preferences: '系统与用户偏好设置文件',
+  splashBoard: 'iOS 系统启动屏缓存快照',
+  savedState: '应用界面状态恢复数据',
+};
+
+const groupOfBucket = (bucket) => {
+  if (bucket === 'records' || bucket === 'covers' || bucket === 'media') return 'app';
+  if (bucket === 'imageCache') return 'imageCache';
+  if (bucket === 'mapCache') return 'mapCache';
+  return 'other';
+};
+
 // 结构化全沙盒体积统计（供「存储与数据」弹窗使用）：
 // - iOS：调用原生 Paths.getStorageBreakdown() 扫描整个 NSHomeDirectory()，按实际磁盘占用块统计，
-//   所有分类相加严格等于系统「文稿与数据」总大小；
-// - Android：按目录统计并汇总。
+//   所有分类相加严格等于系统「文稿与数据」总大小；同时返回二级子项与较大文件列表供点开查看；
+// - Android：按目录统计并汇总，同样输出二级子项与较大文件列表。
 export const getStorageSummaryAsync = async () => {
   if (isIOS() && native?.getStorageBreakdown) {
     try {
@@ -163,44 +194,138 @@ export const getStorageSummaryAsync = async () => {
         { key: 'temp', label: '临时文件', note: '实况/导出产生的临时文件，可随时清理', ...pick('temp') },
         { key: 'system', label: '系统与其它', note: '偏好设置、启动快照等系统开销', ...pick('system') },
       ];
+      const rawSubs = raw?.subBuckets && typeof raw.subBuckets === 'object' ? raw.subBuckets : null;
+      const subItems = rawSubs
+        ? Object.entries(rawSubs)
+            .map(([key, v]) => ({
+              key,
+              bucket: v?.bucket || 'system',
+              group: v?.group || groupOfBucket(v?.bucket),
+              label: v?.label || key,
+              note: SUB_BUCKET_NOTES[key] || '',
+              bytes: Number(v?.bytes) || 0,
+              files: Number(v?.files) || 0,
+            }))
+            .filter((s) => s.bytes > 0 || s.files > 0)
+            .sort((a, b2) => b2.bytes - a.bytes)
+        : items
+            .filter((i) => i.bytes > 0 || i.files > 0)
+            .map((i) => ({
+              key: i.key,
+              bucket: i.key,
+              group: groupOfBucket(i.key),
+              label: i.label,
+              note: i.note,
+              bytes: i.bytes,
+              files: i.files,
+            }));
+
+      const rawTop = raw?.topFiles && typeof raw.topFiles === 'object' ? raw.topFiles : {};
+      const topFiles = { app: [], imageCache: [], mapCache: [], other: [] };
+      for (const gk of Object.keys(topFiles)) {
+        const list = Array.isArray(rawTop[gk]) ? rawTop[gk] : [];
+        topFiles[gk] = list.map((f) => ({
+          name: String(f?.name || ''),
+          relPath: String(f?.relPath || ''),
+          bytes: Number(f?.bytes) || 0,
+          bucket: String(f?.bucket || ''),
+          subKey: String(f?.subKey || ''),
+          subLabel: String(f?.subLabel || ''),
+        }));
+      }
+
       return {
         exact: true,
         totalBytes: Number(raw?.totalBytes) || items.reduce((s, i) => s + i.bytes, 0),
         totalFiles: Number(raw?.totalFiles) || items.reduce((s, i) => s + i.files, 0),
         locationNote: '应用文档目录（可在「文件」App → 我的 iPhone → 印记查看）',
         items,
+        subItems,
+        topFiles,
       };
     } catch {}
   }
 
-  // Android / 兜底路径：按主要目录汇总
+  // Android / 兜底路径：按主要目录汇总，同时收集二级子项与较大文件
   const [stMedia, stCovers, stThumbs, stPosters, stMotion, stBackup, stProfile] = await Promise.all([
-    dirStatsAsync(MEDIA_DIR, 2),
-    dirStatsAsync(COVERS_DIR, 2),
-    dirStatsAsync(`${FileSystem.documentDirectory}videoThumbs`, 2),
-    dirStatsAsync(`${FileSystem.documentDirectory}videoPosters`, 2),
-    dirStatsAsync(`${FileSystem.documentDirectory}motionVideos`, 2),
-    dirStatsAsync(`${FileSystem.documentDirectory}internal-backup`, 2),
-    dirStatsAsync(`${FileSystem.documentDirectory}profile`, 2),
+    dirStatsAsync(MEDIA_DIR, 2, 'Documents/media'),
+    dirStatsAsync(COVERS_DIR, 2, 'Documents/covers'),
+    dirStatsAsync(`${FileSystem.documentDirectory}videoThumbs`, 2, 'Documents/videoThumbs'),
+    dirStatsAsync(`${FileSystem.documentDirectory}videoPosters`, 2, 'Documents/videoPosters'),
+    dirStatsAsync(`${FileSystem.documentDirectory}motionVideos`, 2, 'Documents/motionVideos'),
+    dirStatsAsync(`${FileSystem.documentDirectory}internal-backup`, 2, 'Documents/internal-backup'),
+    dirStatsAsync(`${FileSystem.documentDirectory}profile`, 2, 'Documents/profile'),
   ]);
-  let cacheBytes = 0;
-  let cacheFiles = 0;
+
+  const subItems = [];
+  const topFiles = { app: [], imageCache: [], mapCache: [], other: [] };
+  const addSub = (key, bucket, label, st) => {
+    if (!st || (st.bytes <= 0 && st.files <= 0)) return;
+    const group = groupOfBucket(bucket);
+    subItems.push({
+      key,
+      bucket,
+      group,
+      label,
+      note: SUB_BUCKET_NOTES[key] || '',
+      bytes: st.bytes,
+      files: st.files,
+    });
+    if (Array.isArray(st.topFiles)) {
+      for (const f of st.topFiles) {
+        topFiles[group].push({ ...f, bucket, subKey: key, subLabel: label });
+      }
+    }
+  };
+
+  addSub('media', 'media', '本地媒体副本', stMedia);
+  addSub('covers', 'covers', '封面小图', stCovers);
+  addSub('videoPosters', 'covers', '视频封面图', stPosters);
+  addSub('videoThumbs', 'covers', '视频预览帧', stThumbs);
+  addSub('internalBackup', 'records', '本地自动备份', stBackup);
+  addSub('profile', 'records', '个人头像与资料', stProfile);
+  addSub('motionVideos', 'temp', '实况动效临时文件', stMotion);
+
+  let imageCacheBytes = 0;
+  let imageCacheFiles = 0;
+  let mapCacheBytes = 0;
+  let mapCacheFiles = 0;
+  let extraTempBytes = 0;
+  let extraTempFiles = 0;
   try {
     const cacheRoot = FileSystem.cacheDirectory;
     const names = await FileSystem.readDirectoryAsync(cacheRoot);
     for (const name of names) {
-      const st = await dirStatsAsync(`${cacheRoot}${name}`, 3);
-      cacheBytes += st.bytes;
-      cacheFiles += st.files;
+      const st = await dirStatsAsync(`${cacheRoot}${name}`, 3, `cache/${name}`);
+      if (st.bytes <= 0 && st.files <= 0) continue;
+      if (name === 'WebView' || name === 'WebKit') {
+        mapCacheBytes += st.bytes;
+        mapCacheFiles += st.files;
+        addSub('webKit', 'mapCache', '地图与网页缓存', st);
+      } else if (name === 'backups' || name === 'VideoThumbnails') {
+        extraTempBytes += st.bytes;
+        extraTempFiles += st.files;
+        addSub(name === 'backups' ? 'cacheBackups' : 'videoThumbnailsCache', 'temp', CACHE_DIR_LABELS[name] || name, st);
+      } else {
+        imageCacheBytes += st.bytes;
+        imageCacheFiles += st.files;
+        addSub(`cache:${name}`, 'imageCache', CACHE_DIR_LABELS[name] || `缓存 (${name})`, st);
+      }
     }
   } catch {}
+
+  subItems.sort((a, b2) => b2.bytes - a.bytes);
+  for (const gk of Object.keys(topFiles)) {
+    topFiles[gk] = topFiles[gk].sort((a, b2) => b2.bytes - a.bytes).slice(0, 20);
+  }
 
   const items = [
     { key: 'records', label: '记录、备份与头像', note: '内部备份与个人头像', bytes: stBackup.bytes + stProfile.bytes, files: stBackup.files + stProfile.files },
     { key: 'covers', label: '封面与视频预览帧', note: '封面小图与视频封面帧', bytes: stCovers.bytes + stThumbs.bytes + stPosters.bytes, files: stCovers.files + stThumbs.files + stPosters.files },
     { key: 'media', label: '本地媒体副本', note: '未重链回相册的本地副本', bytes: stMedia.bytes, files: stMedia.files },
-    { key: 'imageCache', label: '图片与地图缓存', note: '系统缓存目录，清理后可自动重建', bytes: cacheBytes, files: cacheFiles },
-    { key: 'temp', label: '临时文件', note: '实况动效临时文件', bytes: stMotion.bytes, files: stMotion.files },
+    { key: 'imageCache', label: '图片与缩略图缓存', note: '图片缓存目录，清理后可自动重建', bytes: imageCacheBytes, files: imageCacheFiles },
+    { key: 'mapCache', label: '地图与网页缓存', note: 'WebView 瓦片与网络缓存', bytes: mapCacheBytes, files: mapCacheFiles },
+    { key: 'temp', label: '临时文件', note: '实况动效与导出临时文件', bytes: stMotion.bytes + extraTempBytes, files: stMotion.files + extraTempFiles },
   ];
   const totalBytes = items.reduce((s, i) => s + i.bytes, 0);
   const totalFiles = items.reduce((s, i) => s + i.files, 0);
@@ -210,6 +335,8 @@ export const getStorageSummaryAsync = async () => {
     totalFiles,
     locationNote: IS_EXTERNAL_STORAGE ? '应用外部目录（Android/data，文件管理器可见）' : '应用内部存储',
     items,
+    subItems,
+    topFiles,
   };
 };
 
@@ -325,11 +452,12 @@ export const deletePathAsync = async (path) => {
 // expo-file-system 的 getInfoAsync 对**不存在**的沙盒外路径会先抛权限错，
 // 所以每一层都要自己吞异常；maxEntries 兜底，避免缓存目录里几万个文件把诊断卡住
 const MAX_SCAN_ENTRIES = 4000;
-const dirStatsAsync = async (dir, depth = 3) => {
+const dirStatsAsync = async (dir, depth = 3, relPrefix = '') => {
   let files = 0;
   let bytes = 0;
   let scanned = 0;
-  const walk = async (d, left) => {
+  const topFiles = relPrefix ? [] : null;
+  const walk = async (d, left, relBase) => {
     if (scanned >= MAX_SCAN_ENTRIES) return;
     let names;
     try {
@@ -341,20 +469,31 @@ const dirStatsAsync = async (dir, depth = 3) => {
       if (scanned >= MAX_SCAN_ENTRIES) return;
       scanned++;
       const p = `${d}/${n}`;
+      const rel = relBase ? `${relBase}/${n}` : n;
       try {
         const info = await FileSystem.getInfoAsync(p);
         if (!info.exists) continue;
         if (info.isDirectory) {
-          if (left > 0) await walk(p, left - 1);
+          if (left > 0) await walk(p, left - 1, rel);
           continue;
         }
         files++;
-        if (typeof info.size === 'number') bytes += info.size;
+        if (typeof info.size === 'number') {
+          bytes += info.size;
+          if (topFiles && info.size > 0) {
+            topFiles.push({ name: n, relPath: rel, bytes: info.size });
+            if (topFiles.length > 60) {
+              topFiles.sort((a, b) => b.bytes - a.bytes);
+              topFiles.length = 20;
+            }
+          }
+        }
       } catch {}
     }
   };
-  await walk(dir, depth);
-  return { files, bytes };
+  await walk(dir, depth, relPrefix);
+  if (topFiles) topFiles.sort((a, b) => b.bytes - a.bytes);
+  return topFiles ? { files, bytes, topFiles: topFiles.slice(0, 20) } : { files, bytes };
 };
 
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;

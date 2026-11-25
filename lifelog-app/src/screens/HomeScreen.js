@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Dimensions, Animated, TextInput, Alert, ActionSheetIOS, Switch, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
+  Dimensions, TextInput, Alert, ActionSheetIOS, Switch, BackHandler, ToastAndroid, Platform, Modal, ActivityIndicator,
   useWindowDimensions, Keyboard, Linking
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -13,8 +13,9 @@ import {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { WebView } from 'react-native-webview';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
-  useAnimatedStyle, useSharedValue, withTiming, Easing, FadeIn,
+  useAnimatedStyle, useSharedValue, withSpring, withTiming, Easing, FadeIn, runOnJS,
 } from 'react-native-reanimated';
 
 import {
@@ -689,8 +690,18 @@ export default function HomeScreen({ navigation }) {
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [mapIsDark, setMapIsDark] = useState(isDark);
-  const sidebarAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
-  const overlayAnim = useRef(new Animated.Value(0)).current;
+  const sidebarWidth = Math.max(1, winW || SIDEBAR_WIDTH);
+  const sidebarWidthSV = useSharedValue(sidebarWidth);
+  const sidebarX = useSharedValue(-sidebarWidth);
+  const sidebarOverlayOpacity = useSharedValue(0);
+  const sidebarLeftEdge = useSharedValue(false);
+  const sidebarDragging = useSharedValue(false);
+  const sidebarDismissed = useSharedValue(false);
+
+  useEffect(() => {
+    sidebarWidthSV.value = sidebarWidth;
+    if (!isSidebarOpen) sidebarX.value = -sidebarWidth;
+  }, [sidebarWidth, isSidebarOpen, sidebarWidthSV, sidebarX]);
 
   // 主题切换时不要立刻重建 WebView 里的地图：地图在背景层保活，
   // 每次切深浅都会重载瓦片和渲染器，关闭「我的」后再同步地图主题更稳。
@@ -702,23 +713,109 @@ export default function HomeScreen({ navigation }) {
     [mapIsDark]
   );
 
+  const SIDEBAR_SPRING = useMemo(() => ({ stiffness: 230, damping: 24, mass: 0.7 }), []);
+
+  const finishSidebarClose = useCallback(() => {
+    setIsSidebarOpen(false);
+    navigation.setOptions({ tabBarStyle: tabBarStyleFor(colors) });
+  }, [navigation, colors]);
+
   const toggleSidebar = useCallback((open) => {
     setIsSidebarOpen(open);
     navigation.setOptions({ tabBarStyle: open ? HIDDEN_TAB_BAR : tabBarStyleFor(colors) });
     // 打开侧边栏先收键盘：列表搜索框还聚焦着的时候，键盘会盖住侧边栏下半部分，
     // 那几项（导出备份 / 导入备份 / 清理缓存 / 说明…）点了就像没反应，得点好几次
     if (open) Keyboard.dismiss();
-    Animated.spring(sidebarAnim,
-      {
-        toValue: open ? 0 : -SIDEBAR_WIDTH,
-        useNativeDriver: true,
-        stiffness: 230,  // 更硬：弹出更快，点了马上有反馈
-        damping: 24,     // 阻尼跟着加，避免快到末端时抖
-        mass: 0.7        // 更轻：整体更跟手
-      }
-    ).start();
-    Animated.timing(overlayAnim, { toValue: open ? 1 : 0, duration: 150, useNativeDriver: true }).start();
-  }, [sidebarAnim, overlayAnim, navigation, colors]);
+    if (open && sidebarX.value > 0) {
+      sidebarX.value = -sidebarWidthSV.value;
+    }
+    sidebarX.value = withSpring(open ? 0 : -sidebarWidthSV.value, SIDEBAR_SPRING);
+    sidebarOverlayOpacity.value = withTiming(open ? 1 : 0, { duration: 150 });
+  }, [sidebarX, sidebarWidthSV, sidebarOverlayOpacity, SIDEBAR_SPRING, navigation, colors]);
+
+  // 「我的」全屏页跟手滑动返回（UI 线程 120fps）：
+  // - 任意位置向左滑：顺着「我的」从左侧滑入的方向往左推回关闭；
+  // - 左边缘向右滑：同时兼容 iOS 原生边缘右滑返回习惯。
+  const sidebarPanGesture = useMemo(() => (
+    Gesture.Pan()
+      .enabled(isSidebarOpen)
+      .activeOffsetX([-14, 14])
+      .failOffsetY([-14, 14])
+      .onBegin((e) => {
+        'worklet';
+        sidebarLeftEdge.value = e.x <= 40;
+        sidebarDragging.value = false;
+        sidebarDismissed.value = false;
+      })
+      .onStart(() => {
+        'worklet';
+        sidebarDragging.value = true;
+      })
+      .onUpdate((e) => {
+        'worklet';
+        const w = sidebarWidthSV.value;
+        if (e.translationX < 0) {
+          const tx = Math.max(-w, Math.min(0, e.translationX));
+          sidebarX.value = tx;
+          sidebarOverlayOpacity.value = Math.max(0, 1 + tx / w);
+        } else if (sidebarLeftEdge.value && e.translationX > 0) {
+          const tx = Math.min(w, Math.max(0, e.translationX));
+          sidebarX.value = tx;
+          sidebarOverlayOpacity.value = Math.max(0, 1 - tx / w);
+        } else {
+          sidebarX.value = 0;
+          sidebarOverlayOpacity.value = 1;
+        }
+      })
+      .onEnd((e) => {
+        'worklet';
+        const w = sidebarWidthSV.value;
+        const curX = sidebarX.value;
+        if (curX < 0 && (curX < -w * 0.22 || e.velocityX < -420)) {
+          sidebarDismissed.value = true;
+          sidebarX.value = withSpring(-w, { stiffness: 260, damping: 26, mass: 0.65, velocity: e.velocityX });
+          sidebarOverlayOpacity.value = withTiming(0, { duration: 150 });
+          runOnJS(finishSidebarClose)();
+          return;
+        }
+        if (curX > 0 && (curX > w * 0.22 || e.velocityX > 420)) {
+          sidebarDismissed.value = true;
+          sidebarX.value = withTiming(w, { duration: 180, easing: Easing.out(Easing.cubic) }, (finished) => {
+            if (finished) sidebarX.value = -w;
+          });
+          sidebarOverlayOpacity.value = withTiming(0, { duration: 150 });
+          runOnJS(finishSidebarClose)();
+          return;
+        }
+        sidebarX.value = withSpring(0, SIDEBAR_SPRING);
+        sidebarOverlayOpacity.value = withTiming(1, { duration: 120 });
+      })
+      .onFinalize(() => {
+        'worklet';
+        const wasDragging = sidebarDragging.value;
+        sidebarDragging.value = false;
+        if (wasDragging && !sidebarDismissed.value && sidebarX.value !== 0) {
+          sidebarX.value = withSpring(0, SIDEBAR_SPRING);
+          sidebarOverlayOpacity.value = withTiming(1, { duration: 120 });
+        }
+      })
+  ), [
+    isSidebarOpen, sidebarLeftEdge, sidebarDragging, sidebarDismissed, sidebarWidthSV,
+    sidebarX, sidebarOverlayOpacity, SIDEBAR_SPRING, finishSidebarClose,
+  ]);
+
+  // 保护外观分段控件（浅色/深色/自动）：在它上面左右拖动时不要误触「我的」整页滑返
+  const appearanceSegGesture = useMemo(
+    () => Gesture.Native().blocksExternalGesture(sidebarPanGesture),
+    [sidebarPanGesture]
+  );
+
+  const sidebarOverlayStyle = useAnimatedStyle(() => ({
+    opacity: sidebarOverlayOpacity.value,
+  }));
+  const sidebarAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: sidebarX.value }],
+  }));
 
   // 进 / 退全屏：地图铺满整屏并横过来（转内容，不转界面）。
   // 底部 TabBar 也要藏起来/装回去，不然全屏地图底部会露出一条 TabBar
@@ -1020,14 +1117,15 @@ export default function HomeScreen({ navigation }) {
       <StatusBar hidden={mapFullscreen} />
 
       {isSidebarOpen && (
-        <Animated.View style={[styles.sidebarOverlay, { opacity: overlayAnim }]}>
+        <Reanimated.View style={[styles.sidebarOverlay, sidebarOverlayStyle]}>
           <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={() => toggleSidebar(false)} />
-        </Animated.View>
+        </Reanimated.View>
       )}
-      <Animated.View
-        pointerEvents={isSidebarOpen ? 'auto' : 'none'}
-        style={[styles.sidebar, { transform: [{ translateX: sidebarAnim }] }]}
-      >
+      <GestureDetector gesture={sidebarPanGesture}>
+        <Reanimated.View
+          pointerEvents={isSidebarOpen ? 'auto' : 'none'}
+          style={[styles.sidebar, { width: sidebarWidth }, sidebarAnimStyle]}
+        >
         <View style={[styles.sidebarContent, { paddingTop: insets.top + 8 }]}>
           <View style={styles.profileTopbar}>
             <View style={styles.profileBackWrap}>
@@ -1093,19 +1191,23 @@ export default function HomeScreen({ navigation }) {
               {hasNativeSegmentedControl ? (
                 <View style={styles.appearanceNativeRow}>
                   <Text style={styles.appearanceNativeLabel}>显示模式</Text>
-                  <NativeSegmentedControl
-                    segments={APPEARANCE_LABELS}
-                    selectedIndex={Math.max(0, APPEARANCE_MODES.findIndex((o) => o.id === mode))}
-                    isDark={isDark}
-                    onChange={(idx) => {
-                      const next = APPEARANCE_MODES[idx];
-                      if (next) {
-                        hapticSelection();
-                        setMode(next.id);
-                      }
-                    }}
-                    style={styles.appearanceNativeSeg}
-                  />
+                  <GestureDetector gesture={appearanceSegGesture}>
+                    <View>
+                      <NativeSegmentedControl
+                        segments={APPEARANCE_LABELS}
+                        selectedIndex={Math.max(0, APPEARANCE_MODES.findIndex((o) => o.id === mode))}
+                        isDark={isDark}
+                        onChange={(idx) => {
+                          const next = APPEARANCE_MODES[idx];
+                          if (next) {
+                            hapticSelection();
+                            setMode(next.id);
+                          }
+                        }}
+                        style={styles.appearanceNativeSeg}
+                      />
+                    </View>
+                  </GestureDetector>
                 </View>
               ) : (
                 <View style={styles.appearanceOptions}>
@@ -1218,7 +1320,8 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.version}>印记 1.9.11</Text>
           </ScrollView>
         </View>
-      </Animated.View>
+        </Reanimated.View>
+      </GestureDetector>
 
       <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
@@ -1584,6 +1687,7 @@ export default function HomeScreen({ navigation }) {
         loading={storageLoading}
         summary={storageSummary}
         copiesInfo={storageCopies}
+        logs={logData}
         onClose={() => setStorageOpen(false)}
         onOpenCleanCache={() => {
           setStorageOpen(false);

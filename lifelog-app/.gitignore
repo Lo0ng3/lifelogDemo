@@ -49,3 +49,7 @@ app-example
 *.apk
 *.aab
 
+# 本地预览原型与分享草稿目录
+demo/ios-ui/
+share/
+

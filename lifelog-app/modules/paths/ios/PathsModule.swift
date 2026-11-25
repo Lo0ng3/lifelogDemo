@@ -11,6 +11,23 @@ import WebKit
 // - clearWebKitCache 清理 WKWebView 的磁盘/内存/Fetch 缓存（不碰 localStorage），
 //   补齐 react-native-webview 在 iOS 上没有 clearCache 方法的缺口。
 public class PathsModule: Module {
+  private struct StorageSubEntry {
+    var bucket: String
+    var group: String
+    var label: String
+    var bytes: Int64
+    var files: Int
+  }
+
+  private struct StorageFileEntry {
+    let name: String
+    let relPath: String
+    let bytes: Int64
+    let bucket: String
+    let subKey: String
+    let subLabel: String
+  }
+
   public func definition() -> ModuleDefinition {
     Name("Paths")
 
@@ -130,7 +147,7 @@ public class PathsModule: Module {
 
     // 与 iOS「设置 → 通用 → iPhone 储存空间 → 文稿与数据」同口径的全沙盒扫描：
     // 遍历整个 NSHomeDirectory()（Documents / Library / tmp），按文件系统实际占用块（totalFileAllocatedSizeKey）汇总并分类，
-    // 保证各项相加严格等于系统统计的「文稿与数据」总占用。
+    // 保证各项相加严格等于系统统计的「文稿与数据」总占用；同时返回二级子项与各大类下体积最大的文件列表供点开查看明细。
     AsyncFunction("getStorageBreakdown") { () -> [String: Any] in
       let fm = FileManager.default
       let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
@@ -145,6 +162,15 @@ public class PathsModule: Module {
         "temp": (0, 0),      // 临时文件（tmp / motionVideos / backups / VideoThumbnails）
         "system": (0, 0),    // 其余系统沙盒文件（Preferences / SplashBoard / Saved State 等）
       ]
+
+      var subBuckets: [String: StorageSubEntry] = [:]
+      var topFilesByGroup: [String: [StorageFileEntry]] = [
+        "app": [],
+        "imageCache": [],
+        "mapCache": [],
+        "other": [],
+      ]
+      let maxTopFiles = 20
 
       let keys: Set<URLResourceKey> = [
         .isRegularFileKey,
@@ -171,11 +197,40 @@ public class PathsModule: Module {
           let rel = fullPath.hasPrefix(homePrefix)
             ? String(fullPath.dropFirst(homePrefix.count))
             : fullPath
-          let bucket = self.classifySandboxPath(rel)
-          if var cur = buckets[bucket] {
+          let detail = self.classifySandboxDetail(rel)
+          if var cur = buckets[detail.bucket] {
             cur.bytes += sz
             cur.files += 1
-            buckets[bucket] = cur
+            buckets[detail.bucket] = cur
+          }
+          if var sub = subBuckets[detail.subKey] {
+            sub.bytes += sz
+            sub.files += 1
+            subBuckets[detail.subKey] = sub
+          } else {
+            subBuckets[detail.subKey] = StorageSubEntry(
+              bucket: detail.bucket,
+              group: detail.group,
+              label: detail.subLabel,
+              bytes: sz,
+              files: 1
+            )
+          }
+          if sz > 0 {
+            var arr = topFilesByGroup[detail.group] ?? []
+            arr.append(StorageFileEntry(
+              name: fileURL.lastPathComponent,
+              relPath: rel,
+              bytes: sz,
+              bucket: detail.bucket,
+              subKey: detail.subKey,
+              subLabel: detail.subLabel
+            ))
+            if arr.count > maxTopFiles * 3 {
+              arr.sort { $0.bytes > $1.bytes }
+              arr = Array(arr.prefix(maxTopFiles))
+            }
+            topFilesByGroup[detail.group] = arr
           }
           totalBytes += sz
           totalFiles += 1
@@ -186,10 +241,36 @@ public class PathsModule: Module {
       for (k, v) in buckets {
         resultBuckets[k] = ["bytes": Double(v.bytes), "files": v.files]
       }
+      var resultSubBuckets: [String: [String: Any]] = [:]
+      for (k, v) in subBuckets {
+        resultSubBuckets[k] = [
+          "bucket": v.bucket,
+          "group": v.group,
+          "label": v.label,
+          "bytes": Double(v.bytes),
+          "files": v.files,
+        ]
+      }
+      var resultTopFiles: [String: [[String: Any]]] = [:]
+      for (groupKey, entries) in topFilesByGroup {
+        let sorted = entries.sorted { $0.bytes > $1.bytes }.prefix(maxTopFiles)
+        resultTopFiles[groupKey] = sorted.map { (e: StorageFileEntry) -> [String: Any] in
+          [
+            "name": e.name,
+            "relPath": e.relPath,
+            "bytes": Double(e.bytes),
+            "bucket": e.bucket,
+            "subKey": e.subKey,
+            "subLabel": e.subLabel,
+          ]
+        }
+      }
       return [
         "totalBytes": Double(totalBytes),
         "totalFiles": totalFiles,
         "buckets": resultBuckets,
+        "subBuckets": resultSubBuckets,
+        "topFiles": resultTopFiles,
       ]
     }
 
@@ -244,45 +325,82 @@ public class PathsModule: Module {
     return sum
   }
 
-  private func classifySandboxPath(_ rel: String) -> String {
-    if rel.hasPrefix("tmp/") || rel == "tmp" { return "temp" }
-    if rel.hasPrefix("Documents/media/") { return "media" }
-    if rel.hasPrefix("Documents/covers/")
-      || rel.hasPrefix("Documents/videoPosters/")
-      || rel.hasPrefix("Documents/videoThumbs/") {
-      return "covers"
+  private func classifySandboxDetail(_ rel: String) -> (bucket: String, group: String, subKey: String, subLabel: String) {
+    if rel.hasPrefix("tmp/") || rel == "tmp" {
+      return ("temp", "other", "tmp", "系统临时目录 (tmp)")
     }
-    if rel.hasPrefix("Documents/motionVideos/") { return "temp" }
-    if rel.hasPrefix("Documents/internal-backup/")
-      || rel.hasPrefix("Documents/profile/")
-      || rel.hasPrefix("Library/Application Support/") {
-      return "records"
+    if rel.hasPrefix("Documents/media/") {
+      return ("media", "app", "media", "本地媒体副本")
     }
-    if rel.hasPrefix("Library/WebKit/")
-      || rel.hasPrefix("Library/HTTPStorages/")
+    if rel.hasPrefix("Documents/covers/") {
+      return ("covers", "app", "covers", "封面小图")
+    }
+    if rel.hasPrefix("Documents/videoPosters/") {
+      return ("covers", "app", "videoPosters", "视频封面图")
+    }
+    if rel.hasPrefix("Documents/videoThumbs/") {
+      return ("covers", "app", "videoThumbs", "视频预览帧")
+    }
+    if rel.hasPrefix("Documents/motionVideos/") {
+      return ("temp", "other", "motionVideos", "实况动效临时文件")
+    }
+    if rel.hasPrefix("Documents/internal-backup/") {
+      return ("records", "app", "internalBackup", "本地自动备份")
+    }
+    if rel.hasPrefix("Documents/profile/") {
+      return ("records", "app", "profile", "个人头像与资料")
+    }
+    if rel.hasPrefix("Library/Application Support/") {
+      if rel.contains("RCTAsyncLocalStorage") {
+        return ("records", "app", "asyncStorage", "记录与设置数据")
+      }
+      return ("records", "app", "appSupport", "应用支持数据")
+    }
+    if rel.hasPrefix("Library/WebKit/") || rel.hasPrefix("Library/Caches/WebKit/") {
+      return ("mapCache", "mapCache", "webKit", "地图与网页缓存")
+    }
+    if rel.hasPrefix("Library/HTTPStorages/")
       || rel.hasPrefix("Library/Cookies/")
-      || rel.hasPrefix("Library/Caches/WebKit/")
       || rel.hasPrefix("Library/Caches/com.jiyin.lifelog/") {
-      return "mapCache"
+      return ("mapCache", "mapCache", "httpCache", "网络与瓦片缓存")
     }
-    if rel.hasPrefix("Library/Caches/backups/")
-      || rel.hasPrefix("Library/Caches/VideoThumbnails/") {
-      return "temp"
+    if rel.hasPrefix("Library/Caches/backups/") {
+      return ("temp", "other", "cacheBackups", "备份导出临时文件")
+    }
+    if rel.hasPrefix("Library/Caches/VideoThumbnails/") {
+      return ("temp", "other", "videoThumbnailsCache", "视频帧提取缓存")
     }
     if rel.hasPrefix("Library/Caches/com.hackemist.SDImageCache/")
       || rel.hasPrefix("Library/Caches/org.hackemist.SDImageCache/")
       || rel.hasPrefix("Library/Caches/expo-image/")
-      || rel.hasPrefix("Library/Caches/thumbs/")
-      || rel.hasPrefix("Library/Caches/ImageManipulator/")
       || rel.hasPrefix("Library/Caches/image_cache/") {
-      return "imageCache"
+      return ("imageCache", "imageCache", "imageDiskCache", "图片磁盘缓存")
+    }
+    if rel.hasPrefix("Library/Caches/thumbs/") {
+      return ("imageCache", "imageCache", "thumbs", "选图器缩略图缓存")
+    }
+    if rel.hasPrefix("Library/Caches/ImageManipulator/") {
+      return ("imageCache", "imageCache", "imageManipulator", "图片处理缓存")
     }
     if rel.hasPrefix("Library/Caches/") {
-      return "mapCache"
+      let rest = String(rel.dropFirst("Library/Caches/".count))
+      let top = rest.split(separator: "/").first.map(String.init) ?? "Caches"
+      return ("mapCache", "mapCache", "cache:\(top)", "缓存 (\(top))")
     }
     if rel.hasPrefix("Documents/") {
-      return "records"
+      return ("records", "app", "documentsOther", "其他文稿文件")
     }
-    return "system"
+    if rel.hasPrefix("Library/Preferences/") {
+      return ("system", "other", "preferences", "偏好设置")
+    }
+    if rel.hasPrefix("Library/SplashBoard/") {
+      return ("system", "other", "splashBoard", "启动屏快照")
+    }
+    if rel.hasPrefix("Library/Saved Application State/") {
+      return ("system", "other", "savedState", "界面状态恢复")
+    }
+    let parts = rel.split(separator: "/")
+    let top = parts.count >= 2 && parts[0] == "Library" ? String(parts[1]) : String(parts.first ?? "系统")
+    return ("system", "other", "sys:\(top)", "系统文件 (\(top))")
   }
 }
