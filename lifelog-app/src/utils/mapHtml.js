@@ -178,7 +178,7 @@ export function buildMapHtml({
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
               box-shadow: 0 6px 22px rgba(0,0,0,${isDark ? '0.55' : '0.22'}); }
           .leaflet-popup-content { margin: 11px 13px; line-height: 1.45; }
-          .leaflet-popup-tip { background: ${c.cardBg}; }
+          .leaflet-popup-tip-container { display: none; }
 
           /* ---- 控件：只占很小一块，尽量不挡地图 ---- */
           .zoomer { position: absolute; right: 10px; top: 10px; z-index: 800; display: flex; flex-direction: column;

@@ -1,10 +1,10 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Platform, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, Platform, StyleSheet } from 'react-native';
 import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
-  Extrapolation, runOnJS, useAnimatedScrollHandler,
+  Extrapolation, runOnJS,
 } from 'react-native-reanimated';
 
 import RecordRow from './RecordRow';
@@ -40,7 +40,7 @@ const todayKey = () => {
    memo + 「按格子位置而不是日期做 key」两层一起用：换月时 42 个格子是
    更新而不是重建（不会重挂 Animated 值 / 手势 / 共享值），只点某天时
    也只有选中状态真正变了的两个格子重渲染。 */
-const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, onPress, colors, styles, compact }) {
+const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, onPress, colors, styles }) {
   const on = useSharedValue(selected ? 1 : 0);
   useEffect(() => { on.value = withTiming(selected ? 1 : 0, { duration: 160 }); }, [selected, on]);
   const bg = useAnimatedStyle(() => ({
@@ -51,9 +51,9 @@ const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, 
 
   return (
     <PressableScale containerStyle={styles.dayHit} style={styles.dayFill} activeScale={0.9} onPress={() => onPress(cell.date)}>
-      <Reanimated.View style={[styles.day, compact && styles.dayCompact, cell.out && styles.dayOut, bg]}>
-        {isToday && <View style={[styles.todayRing, compact && styles.todayRingCompact]} pointerEvents="none" />}
-        <Text style={[styles.dayNum, compact && styles.dayNumCompact, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
+      <Reanimated.View style={[styles.day, cell.out && styles.dayOut, bg]}>
+        {isToday && <View style={styles.todayRing} pointerEvents="none" />}
+        <Text style={[styles.dayNum, cell.out && styles.dayNumOut, isToday && styles.dayNumToday]}>{cell.day}</Text>
         {records.length > 0 && (
           <View style={styles.dots}>
             {dots.map((r, i) => (
@@ -83,20 +83,6 @@ export default function MonthView({ records, onPressItem }) {
   const [pickerYear, setPickerYear] = useState(now.getFullYear());
   const shift = useSharedValue(0);
   const listRef = useRef(null);
-  // 折叠日历：完整月历随列表上滑滚走，收起后顶部固定显示"本周 7 天"，随时还能点某天
-  const [collapsed, setCollapsed] = useState(false);
-  const headerHSV = useSharedValue(0);
-  const collapsedFlag = useSharedValue(0);
-  const onListScroll = useAnimatedScrollHandler({
-    onScroll: (e) => {
-      const y = e.contentOffset.y;
-      const should = y > Math.max(0, headerHSV.value - 76) ? 1 : 0;
-      if (should !== collapsedFlag.value) {
-        collapsedFlag.value = should;
-        runOnJS(setCollapsed)(should === 1);
-      }
-    },
-  });
 
   const byDate = useMemo(() => {
     const map = new Map();
@@ -112,14 +98,12 @@ export default function MonthView({ records, onPressItem }) {
   // 回调保持稳定 + 用 ref 读最新的 byDate，memo 化的日期格才不会因为父级重渲染而集体失效
   const byDateRef = useRef(byDate);
   byDateRef.current = byDate;
-  const selectDay = useCallback((date, scrollTop) => {
+  const selectDay = useCallback((date) => {
     if ((byDateRef.current.get(date) || NO_RECORDS).length === 0) return;
     hapticSelection();
     setSelected((prev) => (prev === date ? null : date));
-    if (scrollTop) listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
-  const pressDayInGrid = useCallback((date) => selectDay(date, true), [selectDay]);
-  const pressDayInStrip = useCallback((date) => selectDay(date, false), [selectDay]);
 
   // 按月预分组：切月时 O(1) 取当月记录，不用每次遍历全部记录（记录多时切月会明显卡顿）
   const byMonth = useMemo(() => {
@@ -232,24 +216,6 @@ export default function MonthView({ records, onPressItem }) {
     return out;
   }, [cells]);
 
-  // 收起后显示的那一周：优先选中的日期，其次今天（若在当前月），否则本月 1 号
-  const anchorWeek = useMemo(() => {
-    const monthPrefix = `${cursor.y}-${pad(cursor.m)}`;
-    const anchor = selected || (todayKey().startsWith(monthPrefix) ? todayKey() : `${monthPrefix}-01`);
-    const d = new Date(`${anchor}T00:00:00`);
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return Array.from({ length: 7 }, (_, i) => {
-      const x = new Date(monday);
-      x.setDate(monday.getDate() + i);
-      return {
-        date: dateKey(x.getFullYear(), x.getMonth() + 1, x.getDate()),
-        day: x.getDate(),
-        out: `${x.getFullYear()}-${pad(x.getMonth() + 1)}` !== monthPrefix,
-      };
-    });
-  }, [cursor.y, cursor.m, selected]);
-
   // 日历区左右滑动换月（纵向手势留给下面的列表滚动；加大横向阈值避免轻点日期格被误判为滑月）
   const swipeMonth = useMemo(() => Gesture.Pan()
     .activeOffsetX([-22, 22])
@@ -333,36 +299,18 @@ export default function MonthView({ records, onPressItem }) {
         </View>
       </View>
 
-      {/* 固定的"周条"：展开时是星期表头，日历收起来后变成本周 7 天（照样能点某天） */}
+      {/* 固定的星期表头 */}
       <View style={styles.weekStrip}>
-        {collapsed ? (
-          anchorWeek.map((cell, ci) => (
-            <DayCell
-              key={ci}
-              cell={cell}
-              compact
-              records={byDate.get(cell.date) || NO_RECORDS}
-              selected={selected === cell.date}
-              isToday={cell.date === today}
-              onPress={pressDayInStrip}
-              colors={colors}
-              styles={styles}
-            />
-          ))
-        ) : (
-          WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)
-        )}
+        {WEEK.map((w) => <Text key={w} style={styles.weekText}>{w}</Text>)}
       </View>
 
       {/* 日历跟列表在同一个滚动容器里：上滑就把日历顶上去，记录多时列表能占满整屏 */}
       <View style={styles.tlWrap}>
-        <Reanimated.FlatList
+        <FlatList
           ref={listRef}
           data={timeline}
           keyExtractor={(row) => row.id}
           renderItem={renderRow}
-          onScroll={onListScroll}
-          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           bounces={Platform.OS === 'ios'}
           overScrollMode="never"
@@ -398,10 +346,7 @@ export default function MonthView({ records, onPressItem }) {
           contentContainerStyle={styles.tlContent}
           ListHeaderComponent={(
             <GestureDetector gesture={swipeMonth}>
-              <Reanimated.View
-                style={gridStyle}
-                onLayout={(e) => { headerHSV.value = e.nativeEvent.layout.height; }}
-              >
+              <Reanimated.View style={gridStyle}>
                 {pickerOpen && !hasNativeMonthPicker ? (
                   <View style={styles.picker}>
                     <View style={styles.pickerYearRow}>
@@ -446,7 +391,7 @@ export default function MonthView({ records, onPressItem }) {
                               records={cell.out ? NO_RECORDS : (byDate.get(cell.date) || NO_RECORDS)}
                               selected={selected === cell.date}
                               isToday={cell.date === today}
-                              onPress={pressDayInGrid}
+                              onPress={selectDay}
                               colors={colors}
                               styles={styles}
                             />
@@ -497,20 +442,17 @@ const makeStyles = (c) => ({
   navBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center' },
   todayBtn: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.accentSoft, alignItems: 'center', justifyContent: 'center' },
   todayBtnText: { fontSize: 12.5, color: c.accent, fontWeight: '600' },
-  // 收起时固定显示的那条"本周"；左右缩进要跟日期格一致（见 TL_PAD_H / GRID_PAD_H 的说明）
-  weekStrip: { flexDirection: 'row', alignItems: 'center', height: 38, paddingHorizontal: TL_PAD_H + GRID_PAD_H, marginBottom: 4 },
+  // 星期表头；左右缩进要跟日期格一致（见 TL_PAD_H / GRID_PAD_H 的说明）
+  weekStrip: { flexDirection: 'row', alignItems: 'center', height: 26, paddingHorizontal: TL_PAD_H + GRID_PAD_H, marginBottom: 2 },
   weekText: { flex: 1, textAlign: 'center', fontSize: 11, color: c.textMuted },
   grid: { paddingHorizontal: GRID_PAD_H, paddingBottom: 6 },
   week: { flexDirection: 'row' },
   dayHit: { flex: 1, paddingVertical: 2 },
   dayFill: { width: '100%' },
   day: { height: 44, borderRadius: 12, alignItems: 'center', paddingTop: 5 },
-  dayCompact: { height: 34, paddingTop: 2 },
   dayOut: {},
   todayRing: { position: 'absolute', top: 2, left: 2, right: 2, bottom: 2, borderRadius: 11, borderWidth: 1, borderColor: c.accentSoftBorder },
-  todayRingCompact: { top: 0, left: 0, right: 0, bottom: 0, borderRadius: 10 },
   dayNum: { fontSize: 13, color: c.text, lineHeight: 16 },
-  dayNumCompact: { fontSize: 12, lineHeight: 15 },
   dayNumOut: { color: c.textFaint },
   dayNumToday: { color: c.accent, fontWeight: '700' },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 2.5, marginTop: 4 },

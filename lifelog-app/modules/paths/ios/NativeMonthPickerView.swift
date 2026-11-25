@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import Foundation
 import UIKit
 
 // iOS 原生年月弹出选择器（与系统紧凑日期选择器一致的锚定式 UIPopoverPresentationController）：
@@ -105,7 +106,6 @@ public final class NativeMonthPickerView: ExpoView, UIPopoverPresentationControl
 
     button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     button.contentHorizontalAlignment = .leading
-    button.semanticContentAttribute = .forceRightToLeft
     button.addTarget(self, action: #selector(handleTap), for: .touchUpInside)
     addSubview(button)
     refreshTitle()
@@ -159,16 +159,24 @@ public final class NativeMonthPickerView: ExpoView, UIPopoverPresentationControl
       ? UIColor(white: 0.62, alpha: 1.0)
       : UIColor(white: 0.52, alpha: 1.0)
 
-    let title = "\(selectedYear)年\(selectedMonth)月 "
-    let cfg = UIImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
-    let chevron = UIImage(systemName: "chevron.down", withConfiguration: cfg)?
+    let symCfg = UIImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
+    let chevron = UIImage(systemName: "chevron.down", withConfiguration: symCfg)?
       .withTintColor(chevronColor, renderingMode: .alwaysOriginal)
 
+    var cfg = UIButton.Configuration.plain()
+    cfg.contentInsets = .zero
+    cfg.titleAlignment = .leading
+    cfg.imagePlacement = .trailing
+    cfg.imagePadding = 5
+    cfg.image = chevron
+    var titleAttrs = AttributeContainer()
+    titleAttrs.font = UIFont.systemFont(ofSize: 16, weight: .semibold)
+    titleAttrs.foregroundColor = textColor
+    cfg.attributedTitle = AttributedString("\(selectedYear)年\(selectedMonth)月", attributes: titleAttrs)
+
     UIView.performWithoutAnimation {
-      button.setTitle(title, for: .normal)
-      button.setTitleColor(textColor, for: .normal)
-      button.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .semibold)
-      button.setImage(chevron, for: .normal)
+      button.configuration = cfg
+      button.contentHorizontalAlignment = .leading
       button.layoutIfNeeded()
     }
   }
@@ -197,8 +205,11 @@ public final class NativeMonthPickerView: ExpoView, UIPopoverPresentationControl
     if let pop = popVC.popoverPresentationController {
       pop.delegate = self
       pop.sourceView = button
-      pop.sourceRect = CGRect(x: button.bounds.minX, y: button.bounds.minY, width: min(button.bounds.width, 130), height: button.bounds.height)
-      pop.permittedArrowDirections = [.up, .down]
+      // permittedArrowDirections = []：无尖角，呈现干净的圆角矩形浮层，左缘对齐按钮、顶缘紧贴按钮正下方
+      pop.permittedArrowDirections = []
+      let popW: CGFloat = 244
+      let popH: CGFloat = 196
+      pop.sourceRect = CGRect(x: popW * 0.5, y: button.bounds.maxY + 8 + popH * 0.5, width: 1, height: 1)
     }
     presentedPopover = popVC
     hostVC.present(popVC, animated: true)
