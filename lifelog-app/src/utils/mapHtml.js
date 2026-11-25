@@ -152,19 +152,16 @@ export function buildMapHtml({
           .leaflet-control-attribution { display: none; }
           .leaflet-container { background: ${c.bg}; outline: none; isolation: isolate; }
           /* 覆盖 Leaflet 1.9 默认的 mix-blend-mode: plus-lighter：
-             iOS WKWebView 在缩放时新旧两层瓦片叠加会触发加色闪烁，改成 normal 彻底消除白闪 */
-          .leaflet-container img.leaflet-tile,
-          .leaflet-container canvas.leaflet-tile {
+             iOS WKWebView 在缩放时新旧两层瓦片叠加会触发加色白闪，改成 normal 彻底消除闪烁 */
+          .leaflet-container img.leaflet-tile {
               mix-blend-mode: normal !important;
-              filter: none;
-              -webkit-filter: none;
           }
           .leaflet-tile-pane { -webkit-transform: translateZ(0); transform: translateZ(0); }
           .amap-container { background: ${c.bg} !important; }
-          /* 深色模式优先由 SmoothTileLayer 在 Canvas 中一次性离线烘培深色瓦片（DOM 无活 CSS filter，
-             避免 iOS WKWebView 在 3D 缩放动画中反复重算滤镜导致闪烁）；仅当 Canvas 不可用时才降级到 CSS 滤镜 */
+          /* 与 Android 版完全一致的深色滤镜：挂在单张瓦片 img 上（不挂在含 3D 子层的 .leaflet-tile-pane 父容器上），
+             配合 mix-blend-mode: normal、img.decode() 与双帧延后清理旧瓦片，保证深色显示准确且缩放无闪烁 */
           ${hasLeaflet && c.tileFilter && c.tileFilter !== 'none'
-            ? `html.rc-css-dark .leaflet-tile-pane img.leaflet-tile { filter: ${c.tileFilter}; -webkit-filter: ${c.tileFilter}; }`
+            ? `.leaflet-container .leaflet-tile-pane img.leaflet-tile { filter: ${c.tileFilter}; -webkit-filter: ${c.tileFilter}; }`
             : ''}
           /* 高德 JS API 自带版权/Logo，按规范原样保留，不做隐藏 */
           .leaflet-popup-content-wrapper { background: ${c.cardBg}; color: ${c.cardText}; border-radius: 12px;
@@ -329,7 +326,6 @@ export function buildMapHtml({
           var COLLAPSE_ICON = ${safeJson(ICON_COLLAPSE)};
           var NOTICE = ${safeJson(notice || '')};
           var DARK = ${isDark ? 'true' : 'false'};
-          var HAS_TILE_FILTER = ${hasLeaflet && c.tileFilter && c.tileFilter !== 'none' ? 'true' : 'false'};
           var fullscreen = false;
           // 用户动过地图（拖/缩）之后不再自动全览
           var mapTouched = false;
@@ -722,6 +718,11 @@ export function buildMapHtml({
                   mapStyle: DARK ? 'amap://styles/dark' : 'amap://styles/normal',
                   features: ['bg', 'road', 'building', 'point'],
               });
+              if (DARK && typeof map.setMapStyle === 'function') {
+                  map.on('complete', function () {
+                      safe(function () { map.setMapStyle('amap://styles/dark'); });
+                  });
+              }
               function group() {
                   var items = [];
                   return {
@@ -828,78 +829,12 @@ export function buildMapHtml({
               // 双击放大保持开启（Leaflet 默认）：双击空白处放大一级；双击标点仍是"飞到该标点"——
               // 标点的手势把 DOM 事件拦在自己这一层了，地图容器收不到第二下，两者不会打架。
 
-              // 检测 Canvas 2D 是否可用：深色模式下用 Canvas 标准混合模式一次性离线烘培深色瓦片，
-              // DOM 中完全不挂 CSS filter（彻底消除 iOS WKWebView 在缩放动画期间重算滤镜造成的闪烁），
-              // 同时兼容无 CORS 头的第三方瓦片与天地图透明注记层（cva_w）。
-              function canBakeDarkCanvas() {
-                  try {
-                      if (!document || !document.createElement) return false;
-                      var c = document.createElement('canvas');
-                      return !!(c && typeof c.getContext === 'function' && c.getContext('2d'));
-                  } catch (e) { return false; }
-              }
-              var useCanvasDark = !!(DARK && HAS_TILE_FILTER && canBakeDarkCanvas());
-              if (DARK && HAS_TILE_FILTER && !useCanvasDark && document.documentElement) {
-                  document.documentElement.className = (document.documentElement.className ? document.documentElement.className + ' ' : '') + 'rc-css-dark';
-              }
-
-              // 无闪烁瓦片图层：
-              // 1) 深色模式将瓦片一次性绘制成深色 Canvas（零活 CSS filter，缩放不重算）；
-              // 2) 浅色/深色均等待 img.decode() 解码完成后再标记就绪，避免刚 onload 就删旧层露出底色；
-              // 3) _pruneTiles 延后两帧 rAF 执行，确保新层级瓦片真正上屏后再撤掉下层缩放兜底瓦片。
+              // 无闪烁瓦片图层（纯 <img> 瓦片，稳定兼容 Android 与 iOS WKWebView）：
+              // 1) 等待 img.decode() 解码完成后再标记就绪，避免刚 onload 就删旧层露出底色；
+              // 2) _pruneTiles 延后两帧 rAF 执行，确保新层级瓦片真正上屏后再撤掉下层缩放兜底瓦片。
               var SmoothTileLayer = (L.TileLayer && L.TileLayer.extend) ? L.TileLayer.extend({
                   createTile: function (coords, done) {
                       var url = this.getTileUrl(coords);
-                      if (useCanvasDark) {
-                          var canvas = document.createElement('canvas');
-                          canvas.width = 256;
-                          canvas.height = 256;
-                          var img = new Image();
-                          img.decoding = 'async';
-                          canvas._rcImg = img;
-                          var finished = false;
-                          var paint = function () {
-                              if (finished || canvas._rcAborted) return;
-                              finished = true;
-                              var w = img.naturalWidth || 256;
-                              var h = img.naturalHeight || 256;
-                              if (canvas.width !== w) canvas.width = w;
-                              if (canvas.height !== h) canvas.height = h;
-                              var ctx = canvas.getContext('2d');
-                              if (ctx) {
-                                  // 亮度反相 + 保留原图色相（蓝水/绿地/暖色干道）+ 微提暗部至主题灰黑 + 保留透明通道
-                                  ctx.globalCompositeOperation = 'source-over';
-                                  ctx.clearRect(0, 0, w, h);
-                                  ctx.drawImage(img, 0, 0, w, h);
-                                  ctx.globalCompositeOperation = 'difference';
-                                  ctx.fillStyle = '#ffffff';
-                                  ctx.fillRect(0, 0, w, h);
-                                  ctx.globalCompositeOperation = 'color';
-                                  ctx.drawImage(img, 0, 0, w, h);
-                                  ctx.globalCompositeOperation = 'screen';
-                                  ctx.fillStyle = '#141820';
-                                  ctx.fillRect(0, 0, w, h);
-                                  ctx.globalCompositeOperation = 'destination-in';
-                                  ctx.drawImage(img, 0, 0, w, h);
-                                  ctx.globalCompositeOperation = 'source-over';
-                              }
-                              canvas._rcImg = null;
-                              done(null, canvas);
-                          };
-                          img.onload = function () {
-                              if (canvas._rcAborted) return;
-                              if (typeof img.decode === 'function') img.decode().then(paint, paint);
-                              else paint();
-                          };
-                          img.onerror = function (err) {
-                              if (finished || canvas._rcAborted) return;
-                              finished = true;
-                              canvas._rcImg = null;
-                              done(err || new Error('tile load error'), canvas);
-                          };
-                          img.src = url;
-                          return canvas;
-                      }
                       var tile = document.createElement('img');
                       tile.decoding = 'async';
                       tile.alt = '';
@@ -927,12 +862,8 @@ export function buildMapHtml({
                       var entry = this._tiles && this._tiles[key];
                       if (entry && entry.el) {
                           entry.el._rcAborted = true;
-                          if (entry.el._rcImg) {
-                              entry.el._rcImg.onload = null;
-                              entry.el._rcImg.onerror = null;
-                              entry.el._rcImg.src = '';
-                              entry.el._rcImg = null;
-                          }
+                          entry.el.onload = null;
+                          entry.el.onerror = null;
                       }
                       return L.TileLayer.prototype._removeTile.call(this, key);
                   },

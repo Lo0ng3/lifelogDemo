@@ -8,7 +8,13 @@ import Reanimated, {
 } from 'react-native-reanimated';
 
 import LiquidGlassSurface from './LiquidGlassSurface';
+import NativeTabBar, { hasNativeTabBar } from './NativeTabBar';
 import { useTheme } from '../theme/ThemeProvider';
+
+const ROUTE_SF_ICONS = {
+  Home: { normal: 'safari', selected: 'safari.fill' },
+  Add: { normal: 'plus.circle', selected: 'plus.circle.fill' },
+};
 
 let Haptics = null;
 try { Haptics = require('expo-haptics'); } catch {}
@@ -173,17 +179,68 @@ export default function AppTabBar({ state, descriptors, navigation, insets }) {
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
+  const nativeTabMeta = useMemo(() => {
+    const titles = [];
+    const icons = [];
+    const selectedIcons = [];
+    for (const item of state.routes) {
+      const itemOptions = descriptors[item.key]?.options || {};
+      const label = typeof itemOptions.tabBarLabel === 'string'
+        ? itemOptions.tabBarLabel
+        : item.name === 'Home' ? '印记' : '添加';
+      const sym = ROUTE_SF_ICONS[item.name] || { normal: 'circle', selected: 'circle.fill' };
+      titles.push(label);
+      icons.push(sym.normal);
+      selectedIcons.push(sym.selected);
+    }
+    return { titles, icons, selectedIcons };
+  }, [state.routes, descriptors]);
+
   const route = state.routes[state.index];
   const options = descriptors[route.key]?.options || {};
   const flattenedStyle = StyleSheet.flatten(options.tabBarStyle);
   if (keyboardOpen || flattenedStyle?.display === 'none') return null;
+
+  const bottomOffset = Math.max(18, (insets?.bottom || 0) - 6);
+
+  // iOS：与顶部视图切换使用完全相同的原生 UISegmentedControl（iOS 26 真·液态玻璃胶囊与滑块透镜）
+  if (hasNativeTabBar) {
+    return (
+      <View pointerEvents="box-none" style={[styles.wrap, { bottom: bottomOffset }]}>
+        <View
+          style={[
+            styles.shadowWrap,
+            {
+              shadowColor: colors.shadow,
+              shadowOpacity: isDark ? 0.24 : 0.1,
+            },
+          ]}
+        >
+          <NativeTabBar
+            titles={nativeTabMeta.titles}
+            icons={nativeTabMeta.icons}
+            selectedIcons={nativeTabMeta.selectedIcons}
+            selectedIndex={state.index}
+            isDark={isDark}
+            activeColor={colors.accent}
+            inactiveColor={colors.textSecondary}
+            onChange={(nextIdx) => {
+              if (nextIdx !== state.index) triggerHaptic();
+              commitTabIndex(nextIdx);
+            }}
+            style={styles.nativeBar}
+          />
+        </View>
+      </View>
+    );
+  }
 
   const displayIndex = dragHoverIndex !== null ? dragHoverIndex : state.index;
 
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrap, { bottom: Math.max(18, (insets?.bottom || 0) - 6) }]}
+      style={[styles.wrap, { bottom: bottomOffset }]}
     >
       {/* 外层负责阴影（不设 overflow:hidden，否则 iOS 会裁掉阴影） */}
       <View
@@ -274,6 +331,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     shadowRadius: 22,
     elevation: 9,
+  },
+  nativeBar: {
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
   },
   bar: {
     width: BAR_WIDTH,

@@ -1465,6 +1465,7 @@ export default function HomeScreen({ navigation }) {
           <View style={[styles.mapStage, mapStageBox]} collapsable={false}>
             <View style={[styles.mapBox, mapBoxRotated]} collapsable={false}>
               <WebView
+                key={`${mapIsDark ? 'dark' : 'light'}-${mapProvider}-${useJsApi ? 'jsapi' : 'raster'}`}
                 ref={mapRef}
                 originWhitelist={['*']}
                 source={mapSource}

@@ -298,6 +298,31 @@ public class PathsModule: Module {
         view.setIsDark(value)
       }
     }
+
+    View(NativeTabBarView.self) {
+      Events("onValueChange")
+      Prop("titles") { (view: NativeTabBarView, value: [String]) in
+        view.setTitles(value)
+      }
+      Prop("icons") { (view: NativeTabBarView, value: [String]) in
+        view.setIcons(value)
+      }
+      Prop("selectedIcons") { (view: NativeTabBarView, value: [String]) in
+        view.setSelectedIcons(value)
+      }
+      Prop("selectedIndex") { (view: NativeTabBarView, value: Int) in
+        view.setSelectedIndex(value)
+      }
+      Prop("isDark") { (view: NativeTabBarView, value: Bool) in
+        view.setIsDark(value)
+      }
+      Prop("activeColor") { (view: NativeTabBarView, value: String) in
+        view.setActiveColor(value)
+      }
+      Prop("inactiveColor") { (view: NativeTabBarView, value: String) in
+        view.setInactiveColor(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {
