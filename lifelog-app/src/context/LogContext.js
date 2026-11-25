@@ -102,9 +102,11 @@ export const LogProvider = ({ children }) => {
         flushInternalBackup();
       }
     });
-    // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
+    // 天地图 / 高德 Key：侧边栏配置，存本机；iOS 端固定使用苹果原生 MapKit，不被旧配置覆盖
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
-    AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu' || (v === 'apple' && Platform.OS === 'ios')) setProviderState(v); }).catch(() => {});
+    if (Platform.OS !== 'ios') {
+      AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu') setProviderState(v); }).catch(() => {});
+    }
     AsyncStorage.getItem('@amap_key').then(v => { if (v) setAmapKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_key').then(v => { if (v) setAmapJsKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_code').then(v => { if (v) setAmapJsCodeState(v); }).catch(() => {});
@@ -122,7 +124,7 @@ export const LogProvider = ({ children }) => {
   };
 
   const setMapProvider = async (provider) => {
-    const next = provider === 'apple' && Platform.OS === 'ios'
+    const next = Platform.OS === 'ios'
       ? 'apple'
       : (provider === 'amap' ? 'amap' : 'tianditu');
     setProviderState(next);

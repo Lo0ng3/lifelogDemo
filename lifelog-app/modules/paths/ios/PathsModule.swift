@@ -375,6 +375,25 @@ public class PathsModule: Module {
         view.setCommandJson(value)
       }
     }
+
+    View(NativeMonthPickerView.self) {
+      Events("onChange")
+      Prop("minYear") { (view: NativeMonthPickerView, value: Int) in
+        view.setMinYear(value)
+      }
+      Prop("maxYear") { (view: NativeMonthPickerView, value: Int) in
+        view.setMaxYear(value)
+      }
+      Prop("year") { (view: NativeMonthPickerView, value: Int) in
+        view.setYear(value)
+      }
+      Prop("month") { (view: NativeMonthPickerView, value: Int) in
+        view.setMonth(value)
+      }
+      Prop("isDark") { (view: NativeMonthPickerView, value: Bool) in
+        view.setIsDark(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {

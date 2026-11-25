@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Platform, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Platform, StyleSheet, Modal } from 'react-native';
+import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, interpolateColor,
@@ -8,6 +9,8 @@ import Reanimated, {
 
 import RecordRow from './RecordRow';
 import PressableScale from './PressableScale';
+import NativeIcon from './NativeIcon';
+import NativeMonthPicker, { hasNativeMonthPicker } from './NativeMonthPicker';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { groupColor } from '../utils/recordMeta';
 import { hapticSelection } from '../utils/haptics';
@@ -69,7 +72,7 @@ const DayCell = React.memo(function DayCell({ cell, records, selected, isToday, 
  * 左右滑动日历换月；点日期只看当天，再点一次回到整月。
  * ------------------------------------------------------------------ */
 export default function MonthView({ records, onPressItem }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
   const now = new Date();
@@ -78,6 +81,7 @@ export default function MonthView({ records, onPressItem }) {
   const [selected, setSelected] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(now.getFullYear());
+  const [pickerMonth, setPickerMonth] = useState(now.getMonth() + 1);
   const shift = useSharedValue(0);
   const listRef = useRef(null);
   // 折叠日历：完整月历随列表上滑滚走，收起后顶部固定显示"本周 7 天"，随时还能点某天
@@ -188,10 +192,37 @@ export default function MonthView({ records, onPressItem }) {
     shift.value = withSpring(0, { damping: 20, stiffness: 190, mass: 0.7 });
   }, [shift]);
 
+  // 最近有记录的月份（空月快捷跳转用）
+  const latestRecordMonth = useMemo(() => {
+    let best = '';
+    for (const key of byMonth.keys()) {
+      if (key > best) best = key;
+    }
+    if (!best) return null;
+    const [y, m] = best.split('-').map(Number);
+    return Number.isFinite(y) && Number.isFinite(m) ? { y, m } : null;
+  }, [byMonth]);
+
+  const yearBounds = useMemo(() => {
+    const curY = new Date().getFullYear();
+    let minY = curY - 10;
+    let maxY = curY + 2;
+    for (const key of byMonth.keys()) {
+      const y = Number(key.slice(0, 4));
+      if (Number.isFinite(y)) {
+        if (y < minY) minY = y - 1;
+        if (y > maxY) maxY = y + 1;
+      }
+    }
+    return { minYear: Math.max(1990, minY), maxYear: Math.min(2099, maxY) };
+  }, [byMonth]);
+
   const goToday = useCallback(() => {
     const d = new Date();
+    const tk = todayKey();
     setCursor({ y: d.getFullYear(), m: d.getMonth() + 1 });
-    setSelected(todayKey());
+    // 今天有记录才选中今天；否则展示本月全部记录，避免空屏
+    setSelected((byDateRef.current.get(tk) || NO_RECORDS).length > 0 ? tk : null);
     shift.value = 0;
   }, [shift]);
 
@@ -256,22 +287,29 @@ export default function MonthView({ records, onPressItem }) {
     <View style={styles.container}>
       {/* 年月条固定在顶部，永远看得到 */}
       <View style={styles.monthBar}>
-        {/* 点年月可以跳到任意年月（不带日） */}
+        {/* 点年月可以跳到任意年月（iOS 用原生双滚轮，Android 用网格） */}
         <TouchableOpacity
           style={styles.monthLabelBtn}
-          onPress={() => { hapticSelection(); setPickerYear(cursor.y); setPickerOpen(v => !v); }}
+          onPress={() => {
+            hapticSelection();
+            setPickerYear(cursor.y);
+            setPickerMonth(cursor.m);
+            setPickerOpen((v) => !v);
+          }}
           activeOpacity={0.7}
           hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
         >
           <Text style={styles.monthLabel}>{`${cursor.y}年${cursor.m}月`}</Text>
-          <Text style={[styles.monthLabelChevron, pickerOpen && styles.monthLabelChevronUp]}>⌄</Text>
+          <View style={[styles.monthChevronWrap, pickerOpen && !hasNativeMonthPicker && styles.monthChevronUp]}>
+            <NativeIcon name="chevron.down" fallback={ChevronDown} size={12} color={colors.textMuted} weight="semibold" />
+          </View>
         </TouchableOpacity>
         <View style={styles.nav}>
           <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); goMonth(-1); }} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}>
-            <Text style={styles.navBtnText}>‹</Text>
+            <NativeIcon name="chevron.left" fallback={ChevronLeft} size={13} color={colors.textSecondary} weight="semibold" />
           </TouchableOpacity>
           <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); goMonth(1); }} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}>
-            <Text style={styles.navBtnText}>›</Text>
+            <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textSecondary} weight="semibold" />
           </TouchableOpacity>
           <TouchableOpacity style={styles.todayBtn} onPress={() => { hapticSelection(); goToday(); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}>
             <Text style={styles.todayBtnText}>今天</Text>
@@ -320,7 +358,27 @@ export default function MonthView({ records, onPressItem }) {
           windowSize={5}
           updateCellsBatchingPeriod={24}
           removeClippedSubviews={Platform.OS === 'android'}
-          ListEmptyComponent={<Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>}
+          ListEmptyComponent={(
+            <View style={styles.emptyWrap}>
+              <Text style={styles.empty}>{selected ? '这一天没有记录' : '这个月还没有记录'}</Text>
+              {!selected && latestRecordMonth && (latestRecordMonth.y !== cursor.y || latestRecordMonth.m !== cursor.m) && (
+                <TouchableOpacity
+                  style={styles.emptyJumpBtn}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    hapticSelection();
+                    setCursor(latestRecordMonth);
+                    setSelected(null);
+                    shift.value = 0;
+                  }}
+                >
+                  <Text style={styles.emptyJumpText}>
+                    前往最近有记录的 {latestRecordMonth.y}年{latestRecordMonth.m}月
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
           contentContainerStyle={styles.tlContent}
           ListHeaderComponent={(
             <GestureDetector gesture={swipeMonth}>
@@ -328,15 +386,15 @@ export default function MonthView({ records, onPressItem }) {
                 style={gridStyle}
                 onLayout={(e) => { headerHSV.value = e.nativeEvent.layout.height; }}
               >
-                {pickerOpen ? (
+                {pickerOpen && !hasNativeMonthPicker ? (
                   <View style={styles.picker}>
                     <View style={styles.pickerYearRow}>
-                      <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(v => v - 1)}>
-                        <Text style={styles.navBtnText}>‹</Text>
+                      <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); setPickerYear(v => v - 1); }}>
+                        <NativeIcon name="chevron.left" fallback={ChevronLeft} size={13} color={colors.textSecondary} weight="semibold" />
                       </TouchableOpacity>
                       <Text style={styles.pickerYear}>{pickerYear}年</Text>
-                      <TouchableOpacity style={styles.navBtn} onPress={() => setPickerYear(v => v + 1)}>
-                        <Text style={styles.navBtnText}>›</Text>
+                      <TouchableOpacity style={styles.navBtn} onPress={() => { hapticSelection(); setPickerYear(v => v + 1); }}>
+                        <NativeIcon name="chevron.right" fallback={ChevronRight} size={13} color={colors.textSecondary} weight="semibold" />
                       </TouchableOpacity>
                     </View>
                     <View style={styles.pickerMonths}>
@@ -347,6 +405,7 @@ export default function MonthView({ records, onPressItem }) {
                             key={m}
                             style={[styles.monthChip, on && styles.monthChipOn]}
                             onPress={() => {
+                              hapticSelection();
                               setCursor({ y: pickerYear, m });
                               setSelected(null);
                               setPickerOpen(false);
@@ -387,13 +446,78 @@ export default function MonthView({ records, onPressItem }) {
                       ? `${Number(selected.slice(5, 7))}月${Number(selected.slice(8, 10))}日`
                       : `${cursor.m}月 · 全部`}
                   </Text>
-                  <Text style={styles.tlCount}>{timeline.length ? `${timeline.filter((r) => r.kind === 'item').length} 条` : ''}</Text>
+                  <View style={styles.tlHeadRight}>
+                    {!!selected && (
+                      <TouchableOpacity
+                        style={styles.showAllBtn}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        onPress={() => { hapticSelection(); setSelected(null); }}
+                      >
+                        <Text style={styles.showAllText}>查看整月</Text>
+                      </TouchableOpacity>
+                    )}
+                    <Text style={styles.tlCount}>{timeline.length ? `${timeline.filter((r) => r.kind === 'item').length} 条` : ''}</Text>
+                  </View>
                 </View>
               </Reanimated.View>
             </GestureDetector>
           )}
         />
       </View>
+
+      {/* iOS 原生年月滚轮选择器 */}
+      {hasNativeMonthPicker && (
+        <Modal
+          visible={pickerOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPickerOpen(false)}
+        >
+          <TouchableOpacity
+            style={styles.nativePickerMask}
+            activeOpacity={1}
+            onPress={() => setPickerOpen(false)}
+          >
+            <TouchableOpacity style={styles.nativePickerSheet} activeOpacity={1} onPress={() => {}}>
+              <View style={styles.nativePickerBar}>
+                <TouchableOpacity
+                  onPress={() => setPickerOpen(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Text style={styles.nativePickerCancel}>取消</Text>
+                </TouchableOpacity>
+                <Text style={styles.nativePickerTitle}>选择年月</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    hapticSelection();
+                    setCursor({ y: pickerYear, m: pickerMonth });
+                    setSelected(null);
+                    setPickerOpen(false);
+                    shift.value = 0;
+                    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Text style={styles.nativePickerDone}>完成</Text>
+                </TouchableOpacity>
+              </View>
+              <NativeMonthPicker
+                minYear={yearBounds.minYear}
+                maxYear={yearBounds.maxYear}
+                year={pickerYear}
+                month={pickerMonth}
+                isDark={isDark}
+                onChange={({ year: y, month: m }) => {
+                  setPickerYear(y);
+                  setPickerMonth(m);
+                }}
+                style={styles.nativePickerWheel}
+              />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -403,11 +527,10 @@ const makeStyles = (c) => ({
   monthBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 6 },
   monthLabelBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, paddingRight: 6 },
   monthLabel: { fontSize: 16, fontWeight: '600', color: c.text },
-  monthLabelChevron: { fontSize: 13, color: c.textMuted, marginLeft: 5, marginTop: -3 },
-  monthLabelChevronUp: { transform: [{ rotate: '180deg' }], marginTop: 3 },
+  monthChevronWrap: { marginLeft: 5, alignItems: 'center', justifyContent: 'center' },
+  monthChevronUp: { transform: [{ rotate: '180deg' }] },
   nav: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   navBtn: { width: 30, height: 30, borderRadius: 10, backgroundColor: c.fill, alignItems: 'center', justifyContent: 'center' },
-  navBtnText: { fontSize: 16, color: c.textSecondary, marginTop: -2 },
   todayBtn: { height: 30, paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.accentSoft, alignItems: 'center', justifyContent: 'center' },
   todayBtnText: { fontSize: 12.5, color: c.accent, fontWeight: '600' },
   // 收起时固定显示的那条"本周"；左右缩进要跟日期格一致（见 TL_PAD_H / GRID_PAD_H 的说明）
@@ -443,6 +566,9 @@ const makeStyles = (c) => ({
 
   tlHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6, borderTopWidth: 1, borderTopColor: c.divider },
   tlTitle: { fontSize: 13.5, fontWeight: '600', color: c.text },
+  tlHeadRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  showAllBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: c.accentSoft },
+  showAllText: { fontSize: 11.5, fontWeight: '600', color: c.accent },
   tlCount: { fontSize: 11.5, color: c.textMuted },
   tlWrap: {
     flex: 1, marginHorizontal: TL_PAD_H, backgroundColor: c.bgElevated, borderRadius: 16, overflow: 'hidden',
@@ -450,5 +576,27 @@ const makeStyles = (c) => ({
   },
   tlContent: { paddingBottom: 0 },
   dayGroup: { fontSize: 11.5, color: c.textMuted, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
-  empty: { textAlign: 'center', color: c.textMuted, fontSize: 13, paddingVertical: 40 },
+  emptyWrap: { alignItems: 'center', paddingVertical: 36, gap: 12 },
+  empty: { textAlign: 'center', color: c.textMuted, fontSize: 13 },
+  emptyJumpBtn: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 14,
+    backgroundColor: c.accentSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.accentSoftBorder,
+  },
+  emptyJumpText: { fontSize: 12.5, fontWeight: '600', color: c.accent },
+  nativePickerMask: {
+    flex: 1, backgroundColor: c.overlay, justifyContent: 'flex-end',
+  },
+  nativePickerSheet: {
+    backgroundColor: c.bgElevated, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingBottom: 24, overflow: 'hidden',
+  },
+  nativePickerBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 18, paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.divider,
+  },
+  nativePickerTitle: { fontSize: 16, fontWeight: '600', color: c.textStrong },
+  nativePickerCancel: { fontSize: 15.5, color: c.textSecondary },
+  nativePickerDone: { fontSize: 15.5, fontWeight: '600', color: c.accent },
+  nativePickerWheel: { width: '100%', height: 216 },
 });

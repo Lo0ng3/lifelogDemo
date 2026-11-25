@@ -5,10 +5,11 @@ import {
   useWindowDimensions, Keyboard, Linking
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   User, ListFilter, Check, Search, X, RefreshCw, Upload, Download, Eraser, Settings, HelpCircle, FolderOpen,
-  ChevronLeft, ChevronRight, Pencil
+  ChevronLeft, ChevronRight, Pencil, Plane, Train, Bus, Ship, MapPin, Film, Tv, Sparkles, Gamepad2, BookOpen, BookText, FileText
 } from 'lucide-react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -38,7 +39,7 @@ import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
-import { getStorageSummaryAsync, clearWebKitCacheAsync, deleteSandboxFileAsync } from '../utils/storagePaths';
+import { getStorageSummaryAsync, deleteSandboxFileAsync } from '../utils/storagePaths';
 import { cleanupMediaCaches, describeMediaCopiesAsync, pruneOrphanMediaCopies } from '../utils/media';
 import { clearMotionVideoCache } from '../utils/livePhoto';
 import { requestAddDraftReset } from '../utils/draftReset';
@@ -76,13 +77,30 @@ const APPEARANCE_MODES = [
 ];
 const APPEARANCE_LABELS = APPEARANCE_MODES.map((m) => m.label);
 
-// 「清理缓存」选项：精简明了，均为可再生缓存
+const APP_VERSION = Constants.expoConfig?.version || '2.0.0';
+
+const FILTER_ICONS = {
+  flight: { sf: 'airplane', fallback: Plane },
+  train: { sf: 'tram.fill', fallback: Train },
+  bus: { sf: 'bus.fill', fallback: Bus },
+  ship: { sf: 'ferry.fill', fallback: Ship },
+  location: { sf: 'mappin.and.ellipse', fallback: MapPin },
+  movie: { sf: 'film', fallback: Film },
+  tv: { sf: 'tv', fallback: Tv },
+  anime: { sf: 'sparkles', fallback: Sparkles },
+  game: { sf: 'gamecontroller.fill', fallback: Gamepad2 },
+  book: { sf: 'book.fill', fallback: BookOpen },
+  diary: { sf: 'book.closed.fill', fallback: BookText },
+  memo: { sf: 'note.text', fallback: FileText },
+};
+
+// 「清理缓存」选项：精简明了，均为可再生缓存（iOS 原生苹果地图由系统管理缓存）
 const CACHE_TARGETS = [
   { key: 'thumbs', label: '视频封面帧', note: '按需自动重建' },
   { key: 'images', label: '图片缓存', note: '看图磁盘缓存' },
   { key: 'motion', label: '临时文件', note: '实况与导出临时文件' },
   { key: 'covers', label: '无引用与重复封面', note: '合并重复/旧版高清封面、清孤儿封面并瘦身自动备份' },
-  { key: 'map', label: '地图缓存', note: '地图瓦片与 SDK 缓存' },
+  ...(Platform.OS === 'ios' ? [] : [{ key: 'map', label: '地图缓存', note: '地图瓦片与 SDK 缓存' }]),
 ];
 const MAP_PROVIDERS = Platform.OS === 'ios'
   ? [
@@ -342,7 +360,6 @@ export default function HomeScreen({ navigation }) {
     if (syncing) return;
     setSyncing(true);
     setSyncProgress(null);
-    toggleSidebar(false);
     try {
       const report = await syncMedia((done, total) => setSyncProgress({ done, total }));
       if (report.permissionDenied) {
@@ -448,7 +465,6 @@ export default function HomeScreen({ navigation }) {
 
   // 备份导出：把全部记录写成 JSON 文件到用户选的文件夹
   const handleExportBackup = async () => {
-    toggleSidebar(false);
     const result = await exportBackup(
       logData,
       { tdtKey, mapProvider, amapKey, amapJsKey, amapJsCode },
@@ -495,7 +511,6 @@ export default function HomeScreen({ navigation }) {
 
   // 数据与存储：仿 iOS 系统储存空间展示全沙盒占用明细，与系统「文稿与数据」保持一致
   const handleShowStorage = () => {
-    toggleSidebar(false);
     setStorageOpen(true);
     refreshStorageStats();
   };
@@ -553,7 +568,6 @@ export default function HomeScreen({ navigation }) {
   };
 
   const handleImportBackup = async () => {
-    toggleSidebar(false);
     const result = await importBackup();
     if (result.canceled) return;
     if (!result.ok) {
@@ -596,16 +610,18 @@ export default function HomeScreen({ navigation }) {
      地图缓存和别的缓存共用一个 WebView 的 HTTP 缓存（瓦片 + 高德 SDK + 矢量数据），
      所以它单独一项、默认勾上——不想让下次进地图重新下 SDK 就取消它。 */
   const [cachePickerOpen, setCachePickerOpen] = useState(false);
-  const [cacheTargets, setCacheTargets] = useState({ thumbs: true, images: true, motion: true, covers: true, map: true });
+  const [cacheTargets, setCacheTargets] = useState({
+    thumbs: true, images: true, motion: true, covers: true, map: Platform.OS !== 'ios',
+  });
 
   const handleCleanCache = () => {
-    toggleSidebar(false);
     setCachePickerOpen(true);
   };
 
   const runCleanCache = async () => {
     const t = cacheTargets;
-    if (!t.thumbs && !t.images && !t.motion && !t.covers && !t.map) {
+    const cleanMap = Platform.OS !== 'ios' && t.map;
+    if (!t.thumbs && !t.images && !t.motion && !t.covers && !cleanMap) {
       Alert.alert('清理缓存', '一项都没选。');
       return;
     }
@@ -620,11 +636,9 @@ export default function HomeScreen({ navigation }) {
       });
       // 实况提取目录刚被清空，内存里"已就绪"的地址也要一起作废，不然会指向不存在的文件
       if (t.motion) clearMotionVideoCache();
-      if (t.map) {
+      if (cleanMap) {
         try {
-          // Android 走 WebView.clearCache(true)；iOS 走原生 WKWebsiteDataStore 清理磁盘/内存缓存
-          if (Platform.OS === 'ios') await clearWebKitCacheAsync();
-          else mapRef.current?.clearCache?.(true);
+          mapRef.current?.clearCache?.(true);
         } catch {}
       }
       const totalFreed = (res.freed || 0) + (dedupeRes.freed || 0);
@@ -643,7 +657,7 @@ export default function HomeScreen({ navigation }) {
       }
       Alert.alert('清理完成',
         `已释放 ${mb} MB 空间${parts.length ? `（${parts.join(' + ')}）` : ''}。`
-        + (t.map ? '\n地图缓存（瓦片 + 高德 SDK）也清空了，下次进地图会重新下载。' : ''));
+        + (cleanMap ? '\n地图缓存也已清空，下次进地图会重新加载。' : ''));
     } catch (e) {
       Alert.alert('清理失败', e?.message || '清理缓存时出现问题，请稍后再试。');
     }
@@ -1002,7 +1016,8 @@ export default function HomeScreen({ navigation }) {
     return { points, segs };
   }, [sortedData, placeAnchors]);
 
-  const useAppleMap = Platform.OS === 'ios' && mapProvider === 'apple' && hasNativeAppleMap;
+  // iOS 固定使用原生苹果地图（MapKit），不再走 WebView 地图服务配置
+  const useAppleMap = Platform.OS === 'ios' && hasNativeAppleMap;
   // 矢量渲染（高德官方 JS API 2.0）只在「高德 + 填了 Web端(JS API) key」时启用；
   // 一旦 JS API 没能出图就自动切回栅格底图，改 key / 换服务商会重新试一次
   const [jsApiFailed, setJsApiFailed] = useState(false);
@@ -1275,23 +1290,25 @@ export default function HomeScreen({ navigation }) {
 
             <Text style={styles.groupLabel}>记录与同步</Text>
             <View style={styles.menuCard}>
-              <TouchableOpacity style={styles.menuItem} onPress={openSettings} delayPressIn={0} activeOpacity={0.65}>
-                <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
-                  <NativeIcon name="gearshape.fill" fallback={Settings} size={17} color={colors.accent} />
-                </View>
-                <View style={styles.menuCopy}>
-                  <Text style={styles.menuItemText}>地图服务</Text>
-                  <Text style={styles.menuItemSub} numberOfLines={1}>
-                    {mapProvider === 'apple'
-                      ? '苹果地图 · 原生渲染 · 免密钥'
-                      : mapProvider === 'amap'
-                        ? `高德 · ${useJsApi ? '矢量渲染' : (amapJsKey && jsApiFailed ? '栅格底图（矢量回退）' : '栅格底图')}${amapKey ? ' · 已配检索' : ''}`
-                        : (tdtKey ? '天地图已配置' : '天地图未配置')}
-                  </Text>
-                </View>
-                <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
-              </TouchableOpacity>
-              <View style={styles.menuInsetDivider} />
+              {Platform.OS !== 'ios' && (
+                <>
+                  <TouchableOpacity style={styles.menuItem} onPress={openSettings} delayPressIn={0} activeOpacity={0.65}>
+                    <View style={[styles.menuIconBox, { backgroundColor: colors.iconTicket }]}>
+                      <NativeIcon name="gearshape.fill" fallback={Settings} size={17} color={colors.accent} />
+                    </View>
+                    <View style={styles.menuCopy}>
+                      <Text style={styles.menuItemText}>地图服务</Text>
+                      <Text style={styles.menuItemSub} numberOfLines={1}>
+                        {mapProvider === 'amap'
+                          ? `高德 · ${useJsApi ? '矢量渲染' : (amapJsKey && jsApiFailed ? '栅格底图（矢量回退）' : '栅格底图')}${amapKey ? ' · 已配检索' : ''}`
+                          : (tdtKey ? '天地图已配置' : '天地图未配置')}
+                      </Text>
+                    </View>
+                    <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
+                  </TouchableOpacity>
+                  <View style={styles.menuInsetDivider} />
+                </>
+              )}
               <TouchableOpacity style={styles.menuItem} onPress={handleSync} disabled={syncing} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.groupNoteSoft }]}>
                   <NativeIcon name="arrow.triangle.2.circlepath" fallback={RefreshCw} size={16} color={colors.groupNote} />
@@ -1309,7 +1326,9 @@ export default function HomeScreen({ navigation }) {
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>导出备份</Text>
-                  <Text style={styles.menuItemSub}>全部记录、封面与地图配置</Text>
+                  <Text style={styles.menuItemSub}>
+                    {Platform.OS === 'ios' ? '全部记录、封面与个人资料' : '全部记录、封面与地图配置'}
+                  </Text>
                 </View>
                 <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
@@ -1334,7 +1353,9 @@ export default function HomeScreen({ navigation }) {
                 </View>
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>清理缓存</Text>
-                  <Text style={styles.menuItemSub}>封面帧、图片与地图缓存</Text>
+                  <Text style={styles.menuItemSub}>
+                    {Platform.OS === 'ios' ? '封面帧、图片、临时文件与重复封面' : '封面帧、图片与地图缓存'}
+                  </Text>
                 </View>
                 <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
@@ -1350,7 +1371,7 @@ export default function HomeScreen({ navigation }) {
                 <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
               </TouchableOpacity>
               <View style={styles.menuInsetDivider} />
-              <TouchableOpacity style={styles.menuItem} onPress={() => { toggleSidebar(false); setHelpOpen(true); }} delayPressIn={0} activeOpacity={0.65}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => setHelpOpen(true)} delayPressIn={0} activeOpacity={0.65}>
                 <View style={[styles.menuIconBox, { backgroundColor: colors.fill }]}>
                   <NativeIcon name="questionmark.circle" fallback={HelpCircle} size={17} color={colors.textSecondary} />
                 </View>
@@ -1362,7 +1383,7 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.version}>印记 1.9.11</Text>
+            <Text style={styles.version}>印记 {APP_VERSION}</Text>
           </ScrollView>
         </View>
         </Reanimated.View>
@@ -1371,18 +1392,24 @@ export default function HomeScreen({ navigation }) {
       <View style={[styles.mainContent, { paddingTop: insets.top }]}>
         <View style={styles.header}>
           <TouchableOpacity
-            style={[styles.profileBtn, Platform.OS === 'ios' && styles.profileBtnGlass]}
+            style={[styles.profileBtn, Platform.OS === 'ios' && !profileAvatarUri && styles.profileBtnGlass]}
             onPress={() => { hapticSelection(); toggleSidebar(true); }}
             delayPressIn={0}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
-            <NativeIcon
-              name="person.fill"
-              fallback={User}
-              color={Platform.OS === 'ios' ? colors.accent : colors.textOnAccent}
-              size={18}
-            />
+            {profileAvatarUri ? (
+              <Image source={{ uri: profileAvatarUri }} style={styles.profileBtnAvatar} contentFit="cover" />
+            ) : (
+              <>
+                {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
+                <NativeIcon
+                  name="person.fill"
+                  fallback={User}
+                  color={Platform.OS === 'ios' ? colors.accent : colors.textOnAccent}
+                  size={18}
+                />
+              </>
+            )}
           </TouchableOpacity>
           <ViewSwitcher value={pillMode} onChange={changeView} />
           <View style={{ width: 36 }} /> 
@@ -1472,6 +1499,26 @@ export default function HomeScreen({ navigation }) {
               windowSize={6}
               updateCellsBatchingPeriod={24}
               removeClippedSubviews={Platform.OS === 'android'}
+              ListEmptyComponent={(
+                <View style={styles.emptyListBox}>
+                  <Text style={styles.emptyText}>
+                    {activeFilters.length > 0 || searchQuery.trim() ? '没有符合条件的印记' : '还没有印记，点底部「添加」开始记录'}
+                  </Text>
+                  {(activeFilters.length > 0 || !!searchQuery.trim()) && (
+                    <TouchableOpacity
+                      style={styles.emptyClearBtn}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        hapticSelection();
+                        setActiveFilters([]);
+                        setSearchQuery('');
+                      }}
+                    >
+                      <Text style={styles.emptyClearText}>清空筛选</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             />
           </Reanimated.View>
         </Reanimated.View>
@@ -1586,28 +1633,95 @@ export default function HomeScreen({ navigation }) {
         onDismiss={() => setSheetOpen(false)}
       >
         <BottomSheetView style={styles.sheetHeader}>
-          <BottomSheetTouchableOpacity onPress={() => setActiveFilters([])} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
+          <BottomSheetTouchableOpacity onPress={() => { hapticSelection(); setActiveFilters([]); }} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextGray}>重置</Text></BottomSheetTouchableOpacity>
           <Text style={styles.sheetTitle}>筛选</Text>
-          <BottomSheetTouchableOpacity onPress={() => filterSheetRef.current?.dismiss()} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextBlue}>完成</Text></BottomSheetTouchableOpacity>
+          <BottomSheetTouchableOpacity onPress={() => { hapticSelection(); filterSheetRef.current?.dismiss(); }} style={styles.headerHitSlop}><Text style={styles.sheetBtnTextBlue}>完成</Text></BottomSheetTouchableOpacity>
         </BottomSheetView>
         <BottomSheetScrollView style={styles.sheetScroll} showsVerticalScrollIndicator={false}>
           {/* 时间筛选已去掉：按年月看记录改到「日历」页里点年月选择 */}
           <Text style={styles.categoryTitle}>记录类型</Text>
           <Text style={styles.sectionTitle}>旅票</Text>
           <View style={styles.chipGrid}>
-            {subTypeOptions.ticket.map(sub => (<BottomSheetTouchableOpacity key={sub.id} onPress={() => setActiveFilters(prev => activeFilters.includes(sub.id) ? prev.filter(f => f !== sub.id) : [...prev, sub.id])} style={[styles.chip, activeFilters.includes(sub.id) && styles.chipActive]}>{activeFilters.includes(sub.id) && <Check size={15} color={colors.accent} style={styles.checkIcon}/>}<Text style={[styles.chipText, activeFilters.includes(sub.id) && styles.chipTextActive]}>{sub.label}</Text></BottomSheetTouchableOpacity>))}
+            {subTypeOptions.ticket.map((sub) => {
+              const on = activeFilters.includes(sub.id);
+              const ic = FILTER_ICONS[sub.id];
+              return (
+                <BottomSheetTouchableOpacity
+                  key={sub.id}
+                  onPress={() => {
+                    hapticSelection();
+                    setActiveFilters((prev) => (prev.includes(sub.id) ? prev.filter((f) => f !== sub.id) : [...prev, sub.id]));
+                  }}
+                  style={[styles.chip, on && styles.chipActive]}
+                >
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.accent : colors.textSecondary} />}
+                  <Text style={[styles.chipText, on && styles.chipTextActive]}>{sub.label}</Text>
+                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.accent} weight="bold" />}
+                </BottomSheetTouchableOpacity>
+              );
+            })}
           </View>
           <Text style={styles.sectionTitle}>地点</Text>
           <View style={styles.chipGrid}>
-            <BottomSheetTouchableOpacity onPress={() => setActiveFilters(prev => prev.includes('location') ? prev.filter(f => f !== 'location') : [...prev, 'location'])} style={[styles.chip, activeFilters.includes('location') && styles.chipActiveRed]}>{activeFilters.includes('location') && <Check size={15} color={colors.danger} style={styles.checkIcon}/>}<Text style={[styles.chipText, activeFilters.includes('location') && styles.chipTextActiveRed]}>地点</Text></BottomSheetTouchableOpacity>
+            {(() => {
+              const on = activeFilters.includes('location');
+              const ic = FILTER_ICONS.location;
+              return (
+                <BottomSheetTouchableOpacity
+                  onPress={() => {
+                    hapticSelection();
+                    setActiveFilters((prev) => (prev.includes('location') ? prev.filter((f) => f !== 'location') : [...prev, 'location']));
+                  }}
+                  style={[styles.chip, on && styles.chipActiveRed]}
+                >
+                  <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.danger : colors.textSecondary} />
+                  <Text style={[styles.chipText, on && styles.chipTextActiveRed]}>地点</Text>
+                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.danger} weight="bold" />}
+                </BottomSheetTouchableOpacity>
+              );
+            })()}
           </View>
           <Text style={styles.sectionTitle}>娱乐与阅读</Text>
           <View style={styles.chipGrid}>
-            {subTypeOptions.media.map(sub => (<BottomSheetTouchableOpacity key={sub.id} onPress={() => setActiveFilters(prev => activeFilters.includes(sub.id) ? prev.filter(f => f !== sub.id) : [...prev, sub.id])} style={[styles.chip, activeFilters.includes(sub.id) && styles.chipActivePurple]}>{activeFilters.includes(sub.id) && <Check size={15} color={colors.purple} style={styles.checkIcon}/>}<Text style={[styles.chipText, activeFilters.includes(sub.id) && styles.chipTextActivePurple]}>{sub.label}</Text></BottomSheetTouchableOpacity>))}
+            {subTypeOptions.media.map((sub) => {
+              const on = activeFilters.includes(sub.id);
+              const ic = FILTER_ICONS[sub.id];
+              return (
+                <BottomSheetTouchableOpacity
+                  key={sub.id}
+                  onPress={() => {
+                    hapticSelection();
+                    setActiveFilters((prev) => (prev.includes(sub.id) ? prev.filter((f) => f !== sub.id) : [...prev, sub.id]));
+                  }}
+                  style={[styles.chip, on && styles.chipActivePurple]}
+                >
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.purple : colors.textSecondary} />}
+                  <Text style={[styles.chipText, on && styles.chipTextActivePurple]}>{sub.label}</Text>
+                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.purple} weight="bold" />}
+                </BottomSheetTouchableOpacity>
+              );
+            })}
           </View>
           <Text style={styles.sectionTitle}>随笔</Text>
           <View style={styles.chipGrid}>
-            {NOTE_SUB_OPTIONS.map(sub => (<BottomSheetTouchableOpacity key={sub.id} onPress={() => setActiveFilters(prev => activeFilters.includes(sub.id) ? prev.filter(f => f !== sub.id) : [...prev, sub.id])} style={[styles.chip, activeFilters.includes(sub.id) && styles.chipActiveGreen]}>{activeFilters.includes(sub.id) && <Check size={15} color={colors.groupNote} style={styles.checkIcon}/>}<Text style={[styles.chipText, activeFilters.includes(sub.id) && styles.chipTextActiveGreen]}>{sub.label}</Text></BottomSheetTouchableOpacity>))}
+            {NOTE_SUB_OPTIONS.map((sub) => {
+              const on = activeFilters.includes(sub.id);
+              const ic = FILTER_ICONS[sub.id];
+              return (
+                <BottomSheetTouchableOpacity
+                  key={sub.id}
+                  onPress={() => {
+                    hapticSelection();
+                    setActiveFilters((prev) => (prev.includes(sub.id) ? prev.filter((f) => f !== sub.id) : [...prev, sub.id]));
+                  }}
+                  style={[styles.chip, on && styles.chipActiveGreen]}
+                >
+                  {ic && <NativeIcon name={ic.sf} fallback={ic.fallback} size={13.5} color={on ? colors.groupNote : colors.textSecondary} />}
+                  <Text style={[styles.chipText, on && styles.chipTextActiveGreen]}>{sub.label}</Text>
+                  {on && <NativeIcon name="checkmark" fallback={Check} size={12.5} color={colors.groupNote} weight="bold" />}
+                </BottomSheetTouchableOpacity>
+              );
+            })}
           </View>
         </BottomSheetScrollView>
       </BottomSheetModal>
@@ -1844,6 +1958,10 @@ const makeStyles = (c) => ({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, height: 44 },
   profileBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.accent, justifyContent: 'center', alignItems: 'center' },
   profileBtnGlass: { backgroundColor: 'transparent' },
+  profileBtnAvatar: {
+    width: 36, height: 36, borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+  },
   largeTitle: { fontSize: 34, fontWeight: 'bold', paddingHorizontal: 16, marginTop: 10, marginBottom: 10, color: c.textStrong },
   segmentedControl: { flexDirection: 'row', backgroundColor: c.fill, borderRadius: 9, padding: 2, width: 204 },
   nativeSegmented: { width: 210, height: 34 },
@@ -1879,7 +1997,13 @@ const makeStyles = (c) => ({
   // 舞台：平时就是普通的一层（铺满地图层），全屏时换成居中的正方形（尺寸在 JS 里算）
   mapStage: { flex: 1 },
   mapBox: { flex: 1 },
-  emptyText: { fontSize: 14, color: c.textMuted },
+  emptyListBox: { alignItems: 'center', paddingVertical: 56, paddingHorizontal: 24, gap: 14 },
+  emptyText: { fontSize: 14, color: c.textMuted, textAlign: 'center' },
+  emptyClearBtn: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16,
+    backgroundColor: c.accentSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: c.accentSoftBorder,
+  },
+  emptyClearText: { fontSize: 13, fontWeight: '600', color: c.accent },
   map: { flex: 1 },
   exportBtn: { position: 'absolute', right: 20, backgroundColor: c.text, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25 },
   exportBtnText: { color: c.bgElevated, marginLeft: 8, fontWeight: '600' },
@@ -1934,7 +2058,7 @@ const makeStyles = (c) => ({
     borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
   },
   syncPill: {
-    position: 'absolute', left: 40, right: 40, bottom: 28,
+    position: 'absolute', left: 40, right: 40, bottom: 28, zIndex: 140,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.75)',
   },
@@ -1998,7 +2122,7 @@ const makeStyles = (c) => ({
   monthSection: { marginBottom: 20 },
   divider: { height: 1, backgroundColor: c.border, marginVertical: 16 },
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
-  chip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 36, backgroundColor: c.bgSunken, paddingHorizontal: 16, borderRadius: 18, borderWidth: 1, borderColor: c.borderSoft, marginRight: 10, marginBottom: 10 },
+  chip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, backgroundColor: c.bgSunken, paddingHorizontal: 14, borderRadius: 18, borderWidth: 1, borderColor: c.borderSoft, marginRight: 10, marginBottom: 10 },
   chipText: { fontSize: 14, color: c.textSecondary },
   checkIcon: { marginRight: 4, marginTop: 1 }, 
   chipActive: { backgroundColor: c.accentSoft, borderColor: c.accentSoftBorder },

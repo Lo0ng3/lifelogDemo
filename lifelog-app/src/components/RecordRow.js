@@ -66,7 +66,7 @@ const RecordRow = React.memo(function RecordRow({ item, isLast, onPress, style }
               {labelOf(item)}
             </Text>
             {essay ? (
-              <Text style={styles.moodText}>{item.mood}{item.weather ? ` · ${item.weather}` : ''}</Text>
+              <Text style={styles.moodText}>{item.mood}</Text>
             ) : renderStars(stars, colors, styles)}
           </View>
           {!!textLine && <Text style={styles.itemSubtitle} numberOfLines={1}>{textLine}</Text>}

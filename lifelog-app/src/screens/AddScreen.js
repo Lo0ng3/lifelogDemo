@@ -23,7 +23,7 @@ import Reanimated, { FadeIn } from 'react-native-reanimated';
 import { LogContext } from '../context/LogContext';
 import { fetchSuggestions, fetchPlaceSuggestions, fetchPlaceGeocode, hasLocationSearch, withTimeout } from '../utils/search';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
-import { MOOD_OPTIONS, WEATHER_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
+import { MOOD_OPTIONS, NOTE_SUB_OPTIONS, TICKET_SUB_OPTIONS, MEDIA_SUB_OPTIONS } from '../utils/recordMeta';
 
 let Thumbs = null;
 try {
@@ -115,10 +115,9 @@ export default function AddScreen({ navigation, route }) {
   
   const [rating, setRating] = useState(0); 
   const [comment, setComment] = useState(''); 
-  // 随笔（一级）专用：标题选填、心情必填、日记多一个天气
+  // 随笔（一级）专用：标题选填、心情必填
   const [noteTitle, setNoteTitle] = useState('');
   const [mood, setMood] = useState(null);
-  const [weather, setWeather] = useState(null);
   const [moodDraft, setMoodDraft] = useState('');
   const [editCoverIndex, setEditCoverIndex] = useState(null);   // 编辑时原封带回顾有的封面选择
   const [editPhotoCount, setEditPhotoCount] = useState(0);
@@ -193,7 +192,7 @@ export default function AddScreen({ navigation, route }) {
     setRating(0); setComment(''); setTicketOrigin(''); setTicketDest(''); setTicketNo('');
     setYear(def.y); setMonth(def.m); setDay(def.d); setHour(''); setMinute('');
     setSelectedImages([]); setSearchQuery(''); setShowSearchAuto(false);
-    setNoteTitle(''); setMood(null); setWeather(null); setMoodDraft('');
+    setNoteTitle(''); setMood(null); setMoodDraft('');
     setEditCoverIndex(null); setEditPhotoCount(0);
     setSearchResults([]); setCoverUrl(null); setCoverRatio(null); setLocationCoords(null);
     setOriginResults([]); setShowOriginAuto(false); setOriginCoord(null);
@@ -453,7 +452,6 @@ export default function AddScreen({ navigation, route }) {
         // 随笔：标题选填，正文放在 subtitle，心情必填，日记还带天气
         setNoteTitle(item.title || '');
         setMood(item.mood || null);
-        setWeather(item.weather || null);
         setMoodDraft(MOOD_OPTIONS.includes(item.mood) ? '' : (item.mood || ''));
       }
 
@@ -813,7 +811,7 @@ export default function AddScreen({ navigation, route }) {
       comment: baseType === 'ticket' && comment.trim() ? comment : null,
       // 随笔：心情必填，天气只有日记有；评分不参与
       mood: baseType === 'note' ? essayMood : null,
-      weather: baseType === 'note' && subType === 'diary' ? (weather || null) : null,
+      weather: null,
       // 时间选填：填了才拼进日期，不填只存日期（不再出现 00:00 凑数时间）
       // 只有旅票带时分（出发时间有意义），其余类型只存日期
       date: `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`
@@ -1277,6 +1275,10 @@ export default function AddScreen({ navigation, route }) {
                 placeholder={subType === 'diary' ? '标题（选填）' : '发生了什么事（选填）'}
                 placeholderTextColor={colors.textFaint}
               />
+            </View>
+            <View style={styles.cardDivider} />
+            <View style={styles.noteBodyHeader}>
+              <Text style={styles.sectionMiniLabel}>正文</Text>
               <TouchableOpacity
                 style={styles.expandBtn}
                 onPress={() => { hapticSelection(); setFullscreenComment(true); }}
@@ -1286,7 +1288,6 @@ export default function AddScreen({ navigation, route }) {
                 <Text style={styles.expandBtnText}>全屏</Text>
               </TouchableOpacity>
             </View>
-            <View style={styles.cardDivider} />
             <TextInput
               style={styles.noteBodyInput}
               ref={fieldRef('comment')}
@@ -1440,29 +1441,6 @@ export default function AddScreen({ navigation, route }) {
                   />
                 </View>
               </View>
-              {subType === 'diary' && (
-                <>
-                  <View style={styles.cardDivider} />
-                  <View style={styles.cardSection}>
-                    <Text style={styles.sectionMiniLabel}>天气（选填）</Text>
-                    <View style={styles.moodRow}>
-                      {WEATHER_OPTIONS.map((w) => {
-                        const on = weather === w;
-                        return (
-                          <TouchableOpacity
-                            key={w}
-                            style={[styles.weatherChip, on && styles.moodChipOn]}
-                            delayPressIn={0}
-                            onPress={() => { hapticSelection(); setWeather(on ? null : w); }}
-                          >
-                            <Text style={[styles.weatherChipText, on && styles.weatherChipTextOn]}>{w}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-                </>
-              )}
             </>
           ) : renderRatingRow()}
         </View>
@@ -1505,13 +1483,6 @@ export default function AddScreen({ navigation, route }) {
               <Text style={styles.rowLabel}>
                 照片 <Text style={styles.rowCount}>({selectedImages.length})</Text>
               </Text>
-              <TouchableOpacity
-                onPress={openMediaPicker}
-                delayPressIn={0}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Text style={styles.pickPhotoLink}>从相册选择</Text>
-              </TouchableOpacity>
             </View>
             <View style={styles.imageGrid}>
               {selectedImages.map((entry, idx) => (
@@ -1672,6 +1643,10 @@ const makeStyles = (c) => ({
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10,
   },
   noteTitleInput: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textStrong, paddingVertical: 2 },
+  noteBodyHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 2,
+  },
   noteBodyInput: {
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14,
     fontSize: 15.5, lineHeight: 24, minHeight: 128, color: c.text,

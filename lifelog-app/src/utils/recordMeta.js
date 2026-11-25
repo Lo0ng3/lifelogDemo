@@ -18,9 +18,8 @@ export const TYPE_EMOJI = {
   ticket: '✈️', media: '🎬', note: '📔',
 };
 
-// 随笔（一级）的心情 emoji：预设 5 个 + 允许自填任意 emoji
-export const MOOD_OPTIONS = ['😄', '🙂', '😌', '😤', '🥱'];
-export const WEATHER_OPTIONS = ['晴', '多云', '阴', '雨', '雪'];
+// 随笔（一级）的心情 emoji：从开心到难过 5 档梯度 + 允许自填任意 emoji
+export const MOOD_OPTIONS = ['😄', '🙂', '😐', '😔', '😢'];
 
 // 随笔的两个二级类型
 export const NOTE_SUB_OPTIONS = [{ id: 'diary', label: '日记' }, { id: 'memo', label: '事迹' }];

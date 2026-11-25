@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import * as FileSystem from 'expo-file-system/legacy';
+import { CircleDot } from 'lucide-react-native';
 import { getIconConfig } from '../utils/icons';
 import { resolveMediaUri, remoteImageSource } from '../utils/media';
 import { useTheme } from '../theme/ThemeProvider';
+import NativeIcon from './NativeIcon';
 
 // 封面展示：固定方形槽位（透明、无底色），封面按原比例完整显示并居中（contain），
 // 不裁切不拉伸不强制铺满，槽位内空隙即卡片背景。
@@ -36,21 +38,35 @@ export default function CoverIcon({ item, height = 64, style }) {
     return () => { alive = false; };
   }, [entry, item?.coverThumbUrl]);
 
+  const isLiveCover = !!(
+    entry &&
+    typeof entry === 'object' &&
+    (entry.liveStatus === 'live' ||
+      entry.mediaSubtypes?.includes('livePhoto') ||
+      entry.mediaSubtypes?.includes('photoLive'))
+  );
   const src = item?.coverThumbUrl || uri || item?.coverUrl;
   return (
     <View style={[styles.slot, { width: height, height }, style]}>
       {src ? (
-        <Image
-          source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
-          style={StyleSheet.absoluteFill}
-          contentFit="contain"
-          transition={150}
-          // memory 只走内存缓存：列表来回滑、封面被挤出内存就得重新联网下载，
-          // 滚动时就是一团解码/GC 抖动。memory-disk 是默认档，落盘一次之后不再重下
-          cachePolicy="memory-disk"
-          // 列表回收格子时告诉 expo-image「这是换了内容的新图」，避免闪上一行的封面
-          recyclingKey={item?.id != null ? String(item.id) : undefined}
-        />
+        <>
+          <Image
+            source={src.startsWith('http') ? remoteImageSource(src) : { uri: src }}
+            style={StyleSheet.absoluteFill}
+            contentFit="contain"
+            transition={150}
+            // memory 只走内存缓存：列表来回滑、封面被挤出内存就得重新联网下载，
+            // 滚动时就是一团解码/GC 抖动。memory-disk 是默认档，落盘一次之后不再重下
+            cachePolicy="memory-disk"
+            // 列表回收格子时告诉 expo-image「这是换了内容的新图」，避免闪上一行的封面
+            recyclingKey={item?.id != null ? String(item.id) : undefined}
+          />
+          {isLiveCover && (
+            <View style={styles.liveDotBadge} pointerEvents="none">
+              <NativeIcon name="livephoto" fallback={CircleDot} size={11} color="#FFF" weight="semibold" />
+            </View>
+          )}
+        </>
       ) : (
         <View style={[styles.iconBox, { backgroundColor: iconBgColor }]}>
           <IconComponent color={iconColor} size={Math.round(height * 0.44)} />
@@ -63,4 +79,15 @@ export default function CoverIcon({ item, height = 64, style }) {
 const styles = StyleSheet.create({
   slot: { alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 11, overflow: 'hidden' },
   iconBox: { width: '100%', height: '100%', borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  liveDotBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

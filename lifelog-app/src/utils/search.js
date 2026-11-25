@@ -1,17 +1,12 @@
-// 智能补全的检索源：豆瓣联想接口（国内直连、免密钥、带海报）
-// - 电影/剧集/动漫 → 影视库，书籍 → 读书库
-// - Apple 已把影视类目从 iTunes 搜索 API 下架，iTunes 音乐结果对记录作品没有参考价值，故不再兜底
-// - 游戏没有稳定免密数据源，不提供联想（豆瓣主站联想接口已下线）
+// 智能补全的检索源：
+// - 娱乐（电影/剧集/动漫/游戏/书籍）：统一使用百度百科（免密钥、国内直连、带词条摘要与无防盗链配图）
+// - 地点：iOS 固定使用苹果原生 MapKit，Android 可选天地图 / 高德
 
 import { Platform } from 'react-native';
 import { gcj02ToWgs84 } from './coord';
 import { hasAppleMapSearch, searchApplePlacesAsync, geocodeApplePlaceAsync } from './appleMap';
 
-const DOUBAN_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-};
-
-// 网络请求统一 8 秒超时：挂死的请求（豆瓣昨晚那种"不返回"）不再阻塞联想/封面回填流程。
+// 网络请求统一 8 秒超时：挂死的请求不再阻塞联想/封面回填流程。
 // 超时只让调用方尽快失败，底层请求会随调用方的 AbortSignal 或 GC 结束
 export const withTimeout = (promise, ms = 8000) => {
   const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms));
@@ -19,22 +14,16 @@ export const withTimeout = (promise, ms = 8000) => {
   return Promise.race([promise, timeout]);
 };
 
-// 豆瓣海报是竖版 2:3（与 Steam library_600x900 一致）
-const DOUBAN_POSTER_RATIO = 2 / 3;
+const MEDIA_SUBTYPES = new Set(['movie', 'tv', 'anime', 'game', 'book']);
 
-const doubanHostBySubType = { movie: 'movie', tv: 'movie', anime: 'movie', book: 'book' };
-
-// 地点联想 / 地理编码：三种服务商可选
-// - 苹果地图（iOS 原生 MapKit）：免密钥、国内直连高德 POI 库，坐标为 GCJ-02，入库前转 WGS-84
-// - 天地图：全链路 WGS-84 无偏移，底图/检索共用同一个 tk
-// - 高德：检索结果是 GCJ-02（火星坐标），这里统一转回 WGS-84 再交给上层，
-//   保证库里存的始终是 WGS-84；底图那侧显示时再转过去
-// loc = { provider: 'apple' | 'tianditu' | 'amap', key }
+// 地点联想 / 地理编码：
+// - iOS：固定使用苹果原生 MapKit（免密钥、国内直连高德 POI 库，坐标为 GCJ-02，入库前转 WGS-84）
+// - Android：天地图（WGS-84）或高德（GCJ-02 转回 WGS-84）
 export const hasLocationSearch = (loc) => (
-  (loc?.provider === 'apple' && Platform.OS === 'ios' && hasAppleMapSearch) || !!loc?.key
+  (Platform.OS === 'ios' && hasAppleMapSearch) || !!loc?.key
 );
 export const locationProviderLabel = (loc) => (
-  loc?.provider === 'apple' ? '苹果地图' : (loc?.provider === 'amap' ? '高德' : '天地图')
+  Platform.OS === 'ios' || loc?.provider === 'apple' ? '苹果地图' : (loc?.provider === 'amap' ? '高德' : '天地图')
 );
 
 // 天地图 API 在华为云 WAF 后面：非浏览器 User-Agent（如 RN 的 okhttp）会被 403，统一伪装成浏览器
@@ -42,18 +31,17 @@ const TDT_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 };
 
-const parseLonlat = s => {
+const parseLonlat = (s) => {
   if (!s) return null;
   const [lng, lat] = String(s).split(',').map(Number);
   return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null;
 };
 
-// 地名搜索 V2.0 模糊搜索做输入联想。
-// 返回 [{ name, district, lng, lat, isPrompt }]；isPrompt 的联想词无坐标，选中后拿 name 再搜一次
+// 地名输入联想。返回 [{ name, district, lng, lat, isPrompt }]
 export async function fetchPlaceSuggestions(query, loc, signal) {
   const { provider, key } = loc || {};
   if (!query.trim()) return [];
-  if (provider === 'apple' && Platform.OS === 'ios') {
+  if (Platform.OS === 'ios') {
     return fetchAppleSuggestions(query, signal);
   }
   if (!key) return [];
@@ -95,9 +83,10 @@ async function fetchTdtSuggestions(query, tdtKey, signal) {
   const postStr = JSON.stringify({
     keyWord: query.trim(),
     level: 12,
-    mapBound: '73.0,3.0,136.0,54.0',   // 全国范围
-    queryType: '1',                     // 1 = 普通搜索
-    start: 0, count: 8,
+    mapBound: '73.0,3.0,136.0,54.0',
+    queryType: '1',
+    start: 0,
+    count: 8,
   });
   const res = await withTimeout(fetch(`https://api.tianditu.gov.cn/v2/search?postStr=${encodeURIComponent(postStr)}&type=query&tk=${encodeURIComponent(tdtKey)}`, { headers: TDT_HEADERS, signal }));
   const body = await res.text();
@@ -108,41 +97,38 @@ async function fetchTdtSuggestions(query, tdtKey, signal) {
     throw new Error(data.status.cndesc || `infocode ${data.status.infocode}`);
   }
   const items = [];
-  // 普通 POI 结果（兼容 pois 为对象{poi:[]}或数组两种结构）
   const poiList = Array.isArray(data.pois) ? data.pois : (data.pois && data.pois.poi) || [];
-  poiList.forEach(p => {
+  poiList.forEach((p) => {
     if (p && p.name) {
       const ll = parseLonlat(p.lonlat);
       items.push({ name: p.name, district: [p.typeName, p.address].filter(Boolean).join(' · '), lng: ll ? ll.lng : null, lat: ll ? ll.lat : null, isPrompt: false });
     }
   });
-  // 行政区划直接命中（如搜"北京"，带坐标）
   if (data.area && data.area.name) {
     const ll = parseLonlat(data.area.lonlat);
     items.push({ name: data.area.name, district: '行政区划', lng: ll ? ll.lng : null, lat: ll ? ll.lat : null, isPrompt: false });
   }
-  // 联想词（无坐标）
-  (data.prompt || []).forEach(p => {
+  (data.prompt || []).forEach((p) => {
     if (p && p.keyword) {
-      const admins = (p.admins || []).map(a => a.adminName).filter(Boolean).join('');
+      const admins = (p.admins || []).map((a) => a.adminName).filter(Boolean).join('');
       items.push({ name: p.keyword, district: '联想词 · ' + (admins || '点击继续搜索'), lng: null, lat: null, isPrompt: true });
     }
   });
-  (data.suggests || []).forEach(s => {
+  (data.suggests || []).forEach((s) => {
     if (s && s.name) {
       const ll = parseLonlat(s.lonlat);
       items.push({ name: s.name, district: s.address || '', lng: ll ? ll.lng : null, lat: ll ? ll.lat : null, isPrompt: false });
     }
   });
   const seen = new Set();
-  return items.filter(it => {
+  return items.filter((it) => {
     if (seen.has(it.name)) return false;
     seen.add(it.name);
     return true;
   }).slice(0, 8);
 }
 
-/* ---------------------- 高德（REST 检索，坐标为 GCJ-02，这里转回 WGS-84） ---------------------- */
+/* ---------------------- 高德（Android 检索，GCJ-02 转回 WGS-84） ---------------------- */
 const amapLoc = (location) => {
   const [lng, lat] = String(location || '').split(',').map(Number);
   if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
@@ -167,7 +153,7 @@ async function fetchAmapSuggestions(query, key, signal) {
         district: [t.district, t.address].filter(Boolean).join(' · '),
         lng: w ? w.lng : null,
         lat: w ? w.lat : null,
-        isPrompt: !w,     // 没坐标的候选：选中后拿名字再搜一次
+        isPrompt: !w,
       };
     })
     .slice(0, 8);
@@ -192,7 +178,7 @@ async function fetchAmapGeocode(name, key, signal) {
 export async function fetchPlaceGeocode(name, loc, signal) {
   const { provider, key } = loc || {};
   if (!name.trim()) return null;
-  if (provider === 'apple' && Platform.OS === 'ios') {
+  if (Platform.OS === 'ios') {
     return fetchAppleGeocode(name, signal);
   }
   if (!key) return null;
@@ -211,90 +197,91 @@ async function fetchTdtGeocode(name, tdtKey, signal) {
   return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null;
 }
 
-// 游戏源 1：Steam 商店搜索（免密钥、国区可直连、带封面）
-// 竖版 library_600x900 封面对新老游戏普遍有效，和百科竖图一致适合当封面
-async function fetchSteamSuggestions(query, signal) {
+/* ---------------------- 娱乐与阅读检索：统一使用百度百科 ---------------------- */
+// 百度百科词条卡片：返回词条标题、简介与配图（bkimg CDN 无防盗链）
+async function fetchBaikeCard(keyword, signal) {
   const res = await withTimeout(fetch(
-    `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(query)}&l=schinese&cc=CN`,
+    `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(keyword)}&bk_length=600`,
     { signal }
-  ));
+  ), 5000);
+  if (!res.ok) return null;
   const data = await res.json();
-  return (data.items || []).slice(0, 6).map(item => ({
-    title: item.name,
-    meta: 'Steam',
-    artwork: item.id
-      ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.id}/library_600x900.jpg`
-      : null,
-    ratio: 2 / 3,
-  }));
-}
-
-// 游戏源 2：百度百科开放接口（覆盖未上架 Steam 的主机/手机游戏等）
-// 返回词条摘要 + 配图（bkimg CDN 无防盗链）+ 图片宽高
-async function fetchBaikeSuggestion(query, signal) {
-  const res = await withTimeout(fetch(
-    `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(query)}&bk_length=600`,
-    { signal }
-  ));
-  const data = await res.json();
-  if (!data.title) return [];
-  // 百科会返回最接近的词条，标题和搜索词完全无关的结果过滤掉
-  const q = query.trim().toLowerCase();
-  const t = String(data.title).toLowerCase();
-  if (!t.includes(q) && !q.includes(t)) return [];
+  if (!data?.title) return null;
   const ratio = data.imageWidth && data.imageHeight ? data.imageWidth / data.imageHeight : null;
-  return [{
-    title: data.title,
-    meta: data.desc || '百度百科词条',
+  return {
+    title: String(data.title),
+    meta: data.desc || '百度百科',
     artwork: data.image || null,
     ratio,
-  }];
+  };
 }
 
-async function fetchGameSuggestions(query, signal) {
-  const results = await Promise.allSettled([
-    fetchSteamSuggestions(query, signal),
-    fetchBaikeSuggestion(query, signal),
-  ]);
-  const merged = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
-  const seen = new Set();
-  return merged.filter(({ title }) => {
-    const key = title.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+// 百度联想词（纯 UTF-8 JSON），用于半截输入时补全候选，再并行拉对应百科词条卡片
+async function fetchBaiduCompletions(query, signal) {
+  try {
+    const res = await withTimeout(fetch(
+      `https://www.baidu.com/sugrec?prod=pc&wd=${encodeURIComponent(query)}`,
+      { signal }
+    ), 3500);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const list = Array.isArray(data?.g) ? data.g : [];
+    return list
+      .map((g) => String(g?.q || '').trim())
+      .filter((w) => w && w.length <= 28)
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
 }
 
 // 返回 [{ title, meta, artwork, ratio }]；AbortError 原样抛出让调用方忽略
 export async function fetchSuggestions(query, subType, signal) {
-  if (subType === 'game') return fetchGameSuggestions(query, signal);
+  if (!MEDIA_SUBTYPES.has(subType)) return [];
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return [];
 
-  const host = doubanHostBySubType[subType];
-  if (!host) return [];
-  const res = await withTimeout(fetch(`https://${host}.douban.com/j/subject_suggest?q=${encodeURIComponent(query)}`, {
-    headers: DOUBAN_HEADERS,
-    signal,
-  }));
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (Array.isArray(data) ? data : []).map(item => {
-    if (host === 'book') {
-      return {
-        title: item.title,
-        meta: [item.author_name, item.year].filter(Boolean).join(' · '),
-        artwork: item.pic || null,
-        ratio: null,
-      };
+  const qLower = trimmed.toLowerCase();
+  const [directRes, wordsRes] = await Promise.allSettled([
+    fetchBaikeCard(trimmed, signal),
+    fetchBaiduCompletions(trimmed, signal),
+  ]);
+  if (signal?.aborted) {
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    throw err;
+  }
+
+  const out = [];
+  const seen = new Set();
+  const pushCard = (card, strictMatch = false) => {
+    if (!card?.title) return;
+    const tLower = card.title.toLowerCase();
+    if (strictMatch && !tLower.includes(qLower) && !qLower.includes(tLower)) return;
+    if (seen.has(tLower)) return;
+    seen.add(tLower);
+    out.push(card);
+  };
+
+  if (directRes.status === 'fulfilled' && directRes.value) {
+    pushCard(directRes.value, true);
+  }
+
+  const extraWords = (wordsRes.status === 'fulfilled' ? wordsRes.value : [])
+    .filter((w) => w.toLowerCase() !== qLower)
+    .slice(0, 4);
+
+  if (extraWords.length > 0) {
+    const extraCards = await Promise.allSettled(
+      extraWords.map((w) => fetchBaikeCard(w, signal))
+    );
+    for (const r of extraCards) {
+      if (r.status === 'fulfilled' && r.value) {
+        pushCard(r.value, true);
+      }
+      if (out.length >= 6) break;
     }
-    return {
-      title: item.title,
-      meta: [
-        item.sub_title && item.sub_title !== item.title ? item.sub_title : null,
-        item.year,
-      ].filter(Boolean).join(' · '),
-      artwork: item.img ? item.img.replace('s_ratio_poster', 'l_ratio_poster') : null,
-      ratio: DOUBAN_POSTER_RATIO,
-    };
-  }).filter(r => r.title);
+  }
+
+  return out.slice(0, 6);
 }

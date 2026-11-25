@@ -4,7 +4,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requireNativeViewManager } from 'expo-modules-core';
 import { Maximize2, Minimize2, MapPin, Route } from 'lucide-react-native';
 import { wgs84ToGcj02 } from '../utils/coord';
+import { hapticSelection } from '../utils/haptics';
 import NativeIcon from './NativeIcon';
+import LiquidGlassSurface from './LiquidGlassSurface';
 
 let NativeAppleMapView = null;
 if (Platform.OS === 'ios') {
@@ -374,15 +376,16 @@ export default function AppleMapView({
         style={[
           styles.zoomer,
           {
-            backgroundColor: c.controlBg,
-            borderColor: c.controlBorder,
-            shadowOpacity: isDark ? 0.45 : 0.16,
+            backgroundColor: Platform.OS === 'ios' ? 'transparent' : c.controlBg,
+            borderColor: Platform.OS === 'ios' ? 'transparent' : c.controlBorder,
+            shadowOpacity: isDark ? 0.35 : 0.14,
           },
         ]}
       >
+        {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={12} isDark={isDark} interactive />}
         <TouchableOpacity
           style={styles.zoomBtn}
-          onPress={() => sendCommand({ type: 'zoomIn', animated: true })}
+          onPress={() => { hapticSelection(); sendCommand({ type: 'zoomIn', animated: true }); }}
           activeOpacity={0.7}
         >
           <Text style={[styles.zoomText, { color: c.controlText }]}>+</Text>
@@ -390,7 +393,7 @@ export default function AppleMapView({
         <View style={[styles.zoomSep, { backgroundColor: c.controlBorder }]} />
         <TouchableOpacity
           style={styles.zoomBtn}
-          onPress={() => sendCommand({ type: 'zoomOut', animated: true })}
+          onPress={() => { hapticSelection(); sendCommand({ type: 'zoomOut', animated: true }); }}
           activeOpacity={0.7}
         >
           <Text style={[styles.zoomText, { color: c.controlText }]}>−</Text>
@@ -398,7 +401,7 @@ export default function AppleMapView({
         <View style={[styles.zoomSep, { backgroundColor: c.controlBorder }]} />
         <TouchableOpacity
           style={styles.zoomBtn}
-          onPress={handleFitAll}
+          onPress={() => { hapticSelection(); handleFitAll(); }}
           activeOpacity={0.7}
         >
           <Text style={[styles.zoomText, { color: c.controlText }]}>⤢</Text>
@@ -406,7 +409,7 @@ export default function AppleMapView({
         <View style={[styles.zoomSep, { backgroundColor: c.controlBorder }]} />
         <TouchableOpacity
           style={styles.zoomBtn}
-          onPress={() => onToggleFullscreen?.(!fullscreen)}
+          onPress={() => { hapticSelection(); onToggleFullscreen?.(!fullscreen); }}
           activeOpacity={0.7}
         >
           <NativeIcon
@@ -424,24 +427,26 @@ export default function AppleMapView({
           <View style={styles.trajFilter}>
             {TRAJ_TYPES.map((t) => {
               const on = !!trajFilter[t];
-              const bg = on ? TYPE_COLORS[t] : c.controlBg;
-              const border = on ? TYPE_COLORS[t] : c.controlBorder;
+              const bg = on ? TYPE_COLORS[t] : (Platform.OS === 'ios' ? 'transparent' : c.controlBg);
+              const border = on ? TYPE_COLORS[t] : (Platform.OS === 'ios' ? 'transparent' : c.controlBorder);
               const textColor = on ? '#FFFFFF' : c.controlText;
               return (
                 <TouchableOpacity
                   key={t}
                   style={[
                     styles.tf,
-                    { backgroundColor: bg, borderColor: border, opacity: on ? 1 : 0.6 },
+                    { backgroundColor: bg, borderColor: border, opacity: on ? 1 : 0.72 },
                   ]}
                   activeOpacity={0.78}
                   onPress={() => {
+                    hapticSelection();
                     const next = { ...trajFilter, [t]: !trajFilter[t] };
                     setTrajFilter(next);
                     savePrefs(locOn, trajFilterOpened, next);
                     showToast(`${TRAJ_LABELS[t]}轨迹：${next[t] ? '显示' : '隐藏'}`);
                   }}
                 >
+                  {Platform.OS === 'ios' && !on && <LiquidGlassSurface cornerRadius={13} isDark={isDark} interactive />}
                   <Text style={[styles.tfText, { color: textColor }]}>{TRAJ_LABELS[t]}</Text>
                 </TouchableOpacity>
               );
@@ -453,19 +458,21 @@ export default function AppleMapView({
             style={[
               styles.tool,
               {
-                backgroundColor: trajAnyOn ? '#0A84FF' : c.controlBg,
-                borderColor: trajAnyOn ? '#0A84FF' : c.controlBorder,
-                opacity: trajAnyOn ? 1 : 0.65,
+                backgroundColor: trajAnyOn ? '#0A84FF' : (Platform.OS === 'ios' ? 'transparent' : c.controlBg),
+                borderColor: trajAnyOn ? '#0A84FF' : (Platform.OS === 'ios' ? 'transparent' : c.controlBorder),
+                opacity: trajAnyOn ? 1 : 0.78,
               },
             ]}
             activeOpacity={0.8}
             onPress={() => {
+              hapticSelection();
               const nextOpened = !trajFilterOpened;
               setTrajFilterOpened(nextOpened);
               savePrefs(locOn, nextOpened, trajFilter);
               showToast(nextOpened ? '选择要显示的出行方式' : '已收起出行方式筛选');
             }}
           >
+            {Platform.OS === 'ios' && !trajAnyOn && <LiquidGlassSurface cornerRadius={15} isDark={isDark} interactive />}
             <NativeIcon
               name="point.topleft.down.to.point.bottomright.curvepath"
               fallback={Route}
@@ -478,19 +485,21 @@ export default function AppleMapView({
             style={[
               styles.tool,
               {
-                backgroundColor: locOn ? '#0A84FF' : c.controlBg,
-                borderColor: locOn ? '#0A84FF' : c.controlBorder,
-                opacity: locOn ? 1 : 0.65,
+                backgroundColor: locOn ? '#0A84FF' : (Platform.OS === 'ios' ? 'transparent' : c.controlBg),
+                borderColor: locOn ? '#0A84FF' : (Platform.OS === 'ios' ? 'transparent' : c.controlBorder),
+                opacity: locOn ? 1 : 0.78,
               },
             ]}
             activeOpacity={0.8}
             onPress={() => {
+              hapticSelection();
               const nextLoc = !locOn;
               setLocOn(nextLoc);
               savePrefs(nextLoc, trajFilterOpened, trajFilter);
               showToast(`地点标点：${nextLoc ? '开' : '关'}`);
             }}
           >
+            {Platform.OS === 'ios' && !locOn && <LiquidGlassSurface cornerRadius={15} isDark={isDark} interactive />}
             <NativeIcon
               name="mappin.and.ellipse"
               fallback={MapPin}
@@ -608,9 +617,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 10,
     top: 10,
-    borderRadius: 11,
-    borderWidth: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
+    borderRadius: 12,
+    borderWidth: Platform.OS === 'ios' ? 0 : StyleSheet.hairlineWidth,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 8,

@@ -6,7 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
-import { Check, PlayCircle, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { Check, PlayCircle, CircleDot, ChevronDown, ChevronUp } from 'lucide-react-native';
+import NativeIcon from '../components/NativeIcon';
 import ImageViewing from 'react-native-image-viewing';
 import Reanimated, {
   FadeIn, useSharedValue, useAnimatedStyle, useAnimatedRef, useAnimatedScrollHandler,
@@ -213,7 +214,11 @@ const Cell = React.memo(function Cell({ asset, index, selected, used, isVideo, i
       ) : (
         <View style={styles.thumbWrap}>
           {showThumb}
-          {isLive && <View style={styles.liveTag}><Text style={styles.liveTagText}>实况</Text></View>}
+          {isLive && (
+            <View style={styles.liveTag}>
+              <NativeIcon name="livephoto" fallback={CircleDot} size={12} color="#FFF" weight="semibold" />
+            </View>
+          )}
         </View>
       )}
       {used ? (
@@ -897,8 +902,7 @@ const makeStyles = (c) => ({
   cell: { width: CELL, height: CELL, padding: 1.5 },
   thumb: { flex: 1, borderRadius: 4, backgroundColor: c.mediaPlaceholder },
   thumbWrap: { flex: 1 },
-  liveTag: { position: 'absolute', left: 5, bottom: 5, backgroundColor: 'rgba(0,0,0,0.58)', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1.5 },
-  liveTagText: { color: '#FFF', fontSize: 9.5, fontWeight: '600' },
+  liveTag: { position: 'absolute', left: 5, bottom: 5, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.52)', alignItems: 'center', justifyContent: 'center' },
   thumbLoading: { backgroundColor: c.mediaPlaceholder },
   videoThumb: { flex: 1, backgroundColor: c.mediaPlaceholder },
   videoBox: { flex: 1, borderRadius: 4, backgroundColor: c.fill, overflow: 'hidden' },

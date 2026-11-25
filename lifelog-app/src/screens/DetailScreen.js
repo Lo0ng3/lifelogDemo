@@ -11,7 +11,7 @@ import NativeIcon from '../components/NativeIcon';
 import NativeLivePhoto, { hasNativeLivePhoto } from '../components/NativeLivePhoto';
 import NativeVideoPlayer, { hasNativeVideoPlayer } from '../components/NativeVideoPlayer';
 import {
-  Star, StarHalf, X, PlayCircle, ChevronLeft, Edit3, Trash2
+  Star, StarHalf, X, PlayCircle, CircleDot, ChevronLeft, Edit3, Trash2
 } from 'lucide-react-native';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -466,11 +466,19 @@ function LiveGridBadge({ entry, enabled = true }) {
     return () => { alive = false; task.cancel(); };
   }, [entry, enabled]);
   if (entry?.liveStatus === 'live') {
-    return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
+    return (
+      <View style={styles.liveBadge}>
+        <NativeIcon name="livephoto" fallback={CircleDot} size={13} color="#FFF" weight="semibold" />
+      </View>
+    );
   }
   if (!enabled || (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios'))) return null;
   if (!live) return null;
-  return <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>实况</Text></View>;
+  return (
+    <View style={styles.liveBadge}>
+      <NativeIcon name="livephoto" fallback={CircleDot} size={13} color="#FFF" weight="semibold" />
+    </View>
+  );
 }
 
 // 全屏查看器里的实况照片页：
@@ -549,8 +557,7 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
               setNativePlayTrigger((n) => n + 1);
             }}
           >
-            <NativeIcon name="livephoto" fallback={PlayCircle} size={15} color="#FFF" style={{ marginRight: 5 }} />
-            <Text style={styles.livePlayText}>实况 · 轻点或长按</Text>
+            <NativeIcon name="livephoto" fallback={CircleDot} size={18} color="#FFF" weight="semibold" />
           </TouchableOpacity>
         )}
       </View>
@@ -573,10 +580,7 @@ function LivePhotoPage({ entry, active, onZoomChange }) {
           {loading ? (
             <ActivityIndicator size="small" color="#FFF" />
           ) : (
-            <>
-              <Text style={styles.livePlayText}>实况</Text>
-              <NativeIcon name="livephoto" fallback={PlayCircle} size={16} color="#FFF" />
-            </>
+            <NativeIcon name="livephoto" fallback={CircleDot} size={18} color="#FFF" weight="semibold" />
           )}
         </View>
       )}
@@ -988,10 +992,7 @@ export default function DetailScreen({ route, navigation }) {
             <Text style={styles.detailDate}>{heroDate}</Text>
             <View style={styles.reviewRow}>
               {essay ? (
-                <>
-                  <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
-                  {!!item.weather && <Text style={styles.moodWeather}>· {item.weather}</Text>}
-                </>
+                <Text style={styles.moodEmoji}>{item.mood || '📝'}</Text>
               ) : item.rating ? (
                 <>
                   {[1, 2, 3, 4, 5].map((i) => {
@@ -1184,10 +1185,14 @@ const makeStyles = (c) => ({
   actionDivider: { width: StyleSheet.hairlineWidth, height: 22 },
   coverBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   coverBadgeText: { color: '#FFF', fontSize: 10 },
-  liveBadge: { position: 'absolute', left: 8, top: 8, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
-  liveBadgeText: { color: '#FFF', fontSize: 10 },
-  livePlayBadge: { position: 'absolute', right: 16, bottom: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 },
-  livePlayText: { color: '#FFF', fontSize: 12, marginRight: 5 },
+  liveBadge: {
+    position: 'absolute', right: 8, top: 8, width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.52)', alignItems: 'center', justifyContent: 'center',
+  },
+  livePlayBadge: {
+    position: 'absolute', right: 16, bottom: 16, width: 34, height: 34, borderRadius: 17,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.55)',
+  },
   imageGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginTop: 8 },
   gridItem: { width: '33.33%', padding: 4 },
   gridImage: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: c.mediaPlaceholder },
