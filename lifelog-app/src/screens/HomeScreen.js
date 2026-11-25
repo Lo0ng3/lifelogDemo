@@ -38,6 +38,7 @@ import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import NativeIcon from '../components/NativeIcon';
 import NativeSegmentedControl, { hasNativeSegmentedControl } from '../components/NativeSegmentedControl';
 import NativeMapFilterMenu, { hasNativeMapFilterMenu } from '../components/NativeMapFilterMenu';
+import NativeListFilterMenu, { hasNativeListFilterMenu } from '../components/NativeListFilterMenu';
 import { hapticSelection, hapticSuccess } from '../utils/haptics';
 import { exportBackup, importBackup } from '../utils/backup';
 import { DEFAULT_PROFILE_NAME, loadProfile, persistAvatar, saveProfile } from '../utils/profile';
@@ -1509,25 +1510,44 @@ export default function HomeScreen({ navigation }) {
                 </TouchableOpacity>
               )}
             </View>
-            <TouchableOpacity
-              style={[
-                styles.filterBtn,
-                Platform.OS === 'ios' && styles.filterBtnGlass,
-                Platform.OS !== 'ios' && activeFilters.length > 0 && styles.filterBtnActive,
-              ]}
-              onPress={() => { hapticSelection(); Keyboard.dismiss(); filterSheetRef.current?.present(); }}
-              delayPressIn={0}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
-              <NativeIcon
-                name="line.3.horizontal.decrease"
-                fallback={ListFilter}
-                size={16}
-                color={activeFilters.length > 0 ? colors.accent : colors.textSecondary}
-              />
-              {activeFilters.length > 0 && <View style={styles.filterDot} />}
-            </TouchableOpacity>
+            {hasNativeListFilterMenu ? (
+              <View style={[styles.filterBtn, styles.filterBtnGlass]}>
+                <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />
+                <NativeListFilterMenu
+                  selectedKeys={activeFilters}
+                  isDark={isDark}
+                  iconColor={colors.textSecondary}
+                  accentColor={colors.accent}
+                  onChange={(keys) => {
+                    hapticSelection();
+                    Keyboard.dismiss();
+                    setActiveFilters(keys);
+                  }}
+                  style={StyleSheet.absoluteFill}
+                />
+                {activeFilters.length > 0 && <View style={styles.filterDot} pointerEvents="none" />}
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.filterBtn,
+                  Platform.OS === 'ios' && styles.filterBtnGlass,
+                  Platform.OS !== 'ios' && activeFilters.length > 0 && styles.filterBtnActive,
+                ]}
+                onPress={() => { hapticSelection(); Keyboard.dismiss(); filterSheetRef.current?.present(); }}
+                delayPressIn={0}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                {Platform.OS === 'ios' && <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />}
+                <NativeIcon
+                  name="line.3.horizontal.decrease"
+                  fallback={ListFilter}
+                  size={16}
+                  color={activeFilters.length > 0 ? colors.accent : colors.textSecondary}
+                />
+                {activeFilters.length > 0 && <View style={styles.filterDot} />}
+              </TouchableOpacity>
+            )}
           </View>
         )}
 

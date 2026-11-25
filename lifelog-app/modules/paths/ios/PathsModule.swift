@@ -423,6 +423,22 @@ public class PathsModule: Module {
         view.setAccentColor(value)
       }
     }
+
+    View(NativeListFilterMenuView.self) {
+      Events("onSelectionChange")
+      Prop("selectedKeys") { (view: NativeListFilterMenuView, value: [String]) in
+        view.setSelectedKeys(value)
+      }
+      Prop("isDark") { (view: NativeListFilterMenuView, value: Bool) in
+        view.setIsDark(value)
+      }
+      Prop("iconColor") { (view: NativeListFilterMenuView, value: String) in
+        view.setIconColor(value)
+      }
+      Prop("accentColor") { (view: NativeListFilterMenuView, value: String) in
+        view.setAccentColor(value)
+      }
+    }
   }
 
   private func toFileURL(_ uri: String) -> URL {
