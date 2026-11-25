@@ -29,8 +29,8 @@ const LOGS_KEY = '@lifelogs_v2';
 export const LogProvider = ({ children }) => {
   const [logData, setLogData] = useState([]);
   const [tdtKey, setTdtKeyState] = useState('');
-  // 地图服务商：'tianditu'（默认）| 'amap'；两家的 key 各自保存
-  const [mapProvider, setProviderState] = useState('tianditu');
+  // 地图服务商：iOS 默认 'apple'（原生 MapKit 免密钥），可选 'tianditu' | 'amap'；Android 仅 'tianditu' | 'amap'
+  const [mapProvider, setProviderState] = useState(Platform.OS === 'ios' ? 'apple' : 'tianditu');
   const [amapKey, setAmapKeyState] = useState('');
   // 高德矢量渲染（官方 JS API 2.0）：Web端(JS API) key + 安全密钥。
   // 填了就用矢量渲染，没填自动用栅格瓦片（免 key）；这两把 key 和上面那把
@@ -104,7 +104,7 @@ export const LogProvider = ({ children }) => {
     });
     // 天地图 Key：侧边栏「地图服务 Key」里配置，存本机
     AsyncStorage.getItem('@tdt_key').then(v => { if (v) setTdtKeyState(v); }).catch(() => {});
-    AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu') setProviderState(v); }).catch(() => {});
+    AsyncStorage.getItem('@map_provider').then(v => { if (v === 'amap' || v === 'tianditu' || (v === 'apple' && Platform.OS === 'ios')) setProviderState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_key').then(v => { if (v) setAmapKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_key').then(v => { if (v) setAmapJsKeyState(v); }).catch(() => {});
     AsyncStorage.getItem('@amap_js_code').then(v => { if (v) setAmapJsCodeState(v); }).catch(() => {});
@@ -122,7 +122,9 @@ export const LogProvider = ({ children }) => {
   };
 
   const setMapProvider = async (provider) => {
-    const next = provider === 'amap' ? 'amap' : 'tianditu';
+    const next = provider === 'apple' && Platform.OS === 'ios'
+      ? 'apple'
+      : (provider === 'amap' ? 'amap' : 'tianditu');
     setProviderState(next);
     try {
       await AsyncStorage.setItem('@map_provider', next);

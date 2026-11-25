@@ -45,6 +45,7 @@ import { requestAddDraftReset } from '../utils/draftReset';
 import { shortPlaceName } from '../utils/format';
 import { buildPlaceAnchors, anchorOf, latLngOfPoint } from '../utils/mapPlaces';
 import { buildMapHtml } from '../utils/mapHtml';
+import AppleMapView, { hasNativeAppleMap } from '../components/AppleMapView';
 import { LEAFLET_JS, LEAFLET_CSS } from '../vendor/leafletBundle';
 import { useTheme, useThemedStyles } from '../theme/ThemeProvider';
 import { getPalette } from '../theme/palette';
@@ -83,10 +84,16 @@ const CACHE_TARGETS = [
   { key: 'covers', label: '无引用与重复封面', note: '合并重复/旧版高清封面、清孤儿封面并瘦身自动备份' },
   { key: 'map', label: '地图缓存', note: '地图瓦片与 SDK 缓存' },
 ];
-const MAP_PROVIDERS = [
-  { id: 'tianditu', label: '天地图' },
-  { id: 'amap', label: '高德' },
-];
+const MAP_PROVIDERS = Platform.OS === 'ios'
+  ? [
+      { id: 'apple', label: '苹果地图' },
+      { id: 'tianditu', label: '天地图' },
+      { id: 'amap', label: '高德' },
+    ]
+  : [
+      { id: 'tianditu', label: '天地图' },
+      { id: 'amap', label: '高德' },
+    ];
 const MAP_PROVIDER_LABELS = MAP_PROVIDERS.map((p) => p.label);
 
 // 视图切换：
@@ -188,7 +195,7 @@ export default function HomeScreen({ navigation }) {
   const [providerDraft, setProviderDraft] = useState(mapProvider);
   const openSettings = () => {
     setProviderDraft(mapProvider);
-    setKeyDraft(mapProvider === 'amap' ? amapKey : tdtKey);
+    setKeyDraft(mapProvider === 'amap' ? amapKey : (mapProvider === 'tianditu' ? tdtKey : ''));
     setJsKeyDraft(amapJsKey);
     setJsCodeDraft(amapJsCode);
     setSettingsOpen(true);
@@ -196,7 +203,7 @@ export default function HomeScreen({ navigation }) {
   // 切换服务商时把输入框换成对应的 key
   const switchProviderDraft = (next) => {
     setProviderDraft(next);
-    setKeyDraft(next === 'amap' ? amapKey : tdtKey);
+    setKeyDraft(next === 'amap' ? amapKey : (next === 'tianditu' ? tdtKey : ''));
     if (next === 'amap') {
       setJsKeyDraft(amapJsKey);
       setJsCodeDraft(amapJsCode);
@@ -204,11 +211,12 @@ export default function HomeScreen({ navigation }) {
   };
   const saveKey = async () => {
     await setMapProvider(providerDraft);
-    if (providerDraft === 'amap') await setAmapKey(keyDraft);
-    else await setTdtKey(keyDraft);
     if (providerDraft === 'amap') {
+      await setAmapKey(keyDraft);
       await setAmapJsKey(jsKeyDraft);
       await setAmapJsCode(jsCodeDraft);
+    } else if (providerDraft === 'tianditu') {
+      await setTdtKey(keyDraft);
     }
     setSettingsOpen(false);
     hapticSuccess();
@@ -462,7 +470,7 @@ export default function HomeScreen({ navigation }) {
     if (!keys) return false;
     let applied = false;
     if (typeof keys.tdtKey === 'string') { setTdtKey(keys.tdtKey); applied = true; }
-    if (keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu') { setMapProvider(keys.mapProvider); applied = true; }
+    if (keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu' || (keys.mapProvider === 'apple' && Platform.OS === 'ios')) { setMapProvider(keys.mapProvider); applied = true; }
     if (typeof keys.amapKey === 'string') { setAmapKey(keys.amapKey); applied = true; }
     if (typeof keys.amapJsKey === 'string') { setAmapJsKey(keys.amapJsKey); applied = true; }
     if (typeof keys.amapJsCode === 'string') { setAmapJsCode(keys.amapJsCode); applied = true; }
@@ -994,28 +1002,31 @@ export default function HomeScreen({ navigation }) {
     return { points, segs };
   }, [sortedData, placeAnchors]);
 
+  const useAppleMap = Platform.OS === 'ios' && mapProvider === 'apple' && hasNativeAppleMap;
   // 矢量渲染（高德官方 JS API 2.0）只在「高德 + 填了 Web端(JS API) key」时启用；
   // 一旦 JS API 没能出图就自动切回栅格底图，改 key / 换服务商会重新试一次
   const [jsApiFailed, setJsApiFailed] = useState(false);
   const useJsApi = mapProvider === 'amap' && !!amapJsKey.trim() && !jsApiFailed;
   useEffect(() => { setJsApiFailed(false); }, [amapJsKey, amapJsCode, mapProvider]);
 
-  // 地图 HTML：栅格模式内联本地 Leaflet，矢量模式加载高德官方 SDK；
-  // 主题色 / 深浅色切换时只重建这一份字符串
-  const mapHtml = useMemo(() => buildMapHtml({
-    points: mapData.points,
-    segs: mapData.segs,
-    tdtKey,
-    provider: mapProvider,
-    jsApiKey: useJsApi ? amapJsKey : '',
-    securityCode: useJsApi ? amapJsCode : '',
-    dark: mapIsDark,
-    notice: jsApiFailed ? '高德 JS API 没能出图，已切回栅格底图（检查 JS API Key / 安全密钥 / 网络）' : '',
-    colors: mapPalette.map,
-    // 矢量模式不注入 Leaflet：省掉 145KB 的内联脚本，也少一份用不上的库
-    leafletJs: useJsApi ? '' : LEAFLET_JS,
-    leafletCss: useJsApi ? '' : LEAFLET_CSS,
-  }), [mapData, tdtKey, mapProvider, amapJsKey, amapJsCode, useJsApi, mapIsDark, jsApiFailed, mapPalette.map]);
+  // 地图 HTML：苹果原生 MapKit 走原生视图不生成 HTML；其余模式按高德/天地图生成
+  const mapHtml = useMemo(() => {
+    if (useAppleMap) return '';
+    return buildMapHtml({
+      points: mapData.points,
+      segs: mapData.segs,
+      tdtKey,
+      provider: mapProvider === 'apple' ? 'amap' : mapProvider,
+      jsApiKey: useJsApi ? amapJsKey : '',
+      securityCode: useJsApi ? amapJsCode : '',
+      dark: mapIsDark,
+      notice: jsApiFailed ? '高德 JS API 没能出图，已切回栅格底图（检查 JS API Key / 安全密钥 / 网络）' : '',
+      colors: mapPalette.map,
+      // 矢量模式不注入 Leaflet：省掉 145KB 的内联脚本，也少一份用不上的库
+      leafletJs: useJsApi ? '' : LEAFLET_JS,
+      leafletCss: useJsApi ? '' : LEAFLET_CSS,
+    });
+  }, [useAppleMap, mapData, tdtKey, mapProvider, amapJsKey, amapJsCode, useJsApi, mapIsDark, jsApiFailed, mapPalette.map]);
   // source 对象要 memo：否则每次 HomeScreen 重渲染（滑动侧边栏、打字搜索…）
   // 都会给 WebView 换一个新对象，WebView 把整张地图连同瓦片重新加载一遍
   // baseUrl 给页面一个正经的 https 源：高德 JS API 会往 vdata.amap.com 发跨域请求，
@@ -1271,9 +1282,11 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.menuCopy}>
                   <Text style={styles.menuItemText}>地图服务</Text>
                   <Text style={styles.menuItemSub} numberOfLines={1}>
-                    {mapProvider === 'amap'
-                      ? `高德 · ${useJsApi ? '矢量渲染' : (amapJsKey && jsApiFailed ? '栅格底图（矢量回退）' : '栅格底图')}${amapKey ? ' · 已配检索' : ''}`
-                      : (tdtKey ? '天地图已配置' : '天地图未配置')}
+                    {mapProvider === 'apple'
+                      ? '苹果地图 · 原生渲染 · 免密钥'
+                      : mapProvider === 'amap'
+                        ? `高德 · ${useJsApi ? '矢量渲染' : (amapJsKey && jsApiFailed ? '栅格底图（矢量回退）' : '栅格底图')}${amapKey ? ' · 已配检索' : ''}`
+                        : (tdtKey ? '天地图已配置' : '天地图未配置')}
                   </Text>
                 </View>
                 <NativeIcon name="chevron.right" fallback={ChevronRight} size={14} color={colors.textFaint} weight="semibold" />
@@ -1496,38 +1509,56 @@ export default function HomeScreen({ navigation }) {
               必须保证它们在原生侧真实存在，不能被 RN 的视图扁平化优化掉 */}
           <View style={[styles.mapStage, mapStageBox]} collapsable={false}>
             <View style={[styles.mapBox, mapBoxRotated]} collapsable={false}>
-              <WebView
-                key={`${mapIsDark ? 'dark' : 'light'}-${mapProvider}-${useJsApi ? 'jsapi' : 'raster'}`}
-                ref={mapRef}
-                originWhitelist={['*']}
-                source={mapSource}
-                containerStyle={{ backgroundColor: mapPalette.map.bg }}
-                style={[styles.map, { backgroundColor: mapPalette.map.bg }]}
-                scrollEnabled={false}
-                bounces={false}
-                overScrollMode="never"
-                allowsInlineMediaPlayback
-                allowsLinkPreview={false}
-                contentInsetAdjustmentBehavior="never"
-                onMessage={(e) => {
-                  // 地图弹窗里点「查看详情」→ 跳转到对应印记的详情页
-                  try {
-                    const msg = JSON.parse(e.nativeEvent.data);
-                    if (msg.type === 'openDetail') {
-                      const item = logData.find(l => String(l.id) === String(msg.id));
-                      openDetailFromMap(item);
-                    } else if (msg.type === 'mapFullscreen') {
-                      // 地图上的「全屏」按钮：地图铺满整屏并横过来，再点一次还原
-                      if (msg.on) enterMapFullscreen();
-                      else exitMapFullscreen();
-                    } else if (msg.type === 'jsApiFailed') {
-                      // 高德 JS API 没出图（key / 安全密钥 / 网络 / WebGL）：切回栅格底图，
-                      // 地图照样能用，并在顶部说明原因
-                      setJsApiFailed(true);
-                    }
-                  } catch {}
-                }}
+              {useAppleMap ? (
+                <AppleMapView
+                  points={mapData.points}
+                  segs={mapData.segs}
+                  isDark={mapIsDark}
+                  mapColors={mapPalette.map}
+                  fullscreen={mapFullscreen}
+                  onToggleFullscreen={(on) => {
+                    if (on) enterMapFullscreen();
+                    else exitMapFullscreen();
+                  }}
+                  onOpenDetail={(id) => {
+                    const item = logData.find((l) => String(l.id) === String(id));
+                    openDetailFromMap(item);
+                  }}
                 />
+              ) : (
+                <WebView
+                  key={`${mapIsDark ? 'dark' : 'light'}-${mapProvider}-${useJsApi ? 'jsapi' : 'raster'}`}
+                  ref={mapRef}
+                  originWhitelist={['*']}
+                  source={mapSource}
+                  containerStyle={{ backgroundColor: mapPalette.map.bg }}
+                  style={[styles.map, { backgroundColor: mapPalette.map.bg }]}
+                  scrollEnabled={false}
+                  bounces={false}
+                  overScrollMode="never"
+                  allowsInlineMediaPlayback
+                  allowsLinkPreview={false}
+                  contentInsetAdjustmentBehavior="never"
+                  onMessage={(e) => {
+                    // 地图弹窗里点「查看详情」→ 跳转到对应印记的详情页
+                    try {
+                      const msg = JSON.parse(e.nativeEvent.data);
+                      if (msg.type === 'openDetail') {
+                        const item = logData.find(l => String(l.id) === String(msg.id));
+                        openDetailFromMap(item);
+                      } else if (msg.type === 'mapFullscreen') {
+                        // 地图上的「全屏」按钮：地图铺满整屏并横过来，再点一次还原
+                        if (msg.on) enterMapFullscreen();
+                        else exitMapFullscreen();
+                      } else if (msg.type === 'jsApiFailed') {
+                        // 高德 JS API 没出图（key / 安全密钥 / 网络 / WebGL）：切回栅格底图，
+                        // 地图照样能用，并在顶部说明原因
+                        setJsApiFailed(true);
+                      }
+                    } catch {}
+                  }}
+                />
+              )}
             </View>
           </View>
         </Reanimated.View>
@@ -1608,7 +1639,7 @@ export default function HomeScreen({ navigation }) {
                 {hasNativeSegmentedControl ? (
                   <NativeSegmentedControl
                     segments={MAP_PROVIDER_LABELS}
-                    selectedIndex={providerDraft === 'amap' ? 1 : 0}
+                    selectedIndex={Math.max(0, MAP_PROVIDERS.findIndex((p) => p.id === providerDraft))}
                     isDark={isDark}
                     onChange={(idx) => {
                       const next = MAP_PROVIDERS[idx];
@@ -1617,7 +1648,7 @@ export default function HomeScreen({ navigation }) {
                         switchProviderDraft(next.id);
                       }
                     }}
-                    style={{ width: 156, height: 32 }}
+                    style={{ width: MAP_PROVIDERS.length > 2 ? 216 : 156, height: 32 }}
                   />
                 ) : (
                   <View style={styles.providerRowCompact}>
@@ -1635,56 +1666,72 @@ export default function HomeScreen({ navigation }) {
               </View>
             </View>
 
-            <Text style={styles.sheetSectionLabel}>密钥配置</Text>
-            <View style={styles.sheetGroupCard}>
-              <View style={styles.sheetInputBlock}>
-                <Text style={styles.sheetInputLabel}>
-                  {providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 Key'}
-                </Text>
-                <TextInput
-                  style={styles.sheetInput}
-                  value={keyDraft}
-                  onChangeText={setKeyDraft}
-                  placeholder={providerDraft === 'amap' ? '填入 Web 服务 Key' : '填入天地图 tk'}
-                  placeholderTextColor={colors.textFaint}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  clearButtonMode="while-editing"
-                />
-              </View>
-              {providerDraft === 'amap' && (
-                <>
-                  <View style={styles.sheetDivider} />
+            {providerDraft === 'apple' ? (
+              <>
+                <Text style={styles.sheetSectionLabel}>服务说明</Text>
+                <View style={styles.sheetGroupCard}>
                   <View style={styles.sheetInputBlock}>
-                    <Text style={styles.sheetInputLabel}>Web 端 (JS API) Key</Text>
+                    <Text style={styles.sheetInputLabel}>iOS 原生苹果地图（MapKit）</Text>
+                    <Text style={[styles.cacheSheetNote, { lineHeight: 19, marginTop: 4 }]}>
+                      原生矢量渲染，自动跟随系统深浅色模式且无缩放闪烁；内置国内与海外地点搜索联想及坐标解析，无需配置任何密钥，坐标数据仍以标准 WGS-84 保存以兼容备份迁移。
+                    </Text>
+                  </View>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.sheetSectionLabel}>密钥配置</Text>
+                <View style={styles.sheetGroupCard}>
+                  <View style={styles.sheetInputBlock}>
+                    <Text style={styles.sheetInputLabel}>
+                      {providerDraft === 'amap' ? '高德 Web 服务 Key' : '天地图 Key'}
+                    </Text>
                     <TextInput
                       style={styles.sheetInput}
-                      value={jsKeyDraft}
-                      onChangeText={setJsKeyDraft}
-                      placeholder="选填"
+                      value={keyDraft}
+                      onChangeText={setKeyDraft}
+                      placeholder={providerDraft === 'amap' ? '填入 Web 服务 Key' : '填入天地图 tk'}
                       placeholderTextColor={colors.textFaint}
                       autoCapitalize="none"
                       autoCorrect={false}
                       clearButtonMode="while-editing"
                     />
                   </View>
-                  <View style={styles.sheetDivider} />
-                  <View style={styles.sheetInputBlock}>
-                    <Text style={styles.sheetInputLabel}>安全密钥 securityJsCode</Text>
-                    <TextInput
-                      style={styles.sheetInput}
-                      value={jsCodeDraft}
-                      onChangeText={setJsCodeDraft}
-                      placeholder="配合 JS API Key 填写（官方深色样式必需）"
-                      placeholderTextColor={colors.textFaint}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      clearButtonMode="while-editing"
-                    />
-                  </View>
-                </>
-              )}
-            </View>
+                  {providerDraft === 'amap' && (
+                    <>
+                      <View style={styles.sheetDivider} />
+                      <View style={styles.sheetInputBlock}>
+                        <Text style={styles.sheetInputLabel}>Web 端 (JS API) Key</Text>
+                        <TextInput
+                          style={styles.sheetInput}
+                          value={jsKeyDraft}
+                          onChangeText={setJsKeyDraft}
+                          placeholder="选填"
+                          placeholderTextColor={colors.textFaint}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          clearButtonMode="while-editing"
+                        />
+                      </View>
+                      <View style={styles.sheetDivider} />
+                      <View style={styles.sheetInputBlock}>
+                        <Text style={styles.sheetInputLabel}>安全密钥 securityJsCode</Text>
+                        <TextInput
+                          style={styles.sheetInput}
+                          value={jsCodeDraft}
+                          onChangeText={setJsCodeDraft}
+                          placeholder="配合 JS API Key 填写（官方深色样式必需）"
+                          placeholderTextColor={colors.textFaint}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          clearButtonMode="while-editing"
+                        />
+                      </View>
+                    </>
+                  )}
+                </View>
+              </>
+            )}
           </ScrollView>
         </View>
       </Modal>

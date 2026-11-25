@@ -21,7 +21,7 @@ const pickKeys = (keys) => {
   for (const k of ['tdtKey', 'amapKey', 'amapJsKey', 'amapJsCode']) {
     if (typeof keys[k] === 'string' && keys[k]) out[k] = keys[k];
   }
-  if (keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu') out.mapProvider = keys.mapProvider;
+  if (keys.mapProvider === 'apple' || keys.mapProvider === 'amap' || keys.mapProvider === 'tianditu') out.mapProvider = keys.mapProvider;
   return Object.keys(out).length ? out : null;
 };
 

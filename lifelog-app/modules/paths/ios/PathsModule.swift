@@ -11,6 +11,8 @@ import WebKit
 // - clearWebKitCache 清理 WKWebView 的磁盘/内存/Fetch 缓存（不碰 localStorage），
 //   补齐 react-native-webview 在 iOS 上没有 clearCache 方法的缺口。
 public class PathsModule: Module {
+  private let appleSearchSession = AppleMapSearchSession()
+
   private struct StorageSubEntry {
     var bucket: String
     var group: String
@@ -150,6 +152,20 @@ public class PathsModule: Module {
       ]
       WKWebsiteDataStore.default().removeData(ofTypes: types, modifiedSince: .distantPast) {
         promise.resolve(true)
+      }
+    }.runOnQueue(.main)
+
+    // 苹果原生 MapKit 地点搜索联想（免密钥，国内走高德 POI 库）
+    AsyncFunction("searchApplePlaces") { (query: String, promise: Promise) in
+      self.appleSearchSession.searchPlaces(query: query) { items in
+        promise.resolve(items)
+      }
+    }.runOnQueue(.main)
+
+    // 苹果原生 MapKit 正地理编码（手输地名没点联想时的坐标兜底）
+    AsyncFunction("geocodeApplePlace") { (query: String, promise: Promise) in
+      self.appleSearchSession.geocodePlace(query: query) { result in
+        promise.resolve(result)
       }
     }.runOnQueue(.main)
 
@@ -344,6 +360,19 @@ public class PathsModule: Module {
       }
       Prop("inactiveColor") { (view: NativeTabBarView, value: String) in
         view.setInactiveColor(value)
+      }
+    }
+
+    View(NativeAppleMapView.self) {
+      Events("onPinPress", "onMapPress", "onSelectedPinMove")
+      Prop("isDark") { (view: NativeAppleMapView, value: Bool) in
+        view.setIsDark(value)
+      }
+      Prop("dataJson") { (view: NativeAppleMapView, value: String) in
+        view.setDataJson(value)
+      }
+      Prop("commandJson") { (view: NativeAppleMapView, value: String) in
+        view.setCommandJson(value)
       }
     }
   }

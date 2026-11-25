@@ -44,11 +44,11 @@ export const gcj02ToWgs84 = (lat, lng) => {
   return { lat: lat * 2 - g.lat, lng: lng * 2 - g.lng };
 };
 
-// 按服务商决定要不要纠偏：天地图/OSM 是 WGS-84，高德/腾讯是 GCJ-02
+// 按服务商决定要不要纠偏：天地图/OSM 是 WGS-84，高德/苹果中国区是 GCJ-02
 export const toDisplayCoord = (provider, lat, lng) => (
-  provider === 'amap' ? wgs84ToGcj02(lat, lng) : { lat, lng }
+  provider === 'amap' || provider === 'apple' ? wgs84ToGcj02(lat, lng) : { lat, lng }
 );
 
 export const fromProviderCoord = (provider, lat, lng) => (
-  provider === 'amap' ? gcj02ToWgs84(lat, lng) : { lat, lng }
+  provider === 'amap' || provider === 'apple' ? gcj02ToWgs84(lat, lng) : { lat, lng }
 );

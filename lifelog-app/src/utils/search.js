@@ -3,7 +3,9 @@
 // - Apple 已把影视类目从 iTunes 搜索 API 下架，iTunes 音乐结果对记录作品没有参考价值，故不再兜底
 // - 游戏没有稳定免密数据源，不提供联想（豆瓣主站联想接口已下线）
 
+import { Platform } from 'react-native';
 import { gcj02ToWgs84 } from './coord';
+import { hasAppleMapSearch, searchApplePlacesAsync, geocodeApplePlaceAsync } from './appleMap';
 
 const DOUBAN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -22,13 +24,18 @@ const DOUBAN_POSTER_RATIO = 2 / 3;
 
 const doubanHostBySubType = { movie: 'movie', tv: 'movie', anime: 'movie', book: 'book' };
 
-// 地点联想 / 地理编码：两种服务商可选
+// 地点联想 / 地理编码：三种服务商可选
+// - 苹果地图（iOS 原生 MapKit）：免密钥、国内直连高德 POI 库，坐标为 GCJ-02，入库前转 WGS-84
 // - 天地图：全链路 WGS-84 无偏移，底图/检索共用同一个 tk
 // - 高德：检索结果是 GCJ-02（火星坐标），这里统一转回 WGS-84 再交给上层，
 //   保证库里存的始终是 WGS-84；底图那侧显示时再转过去
-// loc = { provider: 'tianditu' | 'amap', key }
-export const hasLocationSearch = (loc) => !!loc?.key;
-export const locationProviderLabel = (loc) => (loc?.provider === 'amap' ? '高德' : '天地图');
+// loc = { provider: 'apple' | 'tianditu' | 'amap', key }
+export const hasLocationSearch = (loc) => (
+  (loc?.provider === 'apple' && Platform.OS === 'ios' && hasAppleMapSearch) || !!loc?.key
+);
+export const locationProviderLabel = (loc) => (
+  loc?.provider === 'apple' ? '苹果地图' : (loc?.provider === 'amap' ? '高德' : '天地图')
+);
 
 // 天地图 API 在华为云 WAF 后面：非浏览器 User-Agent（如 RN 的 okhttp）会被 403，统一伪装成浏览器
 const TDT_HEADERS = {
@@ -45,9 +52,43 @@ const parseLonlat = s => {
 // 返回 [{ name, district, lng, lat, isPrompt }]；isPrompt 的联想词无坐标，选中后拿 name 再搜一次
 export async function fetchPlaceSuggestions(query, loc, signal) {
   const { provider, key } = loc || {};
-  if (!key || !query.trim()) return [];
+  if (!query.trim()) return [];
+  if (provider === 'apple' && Platform.OS === 'ios') {
+    return fetchAppleSuggestions(query, signal);
+  }
+  if (!key) return [];
   if (provider === 'amap') return fetchAmapSuggestions(query, key, signal);
   return fetchTdtSuggestions(query, key, signal);
+}
+
+async function fetchAppleSuggestions(query, signal) {
+  if (signal?.aborted) return [];
+  const raw = await withTimeout(searchApplePlacesAsync(query), 6000);
+  if (signal?.aborted) return [];
+  return (raw || [])
+    .filter((it) => it && it.name)
+    .map((it) => {
+      const lat = Number(it.lat);
+      const lng = Number(it.lng);
+      const hasCoord = !it.isPrompt && Number.isFinite(lat) && Number.isFinite(lng);
+      const w = hasCoord ? gcj02ToWgs84(lat, lng) : null;
+      return {
+        name: String(it.name),
+        district: String(it.district || ''),
+        lng: w ? w.lng : null,
+        lat: w ? w.lat : null,
+        isPrompt: !w,
+      };
+    })
+    .slice(0, 8);
+}
+
+async function fetchAppleGeocode(name, signal) {
+  if (signal?.aborted) return null;
+  const ll = await withTimeout(geocodeApplePlaceAsync(name), 6000);
+  if (signal?.aborted || !ll) return null;
+  const w = gcj02ToWgs84(ll.lat, ll.lng);
+  return { lng: w.lng, lat: w.lat };
 }
 
 async function fetchTdtSuggestions(query, tdtKey, signal) {
@@ -150,7 +191,11 @@ async function fetchAmapGeocode(name, key, signal) {
 // 正地理编码：手输名称没走联想选择时的坐标兜底；解析不到返回 null
 export async function fetchPlaceGeocode(name, loc, signal) {
   const { provider, key } = loc || {};
-  if (!key || !name.trim()) return null;
+  if (!name.trim()) return null;
+  if (provider === 'apple' && Platform.OS === 'ios') {
+    return fetchAppleGeocode(name, signal);
+  }
+  if (!key) return null;
   if (provider === 'amap') return fetchAmapGeocode(name, key, signal);
   return fetchTdtGeocode(name, key, signal);
 }
