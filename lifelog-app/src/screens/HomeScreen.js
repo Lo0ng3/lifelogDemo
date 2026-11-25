@@ -670,7 +670,6 @@ export default function HomeScreen({ navigation }) {
   const pendingView = useRef(null);                   // 最近一次点击的目标视图
   const [mapMounted, setMapMounted] = useState(false); // 首次进地图才挂视图，之后一直保活
   const mapRef = useRef(null);
-  const [mapFitSeq, setMapFitSeq] = useState(0);
   const [mapFilter, setMapFilter] = useState({
     flight: true, train: true, bus: true, ship: true, location: true,
   });
@@ -1467,11 +1466,11 @@ export default function HomeScreen({ navigation }) {
                 hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                 onPress={() => {
                   hapticSelection();
-                  setMapFitSeq((n) => n + 1);
+                  enterMapFullscreen();
                 }}
               >
                 <LiquidGlassSurface cornerRadius={18} isDark={isDark} interactive />
-                <NativeIcon name="viewfinder" fallback={Maximize2} size={16} color={colors.textSecondary} weight="medium" />
+                <NativeIcon name="arrow.up.left.and.arrow.down.right" fallback={Maximize2} size={15} color={colors.textSecondary} weight="medium" />
               </TouchableOpacity>
               {hasNativeMapFilterMenu && (
                 <View style={styles.mapActionBtn}>
@@ -1637,7 +1636,9 @@ export default function HomeScreen({ navigation }) {
                   isDark={mapIsDark}
                   mapColors={mapPalette.map}
                   mapFilter={mapFilter}
-                  fitSignal={mapFitSeq}
+                  fullscreen={mapFullscreen}
+                  safeLeft={insets.top}
+                  onExitFullscreen={exitMapFullscreen}
                   onOpenDetail={(id) => {
                     const item = logData.find((l) => String(l.id) === String(id));
                     openDetailFromMap(item);

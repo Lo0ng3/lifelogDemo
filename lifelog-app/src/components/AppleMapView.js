@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { requireNativeViewManager } from 'expo-modules-core';
+import { ChevronLeft } from 'lucide-react-native';
 import { wgs84ToGcj02 } from '../utils/coord';
+import { hapticSelection } from '../utils/haptics';
+import NativeIcon from './NativeIcon';
+import LiquidGlassSurface from './LiquidGlassSurface';
 
 let NativeAppleMapView = null;
 if (Platform.OS === 'ios') {
@@ -66,7 +70,9 @@ export default function AppleMapView({
   isDark = false,
   mapColors,
   mapFilter = DEFAULT_FILTER,
-  fitSignal = 0,
+  fullscreen = false,
+  safeLeft = 16,
+  onExitFullscreen,
   onOpenDetail,
 }) {
   const c = mapColors || {
@@ -87,7 +93,6 @@ export default function AppleMapView({
   const cmdSeqRef = useRef(0);
   const [commandJson, setCommandJson] = useState('');
   const didInitialFitRef = useRef(false);
-  const lastFitSignalRef = useRef(fitSignal);
 
   const sendCommand = useCallback((payload) => {
     cmdSeqRef.current += 1;
@@ -251,15 +256,6 @@ export default function AppleMapView({
     return () => clearTimeout(t);
   }, [visibleCoords, sendCommand]);
 
-  // 外部顶部「全览」按钮触发全览
-  useEffect(() => {
-    if (fitSignal === lastFitSignalRef.current) return;
-    lastFitSignalRef.current = fitSignal;
-    if (!visibleCoords.length) return;
-    setCardState(null);
-    sendCommand({ type: 'fitAll', coords: visibleCoords, animated: true });
-  }, [fitSignal, visibleCoords, sendCommand]);
-
   const handlePinPress = useCallback((e) => {
     const { id, x, y, doubleTap } = e?.nativeEvent || {};
     if (!id || !groupMap.has(id)) return;
@@ -327,6 +323,25 @@ export default function AppleMapView({
         onMapPress={handleMapPress}
         onSelectedPinMove={handleSelectedPinMove}
       />
+
+      {/* 横屏全屏模式：左上角透明液态玻璃返回图标 */}
+      {fullscreen && (
+        <View style={[styles.fsBackWrap, { left: Math.max(16, safeLeft) }]}>
+          <LiquidGlassSurface cornerRadius={19} isDark={isDark} interactive />
+          <TouchableOpacity
+            style={styles.fsBackBtn}
+            activeOpacity={0.78}
+            delayPressIn={0}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={() => {
+              hapticSelection();
+              onExitFullscreen?.();
+            }}
+          >
+            <NativeIcon name="chevron.left" fallback={ChevronLeft} size={20} color={c.controlText} weight="semibold" />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* 空态提示 */}
       {!!emptyHint && (
@@ -420,6 +435,21 @@ export default function AppleMapView({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  fsBackWrap: {
+    position: 'absolute',
+    top: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
+    zIndex: 20,
+  },
+  fsBackBtn: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   hint: {
     position: 'absolute',
     alignSelf: 'center',
