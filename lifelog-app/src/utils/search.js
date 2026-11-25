@@ -1,10 +1,15 @@
 // 智能补全的检索源：
-// - 娱乐（电影/剧集/动漫/游戏/书籍）：统一使用百度百科（免密钥、国内直连、带词条摘要与无防盗链配图）
+// - 影视/动漫/书籍：豆瓣联想接口（国内直连、免密钥、带海报）
+// - 游戏：Steam 商店搜索（免密钥、国区可直连、带竖版封面）
 // - 地点：iOS 固定使用苹果原生 MapKit，Android 可选天地图 / 高德
 
 import { Platform } from 'react-native';
 import { gcj02ToWgs84 } from './coord';
 import { hasAppleMapSearch, searchApplePlacesAsync, geocodeApplePlaceAsync } from './appleMap';
+
+const DOUBAN_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+};
 
 // 网络请求统一 8 秒超时：挂死的请求不再阻塞联想/封面回填流程。
 // 超时只让调用方尽快失败，底层请求会随调用方的 AbortSignal 或 GC 结束
@@ -14,7 +19,9 @@ export const withTimeout = (promise, ms = 8000) => {
   return Promise.race([promise, timeout]);
 };
 
-const MEDIA_SUBTYPES = new Set(['movie', 'tv', 'anime', 'game', 'book']);
+// 豆瓣海报与 Steam library_600x900 统一为竖版 2:3
+const DOUBAN_POSTER_RATIO = 2 / 3;
+const doubanHostBySubType = { movie: 'movie', tv: 'movie', anime: 'movie', book: 'book' };
 
 // 地点联想 / 地理编码：
 // - iOS：固定使用苹果原生 MapKit（免密钥、国内直连高德 POI 库，坐标为 GCJ-02，入库前转 WGS-84）
@@ -197,91 +204,56 @@ async function fetchTdtGeocode(name, tdtKey, signal) {
   return Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : null;
 }
 
-/* ---------------------- 娱乐与阅读检索：统一使用百度百科 ---------------------- */
-// 百度百科词条卡片：返回词条标题、简介与配图（bkimg CDN 无防盗链）
-async function fetchBaikeCard(keyword, signal) {
+/* ---------------------- 娱乐与阅读检索：豆瓣（影视/书籍）+ Steam（游戏） ---------------------- */
+// 游戏源：Steam 商店搜索（免密钥、国区可直连、带竖版封面）
+async function fetchSteamSuggestions(query, signal) {
   const res = await withTimeout(fetch(
-    `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(keyword)}&bk_length=600`,
+    `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(query)}&l=schinese&cc=CN`,
     { signal }
-  ), 5000);
-  if (!res.ok) return null;
+  ));
+  if (!res.ok) return [];
   const data = await res.json();
-  if (!data?.title) return null;
-  const ratio = data.imageWidth && data.imageHeight ? data.imageWidth / data.imageHeight : null;
-  return {
-    title: String(data.title),
-    meta: data.desc || '百度百科',
-    artwork: data.image || null,
-    ratio,
-  };
-}
-
-// 百度联想词（纯 UTF-8 JSON），用于半截输入时补全候选，再并行拉对应百科词条卡片
-async function fetchBaiduCompletions(query, signal) {
-  try {
-    const res = await withTimeout(fetch(
-      `https://www.baidu.com/sugrec?prod=pc&wd=${encodeURIComponent(query)}`,
-      { signal }
-    ), 3500);
-    if (!res.ok) return [];
-    const data = await res.json();
-    const list = Array.isArray(data?.g) ? data.g : [];
-    return list
-      .map((g) => String(g?.q || '').trim())
-      .filter((w) => w && w.length <= 28)
-      .slice(0, 5);
-  } catch {
-    return [];
-  }
+  return (data.items || []).slice(0, 6).map((item) => ({
+    title: item.name,
+    meta: 'Steam',
+    artwork: item.id
+      ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.id}/library_600x900.jpg`
+      : null,
+    ratio: DOUBAN_POSTER_RATIO,
+  }));
 }
 
 // 返回 [{ title, meta, artwork, ratio }]；AbortError 原样抛出让调用方忽略
 export async function fetchSuggestions(query, subType, signal) {
-  if (!MEDIA_SUBTYPES.has(subType)) return [];
   const trimmed = String(query || '').trim();
   if (!trimmed) return [];
+  if (subType === 'game') return fetchSteamSuggestions(trimmed, signal);
 
-  const qLower = trimmed.toLowerCase();
-  const [directRes, wordsRes] = await Promise.allSettled([
-    fetchBaikeCard(trimmed, signal),
-    fetchBaiduCompletions(trimmed, signal),
-  ]);
-  if (signal?.aborted) {
-    const err = new Error('Aborted');
-    err.name = 'AbortError';
-    throw err;
-  }
-
-  const out = [];
-  const seen = new Set();
-  const pushCard = (card, strictMatch = false) => {
-    if (!card?.title) return;
-    const tLower = card.title.toLowerCase();
-    if (strictMatch && !tLower.includes(qLower) && !qLower.includes(tLower)) return;
-    if (seen.has(tLower)) return;
-    seen.add(tLower);
-    out.push(card);
-  };
-
-  if (directRes.status === 'fulfilled' && directRes.value) {
-    pushCard(directRes.value, true);
-  }
-
-  const extraWords = (wordsRes.status === 'fulfilled' ? wordsRes.value : [])
-    .filter((w) => w.toLowerCase() !== qLower)
-    .slice(0, 4);
-
-  if (extraWords.length > 0) {
-    const extraCards = await Promise.allSettled(
-      extraWords.map((w) => fetchBaikeCard(w, signal))
-    );
-    for (const r of extraCards) {
-      if (r.status === 'fulfilled' && r.value) {
-        pushCard(r.value, true);
-      }
-      if (out.length >= 6) break;
+  const host = doubanHostBySubType[subType];
+  if (!host) return [];
+  const res = await withTimeout(fetch(`https://${host}.douban.com/j/subject_suggest?q=${encodeURIComponent(trimmed)}`, {
+    headers: DOUBAN_HEADERS,
+    signal,
+  }));
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (Array.isArray(data) ? data : []).map((item) => {
+    if (host === 'book') {
+      return {
+        title: item.title,
+        meta: [item.author_name, item.year].filter(Boolean).join(' · '),
+        artwork: item.pic || null,
+        ratio: null,
+      };
     }
-  }
-
-  return out.slice(0, 6);
+    return {
+      title: item.title,
+      meta: [
+        item.sub_title && item.sub_title !== item.title ? item.sub_title : null,
+        item.year,
+      ].filter(Boolean).join(' · '),
+      artwork: item.img ? item.img.replace('s_ratio_poster', 'l_ratio_poster') : null,
+      ratio: DOUBAN_POSTER_RATIO,
+    };
+  }).filter((r) => r.title);
 }

@@ -441,7 +441,7 @@ function VideoThumb({ entry, style, contentFit = 'cover', enabled = true, onPost
 }
 
 // 实况徽标：异步检测动态照片，是实况才显示；详情内用全量模式（结果持久缓存，只算一次）
-function LiveGridBadge({ entry, enabled = true }) {
+function LiveGridBadge({ entry, enabled = true, compact = false }) {
   const styles = useThemedStyles(makeStyles);
   const [live, setLive] = useState(false);
   useEffect(() => {
@@ -465,18 +465,20 @@ function LiveGridBadge({ entry, enabled = true }) {
     });
     return () => { alive = false; task.cancel(); };
   }, [entry, enabled]);
+  const badgeStyle = compact ? styles.liveCoverBadge : styles.liveBadge;
+  const iconSize = compact ? 11 : 13;
   if (entry?.liveStatus === 'live') {
     return (
-      <View style={styles.liveBadge}>
-        <NativeIcon name="livephoto" fallback={CircleDot} size={13} color="#FFF" weight="semibold" />
+      <View style={badgeStyle} pointerEvents="none">
+        <NativeIcon name="livephoto" fallback={CircleDot} size={iconSize} color="#FFF" weight="semibold" />
       </View>
     );
   }
   if (!enabled || (entry?.liveStatus === 'not-live' && !(Platform.OS === 'ios' && entry?.assetId && entry?.liveSource !== 'ios'))) return null;
   if (!live) return null;
   return (
-    <View style={styles.liveBadge}>
-      <NativeIcon name="livephoto" fallback={CircleDot} size={13} color="#FFF" weight="semibold" />
+    <View style={badgeStyle} pointerEvents="none">
+      <NativeIcon name="livephoto" fallback={CircleDot} size={iconSize} color="#FFF" weight="semibold" />
     </View>
   );
 }
@@ -975,6 +977,9 @@ export default function DetailScreen({ route, navigation }) {
               style={[styles.coverThumbWrap, isPortraitPoster && styles.coverThumbPoster]}
             >
               <Image source={coverSource} style={StyleSheet.absoluteFill} contentFit="cover" transition={160} cachePolicy="memory-disk" />
+              {!!coverEntry && !isVideoEntry(coverEntry) && (
+                <LiveGridBadge entry={coverEntry} compact />
+              )}
             </TouchableOpacity>
           ) : (
             <View style={[styles.iconThumb, { backgroundColor: iconConfig.iconBgColor }]}>
@@ -1187,6 +1192,10 @@ const makeStyles = (c) => ({
   coverBadgeText: { color: '#FFF', fontSize: 10 },
   liveBadge: {
     position: 'absolute', right: 8, top: 8, width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.52)', alignItems: 'center', justifyContent: 'center',
+  },
+  liveCoverBadge: {
+    position: 'absolute', right: 5, top: 5, width: 18, height: 18, borderRadius: 9,
     backgroundColor: 'rgba(0,0,0,0.52)', alignItems: 'center', justifyContent: 'center',
   },
   livePlayBadge: {
