@@ -1,16 +1,43 @@
 import ExpoModulesCore
 import UIKit
 
+private final class MapFilterMenuButton: UIButton {
+  var onMenuWillDisplay: (() -> Void)?
+  var onMenuWillEnd: (() -> Void)?
+
+  override func contextMenuInteraction(
+    _ interaction: UIContextMenuInteraction,
+    willDisplayMenuFor configuration: UIContextMenuConfiguration,
+    animator: UIContextMenuInteractionAnimating?
+  ) {
+    super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
+    onMenuWillDisplay?()
+  }
+
+  override func contextMenuInteraction(
+    _ interaction: UIContextMenuInteraction,
+    willEndFor configuration: UIContextMenuConfiguration,
+    animator: UIContextMenuInteractionAnimating?
+  ) {
+    super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+    onMenuWillEnd?()
+  }
+}
+
 // iOS 原生地图多选筛选下拉菜单按钮（UIButton + UIMenu）：
 // - 放在地图外右上角液态玻璃圆钮中，纯图标无文字；
 // - 点击直接在按钮下方展开原生多选菜单，包含「飞机 / 火车 / 汽车 / 轮船 / 地点」5 项；
-// - iOS 16+ 使用 .keepsMenuPresented，连续勾选/取消多项不会自动收起菜单。
+// - iOS 16+ 使用 .keepsMenuPresented + updateVisibleMenu 原位刷新，连续勾选/取消多项不会自动收起菜单。
 public final class NativeMapFilterMenuView: ExpoView {
-  private let button = UIButton(type: .system)
+  private static let rootMenuId = UIMenu.Identifier("lifelog.mapFilter.root")
+  private static let itemPrefix = "lifelog.mapFilter.item."
+
+  private let button = MapFilterMenuButton(type: .system)
   private var selectedKeys: Set<String> = ["flight", "train", "bus", "ship", "location"]
   private var isDarkMode: Bool = false
   private var iconColorHex: String = "#5E6675"
   private var accentColorHex: String = "#1D63ED"
+  private var isMenuOpen: Bool = false
 
   private static let items: [(key: String, title: String, sf: String)] = [
     ("flight", "飞机", "airplane"),
@@ -30,8 +57,17 @@ public final class NativeMapFilterMenuView: ExpoView {
     button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     button.showsMenuAsPrimaryAction = true
     button.backgroundColor = .clear
+    button.onMenuWillDisplay = { [weak self] in
+      self?.isMenuOpen = true
+    }
+    button.onMenuWillEnd = { [weak self] in
+      guard let self = self else { return }
+      self.isMenuOpen = false
+      self.button.menu = self.buildRootMenu()
+    }
     addSubview(button)
-    refreshUI()
+    refreshIcon()
+    button.menu = buildRootMenu()
   }
 
   public override func layoutSubviews() {
@@ -45,7 +81,8 @@ public final class NativeMapFilterMenuView: ExpoView {
     let next = Set(keys)
     if next == selectedKeys { return }
     selectedKeys = next
-    refreshUI()
+    refreshIcon()
+    syncMenu()
   }
 
   public func setIsDark(_ isDark: Bool) {
@@ -56,22 +93,55 @@ public final class NativeMapFilterMenuView: ExpoView {
     let style: UIUserInterfaceStyle = isDark ? .dark : .light
     overrideUserInterfaceStyle = style
     button.overrideUserInterfaceStyle = style
-    refreshUI()
+    refreshIcon()
   }
 
   public func setIconColor(_ hex: String) {
     if iconColorHex == hex { return }
     iconColorHex = hex
-    refreshUI()
+    refreshIcon()
   }
 
   public func setAccentColor(_ hex: String) {
     if accentColorHex == hex { return }
     accentColorHex = hex
-    refreshUI()
+    refreshIcon()
   }
 
-  private func refreshUI() {
+  private func syncMenu() {
+    if isMenuOpen, let interaction = button.contextMenuInteraction {
+      if let root = button.menu {
+        for element in root.children {
+          if let action = element as? UIAction {
+            applyState(to: action)
+          }
+        }
+      }
+      interaction.updateVisibleMenu { [weak self] visibleMenu in
+        guard let self = self else { return visibleMenu }
+        let nextChildren: [UIMenuElement] = visibleMenu.children.map { element in
+          if let action = element as? UIAction {
+            self.applyState(to: action)
+            return action
+          }
+          return element
+        }
+        return visibleMenu.replacingChildren(nextChildren)
+      }
+    } else {
+      button.menu = buildRootMenu()
+    }
+  }
+
+  private func applyState(to action: UIAction) {
+    let rawId = action.identifier.rawValue
+    if rawId.hasPrefix(Self.itemPrefix) {
+      let key = String(rawId.dropFirst(Self.itemPrefix.count))
+      action.state = selectedKeys.contains(key) ? .on : .off
+    }
+  }
+
+  private func refreshIcon() {
     let isFiltered = selectedKeys.count < Self.items.count
     let tintHex = isFiltered ? accentColorHex : iconColorHex
     let fallbackColor: UIColor = isFiltered
@@ -82,19 +152,24 @@ public final class NativeMapFilterMenuView: ExpoView {
     let cfg = UIImage.SymbolConfiguration(pointSize: 15.5, weight: .medium)
     let img = UIImage(systemName: "line.3.horizontal.decrease", withConfiguration: cfg)?
       .withTintColor(tint, renderingMode: .alwaysOriginal)
-    button.setImage(img, for: .normal)
-    button.tintColor = tint
+    UIView.performWithoutAnimation {
+      button.setImage(img, for: .normal)
+      button.tintColor = tint
+    }
+  }
 
+  private func buildRootMenu() -> UIMenu {
+    var attrs: UIMenuElement.Attributes = []
+    if #available(iOS 16.0, *) {
+      attrs = [.keepsMenuPresented]
+    }
     let actions = Self.items.map { item -> UIAction in
       let isOn = selectedKeys.contains(item.key)
       let sym = UIImage(systemName: item.sf)
-      var attrs: UIMenuElement.Attributes = []
-      if #available(iOS 16.0, *) {
-        attrs = [.keepsMenuPresented]
-      }
       return UIAction(
         title: item.title,
         image: sym,
+        identifier: UIAction.Identifier("\(Self.itemPrefix)\(item.key)"),
         attributes: attrs,
         state: isOn ? .on : .off
       ) { [weak self] _ in
@@ -104,11 +179,12 @@ public final class NativeMapFilterMenuView: ExpoView {
         } else {
           self.selectedKeys.insert(item.key)
         }
-        self.refreshUI()
+        self.refreshIcon()
+        self.syncMenu()
         self.onToggle(["key": item.key])
       }
     }
-    button.menu = UIMenu(title: "", children: actions)
+    return UIMenu(title: "", identifier: Self.rootMenuId, children: actions)
   }
 
   private func parseHexColor(_ raw: String) -> UIColor? {

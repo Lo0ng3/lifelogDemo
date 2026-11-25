@@ -1484,7 +1484,10 @@ export default function HomeScreen({ navigation }) {
                     onToggle={toggleMapFilterKey}
                     style={StyleSheet.absoluteFill}
                   />
-                  {mapFilterKeys.length < 5 && <View style={styles.filterDot} pointerEvents="none" />}
+                  <View
+                    style={[styles.filterDot, mapFilterKeys.length >= 5 && { opacity: 0 }]}
+                    pointerEvents="none"
+                  />
                 </View>
               )}
             </View>
@@ -1520,12 +1523,14 @@ export default function HomeScreen({ navigation }) {
                   accentColor={colors.accent}
                   onChange={(keys) => {
                     hapticSelection();
-                    Keyboard.dismiss();
                     setActiveFilters(keys);
                   }}
                   style={StyleSheet.absoluteFill}
                 />
-                {activeFilters.length > 0 && <View style={styles.filterDot} pointerEvents="none" />}
+                <View
+                  style={[styles.filterDot, activeFilters.length === 0 && { opacity: 0 }]}
+                  pointerEvents="none"
+                />
               </View>
             ) : (
               <TouchableOpacity
